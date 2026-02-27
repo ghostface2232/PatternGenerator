@@ -12850,7 +12850,7 @@ function gy(f, Q) {
   <g id="exit-side" data-description="Exit side (${(V * 2).toFixed(3)}mm)">
 `),
       f.forEach((fl) => {
-        Y += `    <circle cx="${fl.x.toFixed(3)}" cy="${fl.y.toFixed(3)}" r="${V.toFixed(3)}" fill="none" stroke="#666" stroke-width="0.15" stroke-dasharray="0.5,0.3" />
+        Y += `    <path d="M ${(fl.x + pl).toFixed(3)} ${fl.y.toFixed(3)} A ${pl.toFixed(3)} ${pl.toFixed(3)} 0 1 0 ${(fl.x - pl).toFixed(3)} ${fl.y.toFixed(3)} A ${pl.toFixed(3)} ${pl.toFixed(3)} 0 1 0 ${(fl.x + pl).toFixed(3)} ${fl.y.toFixed(3)} M ${(fl.x + V).toFixed(3)} ${fl.y.toFixed(3)} A ${V.toFixed(3)} ${V.toFixed(3)} 0 1 1 ${(fl.x - V).toFixed(3)} ${fl.y.toFixed(3)} A ${V.toFixed(3)} ${V.toFixed(3)} 0 1 1 ${(fl.x + V).toFixed(3)} ${fl.y.toFixed(3)} Z" fill="#4a4a4a" fill-rule="evenodd" />
 `;
       }),
       (Y += `  </g>
@@ -13515,14 +13515,12 @@ function py() {
               Ul > 0 &&
               !$ &&
               (d.beginPath(),
-              d.arc(P.x, P.y, Ft, 0, Math.PI * 2),
-              (d.strokeStyle = f
-                ? "rgba(96,165,250,0.5)"
-                : "rgba(37,99,235,0.45)"),
-              (d.lineWidth = 0.3),
-              d.setLineDash([0.8, 0.6]),
-              d.stroke(),
-              d.setLineDash([]));
+              d.arc(P.x, P.y, nl, 0, Math.PI * 2),
+              d.arc(P.x, P.y, Ft, 0, Math.PI * 2, !0),
+              (d.fillStyle = f
+                ? "rgba(112,161,255,0.28)"
+                : "rgba(59,130,246,0.24)"),
+              d.fill());
           }),
       d.restore());
     ((d.strokeStyle = f ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.15)"),
@@ -13641,12 +13639,10 @@ function py() {
             Ul > 0 &&
             !Gl &&
             (d.beginPath(),
-            d.arc(Jl.x, Jl.y, Ul / 2, 0, Math.PI * 2),
-            (d.strokeStyle = "rgba(96,165,250,0.5)"),
-            (d.lineWidth = 0.3),
-            d.setLineDash([0.8, 0.6]),
-            d.stroke(),
-            d.setLineDash([])));
+            d.arc(Jl.x, Jl.y, Ht, 0, Math.PI * 2),
+            d.arc(Jl.x, Jl.y, Ul / 2, 0, Math.PI * 2, !0),
+            (d.fillStyle = "rgba(59,130,246,0.24)"),
+            d.fill()));
       }),
         d.restore(),
         _.toBlob((Jl) => {
