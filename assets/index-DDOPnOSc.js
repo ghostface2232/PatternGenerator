@@ -12674,7 +12674,13 @@ const ry = ly(sy),
       pattern: "Staggered 45°",
     },
   ],
-  yu = (f, Q, x) => Math.max(Q, Math.min(x, f));
+  yu = (f, Q, x) => Math.max(Q, Math.min(x, f)),
+  roundToTwoDecimals = (f) =>
+    Math.round((f + Number.EPSILON) * 100) / 100,
+  normalizeEdgeGapValue = (f) => {
+    const Q = roundToTwoDecimals(f);
+    return Math.abs(Q) < 0.01 ? 0 : Q;
+  };
 function wf(f, Q, x) {
   return Q <= 0 || x <= 0 ? f : f - 2 * Q * Math.tan((x * Math.PI) / 180);
 }
@@ -13327,13 +13333,13 @@ function py() {
     fa = k.useRef(null),
     Ua = k.useCallback(
       (_) => {
-        const _p = _ + x;
+        const _p = normalizeEdgeGapValue(_ + x);
         (Z(_p), q && p(_p), r(0));
       },
       [q, x],
     ),
     mu = k.useCallback((_) => {
-      (p(_ + x), r(0));
+      (p(normalizeEdgeGapValue(_ + x)), r(0));
     }, [x]),
     gu = k.useCallback(
       (_) => {
@@ -14089,15 +14095,15 @@ function py() {
                 max: 20,
                 step: 0.1,
                 onChange: (_) => {
-                  const d = U - x,
-                    ql = O - x,
-                    _s = Hl - x,
-                    td = ul - x;
+                  const d = normalizeEdgeGapValue(U - x),
+                    ql = normalizeEdgeGapValue(O - x),
+                    _s = normalizeEdgeGapValue(Hl - x),
+                    td = normalizeEdgeGapValue(ul - x);
                   (h(_),
-                    Z(d + _),
-                    p(ql + _),
-                    Vl(_s + _),
-                    G(td + _),
+                    Z(normalizeEdgeGapValue(d + _)),
+                    p(normalizeEdgeGapValue(ql + _)),
+                    Vl(normalizeEdgeGapValue(_s + _)),
+                    G(normalizeEdgeGapValue(td + _)),
                     r(0));
                 },
                 unit: "mm",
