@@ -12677,6 +12677,12 @@ const ry = ly(sy),
   yu = (f, Q, x) => Math.max(Q, Math.min(x, f)),
   roundToTwoDecimals = (f) =>
     Math.round((f + Number.EPSILON) * 100) / 100,
+  roundToPrecision = (f, Q) => {
+    const x = 10 ** Q;
+    return Math.round((f + Number.EPSILON) * x) / x;
+  },
+  formatNumberForDisplay = (f, Q) =>
+    Q == null ? String(f) : roundToPrecision(f, Q).toFixed(Q),
   normalizeEdgeGapValue = (f) => {
     const Q = roundToTwoDecimals(f);
     return Math.abs(Q) < 0.01 ? 0 : Q;
@@ -13101,26 +13107,34 @@ function xt({
   onChange: B,
   unit: U,
   dark: Z,
+  precision: O,
 }) {
-  const [O, p] = k.useState(String(Q)),
-    q = k.useRef(null),
-    j = k.useRef(!1);
+  const [p, q] = k.useState(formatNumberForDisplay(Q, O)),
+    j = k.useRef(null),
+    Y = k.useRef(!1);
   k.useEffect(() => {
-    j.current || p(String(Q));
-  }, [Q]);
-  const Y = () => {
-      j.current = !1;
-      const H = parseFloat(O);
+    Y.current || q(formatNumberForDisplay(Q, O));
+  }, [Q, O]);
+  const pl = (H) => {
+      if (O == null) return H;
+      const Ol = H.match(/^-?\d*(?:\.(\d*))?$/);
+      if (!Ol) return p;
+      const Zl = Ol[1];
+      return Zl && Zl.length > O ? H.slice(0, H.length - (Zl.length - O)) : H;
+    },
+    V = () => {
+      Y.current = !1;
+      const H = parseFloat(p);
       if (isNaN(H)) {
-        p(String(Q));
+        q(formatNumberForDisplay(Q, O));
         return;
       }
-      const Ol = yu(H, x, h);
-      (B(Ol), p(String(Ol)));
+      const Ol = O == null ? yu(H, x, h) : roundToPrecision(yu(H, x, h), O);
+      (B(Ol), q(formatNumberForDisplay(Ol, O)));
     },
-    pl = Z ? "#333" : "#d4d4d8",
-    V = Z ? "#60a5fa" : "#2563eb",
-    fl = ((Q - x) / (h - x)) * 100;
+    fl = Z ? "#333" : "#d4d4d8",
+    H = Z ? "#60a5fa" : "#2563eb",
+    Ol = ((Q - x) / (h - x)) * 100;
   return S.jsxs("div", {
     style: { marginBottom: 10 },
     children: [
@@ -13145,18 +13159,18 @@ function xt({
             style: { display: "flex", alignItems: "center", gap: 3 },
             children: [
               S.jsx("input", {
-                ref: q,
+                ref: j,
                 type: "text",
                 inputMode: "decimal",
-                value: O,
+                value: p,
                 onFocus: () => {
-                  ((j.current = !0), q.current?.select());
+                  ((Y.current = !0), j.current?.select());
                 },
-                onBlur: Y,
-                onKeyDown: (H) => {
-                  H.key === "Enter" && (Y(), q.current?.blur());
+                onBlur: V,
+                onKeyDown: (Ol) => {
+                  Ol.key === "Enter" && (V(), j.current?.blur());
                 },
-                onChange: (H) => p(H.target.value),
+                onChange: (Ol) => q(pl(Ol.target.value)),
                 style: {
                   width: 52,
                   height: 24,
@@ -13190,7 +13204,10 @@ function xt({
         max: h,
         step: R,
         value: Q,
-        onChange: (H) => B(parseFloat(H.target.value)),
+        onChange: (Ol) => {
+          const Zl = parseFloat(Ol.target.value);
+          B(O == null ? Zl : roundToPrecision(Zl, O));
+        },
         style: {
           width: "100%",
           height: 4,
@@ -13198,7 +13215,7 @@ function xt({
           outline: "none",
           borderRadius: 2,
           cursor: "pointer",
-          background: `linear-gradient(to right, ${V} 0%, ${V} ${fl}%, ${pl} ${fl}%, ${pl} 100%)`,
+          background: `linear-gradient(to right, ${H} 0%, ${H} ${Ol}%, ${fl} ${Ol}%, ${fl} 100%)`,
         },
       }),
     ],
@@ -13379,13 +13396,21 @@ function py() {
     oa = Math.PI * (x / 2) ** 2,
     He = Y * V,
     Su = R === "Radial",
-    sa = He > 0 ? ((oa * wt) / He) * 100 : 0,
+    Du = Math.max(0, Math.min(Y, V) / 2 - H),
+    ru = Su
+      ? Math.max(
+          0,
+          Math.min(Du, it > 0 ? it * Hl + (el ? 0 : x / 2) : Du),
+        )
+      : 0,
+    Lu = Su && ru > 0 ? Math.PI * ru ** 2 : He,
+    sa = Lu > 0 ? ((oa * wt) / Lu) * 100 : 0,
     ut = A > 0 && N > 0,
     Be = wf(x, A, N),
     Ul = Math.max(0, Be),
     Gl = Be <= 0,
     mt = Gl ? wt : 0,
-    bu = He > 0 ? ((Math.PI * (Ul / 2) ** 2 * wt) / He) * 100 : 0,
+    bu = Lu > 0 ? ((Math.PI * (Ul / 2) ** 2 * wt) / Lu) * 100 : 0,
     pu = ut ? bu - sa : 0,
     Ui = ut ? bu : sa,
     re = k.useMemo(() => my(vl, x), [vl, x]),
@@ -13959,7 +13984,7 @@ function py() {
                   ["Holes", wt.toLocaleString()],
                   ["Hole Area", `${oa.toFixed(2)} mm²`],
                   ["Open Area", `${((sa / 100) * He).toFixed(1)} mm²`],
-                  ["Gross Area", `${He.toFixed(0)} mm²`],
+                  [Su ? "Pattern Area" : "Gross Area", `${(Su ? Lu : He).toFixed(0)} mm²`],
                 ].map(([_, d]) =>
                   S.jsxs(
                     "div",
@@ -14093,7 +14118,8 @@ function py() {
                 value: x,
                 min: 0.5,
                 max: 20,
-                step: 0.1,
+                step: 0.01,
+                precision: 2,
                 onChange: (_) => {
                   const d = normalizeEdgeGapValue(U - x),
                     ql = normalizeEdgeGapValue(O - x),
@@ -14165,7 +14191,8 @@ function py() {
                         value: Hl - x,
                         min: 0,
                         max: 50,
-                        step: 0.5,
+                        step: 0.01,
+                        precision: 2,
                         onChange: gu,
                         unit: "mm",
                         dark: f,
@@ -14183,7 +14210,8 @@ function py() {
                               value: ul - x,
                               min: 0,
                               max: 50,
-                              step: 0.5,
+                              step: 0.01,
+                              precision: 2,
                               onChange: Ri,
                               unit: "mm",
                               dark: f,
@@ -14205,7 +14233,7 @@ function py() {
                           },
                           children: [
                             "Circum. Edge Gap: ",
-                            (Hl - x).toFixed(1),
+                            (Hl - x).toFixed(2),
                             " mm (linked)",
                           ],
                         }),
@@ -14306,7 +14334,8 @@ function py() {
                           value: U - x,
                           min: 0,
                           max: 50,
-                          step: 0.1,
+                          step: 0.01,
+                          precision: 2,
                           onChange: Ua,
                           unit: "mm",
                           dark: f,
@@ -14324,7 +14353,8 @@ function py() {
                                 value: O - x,
                                 min: 0,
                                 max: 50,
-                                step: 0.1,
+                                step: 0.01,
+                                precision: 2,
                                 onChange: mu,
                                 unit: "mm",
                                 dark: f,
@@ -14345,7 +14375,8 @@ function py() {
                           value: U - x,
                           min: 0,
                           max: 50,
-                          step: 0.1,
+                          step: 0.01,
+                          precision: 2,
                           onChange: Ua,
                           unit: "mm",
                           dark: f,
