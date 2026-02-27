@@ -14089,12 +14089,15 @@ function py() {
                 max: 20,
                 step: 0.1,
                 onChange: (_) => {
-                  const d = _ - x;
+                  const d = U - x,
+                    ql = O - x,
+                    _s = Hl - x,
+                    td = ul - x;
                   (h(_),
-                    Z((ql) => ql + d),
-                    p((ql) => ql + d),
-                    Vl((ql) => ql + d),
-                    G((ql) => ql + d),
+                    Z(d + _),
+                    p(ql + _),
+                    Vl(_s + _),
+                    G(td + _),
                     r(0));
                 },
                 unit: "mm",
