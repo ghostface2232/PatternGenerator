@@ -1,10 +1,11 @@
-const CACHE_NAME = 'pattern-generator-v2';
+const CACHE_NAME = 'pattern-generator-v3';
 const APP_SHELL = [
   './',
   './index.html',
-  './manifest.webmanifest',
+  './manifest.json',
   './assets/index-DDOPnOSc.js',
-  './icons/icon.svg'
+  './icons/icon_192.png',
+  './icons/icon_512.png'
 ];
 
 self.addEventListener('install', (event) => {
