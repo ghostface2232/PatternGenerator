@@ -24,8 +24,11 @@ function calcExitDiameter(d, thickness, taperAngleDeg) {
 }
 
 // ─── Hole shape helpers (w = horizontal extent, h = vertical extent) ──
-function calcHoleArea(shape, w, h) {
-  if (shape === "Rectangle") return w * h;
+function calcHoleArea(shape, w, h, holeRadius) {
+  if (shape === "Rectangle") {
+    const r = Math.min(holeRadius || 0, w / 2, h / 2);
+    return r > 0 ? w * h - 4 * r * r + Math.PI * r * r : w * h;
+  }
   if (shape === "Pill") {
     // Stadium: short side = min(w,h), long side = max(w,h)
     const s = Math.min(w, h), l = Math.max(w, h);
@@ -37,7 +40,7 @@ function calcHoleArea(shape, w, h) {
   return Math.PI * (w / 2) ** 2;
 }
 
-function traceHolePath(ctx, x, y, shape, w, h, angle) {
+function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
   const hw = w / 2, hh = h / 2;
   // For rotated rectangles/pills, use transform
   const needsRotation = angle && (shape === "Rectangle" || shape === "Pill");
@@ -47,7 +50,9 @@ function traceHolePath(ctx, x, y, shape, w, h, angle) {
   }
   const cx = needsRotation ? 0 : x, cy = needsRotation ? 0 : y;
   if (shape === "Rectangle") {
-    ctx.rect(cx - hw, cy - hh, w, h);
+    const r = Math.min(holeRadius || 0, w / 2, h / 2);
+    if (r > 0) { ctx.roundRect(cx - hw, cy - hh, w, h, r); }
+    else { ctx.rect(cx - hw, cy - hh, w, h); }
   } else if (shape === "Hexagon") {
     const R = hw / (Math.sqrt(3) / 2);
     ctx.moveTo(cx + R, cy);
@@ -79,12 +84,14 @@ function traceHolePath(ctx, x, y, shape, w, h, angle) {
   }
 }
 
-function holeSVGElement(x, y, shape, w, h, fill, extra, angle) {
+function holeSVGElement(x, y, shape, w, h, fill, extra, angle, holeRadius) {
   const hw = w / 2, hh = h / 2;
   const attrs = extra || '';
   const rotAttr = angle && (shape === "Rectangle" || shape === "Pill") ? ` transform="rotate(${(angle * 180 / Math.PI).toFixed(2)} ${x.toFixed(3)} ${y.toFixed(3)})"` : '';
   if (shape === "Rectangle") {
-    return `    <rect x="${(x - hw).toFixed(3)}" y="${(y - hh).toFixed(3)}" width="${w.toFixed(3)}" height="${h.toFixed(3)}" ${fill} ${attrs}${rotAttr}/>\n`;
+    const r = Math.min(holeRadius || 0, w / 2, h / 2);
+    const rxAttr = r > 0 ? ` rx="${r.toFixed(3)}" ry="${r.toFixed(3)}"` : '';
+    return `    <rect x="${(x - hw).toFixed(3)}" y="${(y - hh).toFixed(3)}" width="${w.toFixed(3)}" height="${h.toFixed(3)}"${rxAttr} ${fill} ${attrs}${rotAttr}/>\n`;
   }
   if (shape === "Hexagon") {
     const R = hw / (Math.sqrt(3) / 2);
@@ -317,7 +324,7 @@ function calcTheoreticalOAR(patternType, pitchX, pitchY, holeArea) {
 }
 
 function generateSVGString(holes, params) {
-  const { diameter, sheetW, sheetH, thickness, taperAngle, taperDirection, holeShape, holeW, holeH } = params;
+  const { diameter, sheetW, sheetH, thickness, taperAngle, taperDirection, holeShape, holeW, holeH, holeRadius: hr } = params;
   const shape = holeShape || "Circle";
   const w = holeW || diameter, h = holeH || diameter;
   const taperActive = thickness > 0 && taperAngle > 0;
@@ -332,12 +339,12 @@ function generateSVGString(holes, params) {
     const botW = taperDirection === "Top larger" ? w * taperScale : w;
     const botH = taperDirection === "Top larger" ? h * taperScale : h;
     svg += `  <g id="entry-side">\n`;
-    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, topW, topH, 'fill="#000"', '', pt.angle); });
+    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, topW, topH, 'fill="#000"', '', pt.angle, hr); });
     svg += `  </g>\n  <g id="exit-side">\n`;
-    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, botW, botH, 'fill="none"', 'stroke="#666" stroke-width="0.15"', pt.angle); });
+    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, botW, botH, 'fill="none"', 'stroke="#666" stroke-width="0.15"', pt.angle, hr); });
     svg += `  </g>\n`;
   } else {
-    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, w, h, 'fill="#000"', '', pt.angle); });
+    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, w, h, 'fill="#000"', '', pt.angle, hr); });
   }
   return svg + `</svg>`;
 }
@@ -479,6 +486,7 @@ export default function PerforationGenerator() {
   const [holeShape, setHoleShape] = useState("Circle");
   const [holeW, setHoleW] = useState(5);   // for Rectangle & Pill (mm)
   const [holeH, setHoleH] = useState(5);   // for Rectangle & Pill (mm)
+  const [holeRadius, setHoleRadius] = useState(0); // corner radius for Rectangle holes
   const [patternType, setPatternType] = useState("Staggered 60°");
   const [edgeGapX, setEdgeGapX] = useState(3);
   const [edgeGapY, setEdgeGapY] = useState(3);
@@ -560,11 +568,11 @@ export default function PerforationGenerator() {
   const hasAnyMargin = marginTop > 0 || marginBottom > 0 || marginLeft > 0 || marginRight > 0;
 
   const params = useMemo(() => ({
-    diameter, holeShape, holeW: effW, holeH: effH, patternType, pitchX, pitchY, sheetW, sheetH,
+    diameter, holeShape, holeW: effW, holeH: effH, holeRadius, patternType, pitchX, pitchY, sheetW, sheetH,
     marginTop, marginBottom, marginLeft, marginRight, cornerRadius,
     customAngle, ringSpacing, circumSpacing, radialMode, centerHole,
     thickness, taperAngle, taperDirection
-  }), [diameter, holeShape, effW, effH, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole, thickness, taperAngle, taperDirection]);
+  }), [diameter, holeShape, effW, effH, holeRadius, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole, thickness, taperAngle, taperDirection]);
 
   const allHoles = useMemo(() => generateHoles(params), [params]);
   // Reset removed holes when pattern params change
@@ -574,7 +582,7 @@ export default function PerforationGenerator() {
   const overlaps = useMemo(() => findOverlaps(holes.filter((_, i) => !removedHoles.has(i)), holeShape, effW, effH), [holes, removedHoles, holeShape, effW, effH]);
   const hasOverlap = overlaps.size > 0;
   const holeCount = allHoles.length;
-  const singleHoleArea = calcHoleArea(holeShape, effW, effH);
+  const singleHoleArea = calcHoleArea(holeShape, effW, effH, holeRadius);
   const grossArea = sheetW * sheetH;
   const isRadialPattern = patternType === "Radial";
   const perfW = sheetW - marginLeft - marginRight, perfH = sheetH - marginTop - marginBottom;
@@ -598,7 +606,7 @@ export default function PerforationGenerator() {
   // Taper scales hole dimensions uniformly
   const taperScale = (diameter > 0 && taperActive) ? Math.max(0, dExit) / diameter : 1;
   const exitW = effW * taperScale, exitH = effH * taperScale;
-  const exitHoleArea = calcHoleArea(holeShape, exitW, exitH);
+  const exitHoleArea = calcHoleArea(holeShape, exitW, exitH, holeRadius);
   const theoreticalEffOAR = calcTheoreticalOAR(patternType, pitchX, pitchY, exitHoleArea);
   const countedEffOAR = perforatedArea > 0 ? (exitHoleArea * activeHoleCount / perforatedArea) * 100 : 0;
   const effectiveOAR = useCountedOAR ? countedEffOAR : theoreticalEffOAR;
@@ -717,7 +725,7 @@ export default function PerforationGenerator() {
         const isRemoved = removedHoles.has(i);
         if (isRemoved) {
           // Draw removed hole as faint outline
-          ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle);
+          ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle, holeRadius);
           ctx.strokeStyle = dark ? "rgba(255,100,100,0.25)" : "rgba(200,50,50,0.2)";
           ctx.lineWidth = 0.4;
           ctx.setLineDash([1, 1]); ctx.stroke(); ctx.setLineDash([]);
@@ -732,7 +740,7 @@ export default function PerforationGenerator() {
         const isOverlap = activeOverlapSet.has(i);
         const isClosed = taperActive && holeClosed;
         // Draw hole shape
-        ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle);
+        ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle, holeRadius);
         ctx.fillStyle = isClosed ? (dark ? "rgba(220,50,50,0.55)" : "rgba(200,30,30,0.45)")
           : isOverlap ? (dark ? "rgba(220,50,50,0.7)" : "rgba(200,30,30,0.6)")
           : (dark ? "#0f0f11" : "#1a1a1e");
@@ -752,7 +760,7 @@ export default function PerforationGenerator() {
         // Taper ring: fill gap between entry and exit shapes
         if (showTaperRings && dExit > 0 && !isClosed) {
           ctx.beginPath();
-          traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle);
+          traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle, holeRadius);
           // Cut out the exit shape (reverse winding)
           ctx.save();
           ctx.clip();
@@ -760,7 +768,7 @@ export default function PerforationGenerator() {
           ctx.fillStyle = dark ? "rgba(80,85,95,0.6)" : "rgba(160,165,175,0.5)";
           ctx.fillRect(h.x - diameter, h.y - diameter, diameter * 2, diameter * 2);
           // Clear exit shape by drawing it with the hole color
-          ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, exitW, exitH, h.angle);
+          ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, exitW, exitH, h.angle, holeRadius);
           ctx.fillStyle = isClosed ? (dark ? "rgba(220,50,50,0.55)" : "rgba(200,30,30,0.45)")
             : (dark ? "#0f0f11" : "#1a1a1e");
           ctx.fill();
@@ -781,7 +789,7 @@ export default function PerforationGenerator() {
       ctx.font = "11px 'JetBrains Mono', monospace"; ctx.textAlign = "left";
       ctx.fillText(`⚡ Performance mode (${holeCount.toLocaleString()} holes)`, 12, ch - 12);
     }
-  }, [holes, overlaps, params, dark, pan, zoom, perfMode, holeCount, diameter, holeShape, effW, effH, pitchX, pitchY, patternType, marginTop, marginBottom, marginLeft, marginRight, hasAnyMargin, cornerRadius, radialMode, isRadialPattern, sheetW, sheetH, taperActive, dExit, holeClosed, thickness, taperAngle, taperDirection, removedHoles]);
+  }, [holes, overlaps, params, dark, pan, zoom, perfMode, holeCount, diameter, holeShape, effW, effH, holeRadius, pitchX, pitchY, patternType, marginTop, marginBottom, marginLeft, marginRight, hasAnyMargin, cornerRadius, radialMode, isRadialPattern, sheetW, sheetH, taperActive, dExit, holeClosed, thickness, taperAngle, taperDirection, removedHoles]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -881,15 +889,15 @@ export default function PerforationGenerator() {
     ctx.fillStyle = dark ? "#48484f" : "#d4d4da"; ctx.fillRect(0, 0, oc.width, oc.height);
     ctx.save(); ctx.scale(s, s);
     activeHoles.forEach(h => {
-      ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle);
+      ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle, holeRadius);
       ctx.fillStyle = (taperActive && holeClosed) ? "rgba(200,30,30,0.5)" : (dark ? "#0f0f11" : "#1a1a1e");
       ctx.fill();
       if (taperActive && dExit > 0 && !holeClosed) {
-        ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle);
+        ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle, holeRadius);
         ctx.save(); ctx.clip();
         ctx.fillStyle = dark ? "rgba(80,85,95,0.6)" : "rgba(160,165,175,0.5)";
         ctx.fillRect(h.x - diameter, h.y - diameter, diameter * 2, diameter * 2);
-        ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, exitW, exitH, h.angle);
+        ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, exitW, exitH, h.angle, holeRadius);
         ctx.fillStyle = (dark ? "#0f0f11" : "#1a1a1e");
         ctx.fill();
         ctx.restore();
@@ -1068,6 +1076,7 @@ export default function PerforationGenerator() {
             <>
               <SliderRow label="Width (W)" value={holeW} min={0.5} max={30} step={0.1} onChange={v => { setHoleW(v); setSelectedPreset(0); }} unit="mm" dark={dark} />
               <SliderRow label="Height (H)" value={holeH} min={0.5} max={30} step={0.1} onChange={v => { setHoleH(v); setSelectedPreset(0); }} unit="mm" dark={dark} />
+              {holeShape === "Rectangle" && <SliderRow label="Hole Corner R" value={holeRadius} min={0} max={Math.min(holeW, holeH) / 2} step={0.1} onChange={setHoleRadius} unit="mm" dark={dark} />}
             </>
           ) : (
             <SliderRow label="Hole Diameter" value={diameter} min={0.5} max={20} step={0.1} onChange={v => { setDiameter(v); setSelectedPreset(0); }} unit="mm" dark={dark} />
