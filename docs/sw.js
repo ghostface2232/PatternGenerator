@@ -1,9 +1,8 @@
-const CACHE_NAME = 'pattern-generator-v3';
+const CACHE_NAME = 'pattern-generator-v4';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.json',
-  './assets/index-DDOPnOSc.js',
   './icons/icon_192.png',
   './icons/icon_512.png'
 ];
@@ -23,16 +22,10 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') {
-    return;
-  }
-
+  if (event.request.method !== 'GET') return;
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
-
+      if (cachedResponse) return cachedResponse;
       return fetch(event.request)
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
