@@ -193,10 +193,19 @@ function generateHoles(params) {
   const safeMinGap = Math.max(0, minEdgeGap);
 
   let effPY = pitchY;
-  if (patternType === "Staggered 60°") {
-    effPY = Math.max(pitchX * Math.sqrt(3) / 2, holeHeight + safeMinGap);
-  } else if (patternType === "Staggered 45°") {
-    effPY = Math.max(pitchX, holeHeight + safeMinGap);
+  if (patternType === "Staggered 60°" || patternType === "Staggered 45°") {
+    // In staggered layouts, adjacent rows are offset by pitchX/2 horizontally.
+    // The nearest neighbor is diagonal, so use Euclidean distance for min gap check
+    // instead of purely vertical distance which over-constrains the spacing.
+    const halfPX = pitchX / 2;
+    const holeDim = Math.max(holeWidth, holeHeight);
+    const minDist = holeDim + safeMinGap;
+    const staggeredMinPY = Math.sqrt(Math.max(holeHeight * holeHeight, minDist * minDist - halfPX * halfPX));
+    if (patternType === "Staggered 60°") {
+      effPY = Math.max(pitchX * Math.sqrt(3) / 2, staggeredMinPY);
+    } else {
+      effPY = Math.max(pitchX, staggeredMinPY);
+    }
   }
 
   // Center-aligned: start from panel center, expand outward
@@ -922,10 +931,16 @@ export default function PerforationGenerator() {
   const isRadial = patternType === "Radial";
   const showGapY = patternType === "Straight" || patternType === "Custom Angle";
   // Effective pitchY for staggered patterns (auto-derived)
+  // Uses diagonal distance check: in staggered layouts, nearest neighbor is at (pitchX/2, effPY)
+  const _sHalfPX = pitchX / 2;
+  const _sMinGap = Math.min(edgeGapX, edgeGapY);
+  const _sHoleDim = Math.max(effW, effH);
+  const _sMinDist = _sHoleDim + _sMinGap;
+  const _sMinPY = Math.sqrt(Math.max(effH * effH, _sMinDist * _sMinDist - _sHalfPX * _sHalfPX));
   const effPitchY = patternType === "Staggered 60°"
-    ? Math.max(pitchX * Math.sqrt(3) / 2, effH + Math.min(edgeGapX, edgeGapY))
+    ? Math.max(pitchX * Math.sqrt(3) / 2, _sMinPY)
     : patternType === "Staggered 45°"
-      ? Math.max(pitchX, effH + Math.min(edgeGapX, edgeGapY))
+      ? Math.max(pitchX, _sMinPY)
       : pitchY;
 
   // Segmented button helper
