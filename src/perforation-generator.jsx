@@ -179,9 +179,16 @@ function generateHoles(params) {
     return holes;
   }
 
+  // For 45° staggered, pitchX is the nearest-neighbor (diagonal) distance t.
+  // The actual in-row horizontal pitch = t√2, offset = t/√2, vertical pitch = t/√2.
+  // This produces a true 45° angle: arctan((t/√2) / (t/√2)) = 45°.
+  // For 60° staggered, pitchX = in-row pitch = nearest-neighbor distance (equilateral).
+  const is45 = patternType === "Staggered 45°";
+  const inRowPitchX = is45 ? pitchX * Math.SQRT2 : pitchX;
+
   let offsetFn = () => 0;
-  if (patternType === "Staggered 60°" || patternType === "Staggered 45°") {
-    offsetFn = (rowIdx) => (rowIdx % 2 !== 0 ? pitchX / 2 : 0);
+  if (patternType === "Staggered 60°" || is45) {
+    offsetFn = (rowIdx) => (rowIdx % 2 !== 0 ? inRowPitchX / 2 : 0);
   } else if (patternType === "Custom Angle") {
     const angleRad = (customAngle * Math.PI) / 180;
     offsetFn = (rowIdx) => (rowIdx % 2 !== 0 ? pitchY * Math.tan(angleRad) : 0);
@@ -193,18 +200,19 @@ function generateHoles(params) {
   const safeMinGap = Math.max(0, minEdgeGap);
 
   let effPY = pitchY;
-  if (patternType === "Staggered 60°" || patternType === "Staggered 45°") {
-    // In staggered layouts, adjacent rows are offset by pitchX/2 horizontally.
+  if (patternType === "Staggered 60°" || is45) {
+    // In staggered layouts, adjacent rows are offset by inRowPitchX/2 horizontally.
     // The nearest neighbor is diagonal, so use Euclidean distance for min gap check
     // instead of purely vertical distance which over-constrains the spacing.
-    const halfPX = pitchX / 2;
+    const halfPX = inRowPitchX / 2;
     const holeDim = Math.max(holeWidth, holeHeight);
     const minDist = holeDim + safeMinGap;
     const staggeredMinPY = Math.sqrt(Math.max(holeHeight * holeHeight, minDist * minDist - halfPX * halfPX));
     if (patternType === "Staggered 60°") {
       effPY = Math.max(pitchX * Math.sqrt(3) / 2, staggeredMinPY);
     } else {
-      effPY = Math.max(pitchX, staggeredMinPY);
+      // 45°: vertical pitch = t/√2 where t = pitchX (nearest-neighbor distance)
+      effPY = Math.max(pitchX / Math.SQRT2, staggeredMinPY);
     }
   }
 
@@ -221,10 +229,10 @@ function generateHoles(params) {
     const rowIdx = Math.abs(ri);
     const off = offsetFn(rowIdx);
     // Expand columns from center
-    const colsLeft = Math.ceil((cx - xMin + r) / pitchX) + 1;
-    const colsRight = Math.ceil((xMax + r - cx) / pitchX) + 1;
+    const colsLeft = Math.ceil((cx - xMin + r) / inRowPitchX) + 1;
+    const colsRight = Math.ceil((xMax + r - cx) / inRowPitchX) + 1;
     for (let ci = -colsLeft; ci <= colsRight; ci++) {
-      const x = cx + ci * pitchX + off;
+      const x = cx + ci * inRowPitchX + off;
       if (x >= xMin - r && x <= xMax + r) {
         holes.push({ x, y });
       }
