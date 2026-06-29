@@ -1,4 +1,15 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import {
+  BLEND_MODES,
+  DEFAULT_VARIATION,
+  FIELD_SPACES,
+  SIZE_PROFILES,
+  VARIATION_PRESETS,
+  createVariationLayer,
+  evaluateVariationField,
+  randomizeVariationLayer,
+  variationScaleAt,
+} from "./variation-engine.js";
 
 const PATTERN_TYPES = ["Straight", "Staggered 60°", "Staggered 45°", "Radial", "Custom Angle"];
 const HOLE_SHAPES = ["Circle", "Rectangle", "Pill", "Hexagon"];
@@ -17,10 +28,83 @@ const DIN_PRESETS = [
 ];
 
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+const cloneVariation = variation => ({
+  ...variation,
+  layers: (variation.layers || []).map(layer => ({ ...layer })),
+});
 
-function calcExitDiameter(d, thickness, taperAngleDeg) {
-  if (thickness <= 0 || taperAngleDeg <= 0) return d;
-  return d - 2 * thickness * Math.tan((taperAngleDeg * Math.PI) / 180);
+// ─── Variation gizmo geometry ─────────────────────────────────────────
+// Three on-canvas handles map directly to layer params, all in sheet (mm) space:
+//   center  -> centerX / centerY      reach -> angle (direction) + radius (length)
+//   bead    -> position|phase (along the axis) + exponent (perpendicular to it)
+const GIZMO_EXP_K = 1.2;      // exponent <-> perpendicular offset (log scale)
+const GIZMO_PERP_SPAN = 0.3;  // perpendicular offset = perpNorm * span * minDim
+
+const gizmoUsesPosition = layer => layer.profile === "Peak" || layer.profile === "Valley";
+
+function computeGizmo(layer, geom, minSep = 0) {
+  const { marginLeft, marginTop, perfW, perfH } = geom;
+  const minDim = Math.min(perfW, perfH);
+  const cx = marginLeft + perfW * layer.centerX;
+  const cy = marginTop + perfH * layer.centerY;
+  const ang = (layer.angle * Math.PI) / 180;
+  const dirX = Math.cos(ang), dirY = Math.sin(ang);
+  const perpX = -dirY, perpY = dirX;
+  const reachLen = Math.max(minDim * 0.06, 0.5 * minDim * (layer.radius || 1));
+  const usesPosition = gizmoUsesPosition(layer);
+  // Both position and phase ride 0..1 along the axis (center -> reach).
+  const alongFrac = usesPosition
+    ? clamp(layer.position ?? 0.5, 0, 1)
+    : (((layer.phase || 0) % 1) + 1) % 1;
+  const along = alongFrac * reachLen;
+  const perpNorm = Math.log(clamp(layer.exponent || 1, 0.12, 5)) / GIZMO_EXP_K;
+  const perpOff = perpNorm * GIZMO_PERP_SPAN * minDim;
+  let beadX = cx + dirX * along + perpX * perpOff;
+  let beadY = cy + dirY * along + perpY * perpOff;
+  // Keep the bead from hiding under the center handle (render/hit only; inverse uses the true cursor).
+  if (minSep > 0) {
+    const bdx = beadX - cx, bdy = beadY - cy;
+    const dist = Math.hypot(bdx, bdy);
+    if (dist < minSep) { beadX = cx + dirX * minSep; beadY = cy + dirY * minSep; }
+  }
+  return {
+    minDim, reachLen, dirX, dirY, perpX, perpY, usesPosition,
+    centerX: cx, centerY: cy,
+    reachX: cx + dirX * reachLen, reachY: cy + dirY * reachLen,
+    beadX, beadY,
+  };
+}
+
+// Inverse maps: cursor in sheet space -> layer param patch, for the grabbed handle.
+function gizmoPatchForCenter(mx, my, geom) {
+  return {
+    centerX: clamp((mx - geom.marginLeft) / Math.max(1e-6, geom.perfW), 0, 1),
+    centerY: clamp((my - geom.marginTop) / Math.max(1e-6, geom.perfH), 0, 1),
+  };
+}
+
+function gizmoPatchForReach(mx, my, layer, geom, lockRadius) {
+  const g = computeGizmo(layer, geom);
+  const dx = mx - g.centerX, dy = my - g.centerY;
+  const angle = Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
+  const patch = { angle };
+  if (!lockRadius) {
+    patch.radius = clamp(Math.hypot(dx, dy) / (0.5 * g.minDim), 0.1, 2);
+  }
+  return patch;
+}
+
+function gizmoPatchForBead(mx, my, layer, geom) {
+  const g = computeGizmo(layer, geom);
+  const dx = mx - g.centerX, dy = my - g.centerY;
+  const along = dx * g.dirX + dy * g.dirY;
+  const perp = dx * g.perpX + dy * g.perpY;
+  const alongFrac = along / Math.max(1e-6, g.reachLen);
+  const exponent = clamp(Math.exp((perp / (GIZMO_PERP_SPAN * g.minDim)) * GIZMO_EXP_K), 0.12, 5);
+  if (g.usesPosition) {
+    return { position: clamp(alongFrac, 0.01, 0.99), exponent };
+  }
+  return { phase: ((alongFrac % 1) + 1) % 1, exponent };
 }
 
 // ─── Hole shape helpers (w = horizontal extent, h = vertical extent) ──
@@ -54,7 +138,7 @@ function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
     if (r > 0) { ctx.roundRect(cx - hw, cy - hh, w, h, r); }
     else { ctx.rect(cx - hw, cy - hh, w, h); }
   } else if (shape === "Hexagon") {
-    const R = hw / (Math.sqrt(3) / 2);
+    const R = hw;
     ctx.moveTo(cx + R, cy);
     for (let i = 1; i <= 6; i++) { const a = (Math.PI / 3) * i; ctx.lineTo(cx + R * Math.cos(a), cy + R * Math.sin(a)); }
     ctx.closePath();
@@ -94,7 +178,7 @@ function holeSVGElement(x, y, shape, w, h, fill, extra, angle, holeRadius) {
     return `    <rect x="${(x - hw).toFixed(3)}" y="${(y - hh).toFixed(3)}" width="${w.toFixed(3)}" height="${h.toFixed(3)}"${rxAttr} ${fill} ${attrs}${rotAttr}/>\n`;
   }
   if (shape === "Hexagon") {
-    const R = hw / (Math.sqrt(3) / 2);
+    const R = hw;
     const pts = Array.from({ length: 6 }, (_, i) => { const a = (Math.PI / 3) * i; return `${(x + R * Math.cos(a)).toFixed(3)},${(y + R * Math.sin(a)).toFixed(3)}`; }).join(" ");
     return `    <polygon points="${pts}" ${fill} ${attrs}/>\n`;
   }
@@ -134,6 +218,72 @@ function roundedRectArea(w, h, cr) {
   const r = Math.min(cr, maxR);
   // Rectangle area minus 4 square corners plus 4 quarter-circle corners
   return w * h - 4 * r * r + Math.PI * r * r;
+}
+
+function isPointInsideHole(px, py, hole, shape, useExit = false) {
+  const w = useExit ? hole.exitW : hole.w;
+  const h = useExit ? hole.exitH : hole.h;
+  const radius = useExit ? hole.exitHoleRadius : hole.holeRadius;
+  if (w <= 0 || h <= 0) return false;
+  const angle = hole.angle || 0;
+  const cos = Math.cos(-angle), sin = Math.sin(-angle);
+  const dx = px - hole.x, dy = py - hole.y;
+  const x = dx * cos - dy * sin, y = dx * sin + dy * cos;
+  if (shape === "Rectangle") return isInsideRoundedRect(x, y, -w / 2, -h / 2, w / 2, h / 2, radius);
+  if (shape === "Pill") {
+    if (w >= h) {
+      const segment = (w - h) / 2;
+      const sx = Math.max(Math.abs(x) - segment, 0);
+      return sx * sx + y * y <= (h / 2) ** 2;
+    }
+    const segment = (h - w) / 2;
+    const sy = Math.max(Math.abs(y) - segment, 0);
+    return x * x + sy * sy <= (w / 2) ** 2;
+  }
+  if (shape === "Hexagon") {
+    const R = w / 2;
+    return Math.abs(x) <= R && Math.abs(y) <= Math.sqrt(3) * R / 2 && Math.sqrt(3) * Math.abs(x) + Math.abs(y) <= Math.sqrt(3) * R;
+  }
+  return (x / (w / 2)) ** 2 + (y / (h / 2)) ** 2 <= 1;
+}
+
+function isPointInsidePerfBoundary(px, py, bounds) {
+  const { xMin, xMax, yMin, yMax, cornerRadius: cr, circleMode } = bounds;
+  if (circleMode) {
+    const cx = (xMin + xMax) / 2, cy = (yMin + yMax) / 2;
+    return Math.hypot(px - cx, py - cy) <= Math.min(xMax - xMin, yMax - yMin) / 2;
+  }
+  return isInsideRoundedRect(px, py, xMin, yMin, xMax, yMax, cr);
+}
+
+function estimateVisibleHoleArea(hole, shape, bounds, useExit = false) {
+  const w = useExit ? hole.exitW : hole.w;
+  const h = useExit ? hole.exitH : hole.h;
+  const exactArea = useExit ? hole.exitArea : hole.area;
+  if (w <= 0 || h <= 0) return 0;
+  const angle = hole.angle || 0;
+  const boxW = Math.abs(Math.cos(angle)) * w + Math.abs(Math.sin(angle)) * h;
+  const boxH = Math.abs(Math.sin(angle)) * w + Math.abs(Math.cos(angle)) * h;
+  const left = hole.x - boxW / 2, right = hole.x + boxW / 2;
+  const top = hole.y - boxH / 2, bottom = hole.y + boxH / 2;
+
+  if ([[left, top], [right, top], [left, bottom], [right, bottom]].every(([x, y]) => isPointInsidePerfBoundary(x, y, bounds))) return exactArea;
+  if (bounds.circleMode) {
+    const cx = (bounds.xMin + bounds.xMax) / 2, cy = (bounds.yMin + bounds.yMax) / 2;
+    const panelRadius = Math.min(bounds.xMax - bounds.xMin, bounds.yMax - bounds.yMin) / 2;
+    if (Math.hypot(hole.x - cx, hole.y - cy) + Math.hypot(boxW, boxH) / 2 <= panelRadius) return exactArea;
+  }
+
+  const samples = 12;
+  let inside = 0;
+  for (let sy = 0; sy < samples; sy++) {
+    for (let sx = 0; sx < samples; sx++) {
+      const px = left + (sx + 0.5) * boxW / samples;
+      const py = top + (sy + 0.5) * boxH / samples;
+      if (isPointInsidePerfBoundary(px, py, bounds) && isPointInsideHole(px, py, hole, shape, useExit)) inside++;
+    }
+  }
+  return boxW * boxH * inside / (samples * samples);
 }
 
 function generateHoles(params) {
@@ -247,43 +397,38 @@ function generateHoles(params) {
 }
 
 // ─── Overlap & ligament: shape-aware (AABB for rect/pill, circle for others) ──
-function checkShapeOverlap(h1, h2, shape, w, h) {
-  if (shape === "Rectangle") {
-    // AABB overlap: gap < 0 on both axes
-    const gapX = Math.abs(h1.x - h2.x) - w;
-    const gapY = Math.abs(h1.y - h2.y) - h;
+function checkShapeOverlap(h1, h2, shape) {
+  const w1 = h1.w, h1h = h1.h, w2 = h2.w, h2h = h2.h;
+  if (shape === "Rectangle" || shape === "Pill") {
+    // Conservative AABB check; radial rotation is intentionally treated safely.
+    const gapX = Math.abs(h1.x - h2.x) - (w1 + w2) / 2;
+    const gapY = Math.abs(h1.y - h2.y) - (h1h + h2h) / 2;
     return gapX < -0.001 && gapY < -0.001;
   }
-  if (shape === "Pill") {
-    // Stadium overlap approximation: AABB check
-    const gapX = Math.abs(h1.x - h2.x) - w;
-    const gapY = Math.abs(h1.y - h2.y) - h;
-    return gapX < -0.001 && gapY < -0.001;
-  }
-  // Circle / Hexagon: distance-based
-  const d = Math.max(w, h);
-  return Math.hypot(h1.x - h2.x, h1.y - h2.y) < d - 0.001;
+  // Circle / Hexagon: distance-based conservative extent.
+  const r1 = Math.max(w1, h1h) / 2, r2 = Math.max(w2, h2h) / 2;
+  return Math.hypot(h1.x - h2.x, h1.y - h2.y) < r1 + r2 - 0.001;
 }
 
-function calcShapeGap(h1, h2, shape, w, h) {
+function calcShapeGap(h1, h2, shape) {
+  const w1 = h1.w, h1h = h1.h, w2 = h2.w, h2h = h2.h;
   if (shape === "Rectangle" || shape === "Pill") {
-    // Minimum gap between AABBs (Chebyshev-like: the gap that must be bridged)
-    const gapX = Math.abs(h1.x - h2.x) - w;
-    const gapY = Math.abs(h1.y - h2.y) - h;
+    const gapX = Math.abs(h1.x - h2.x) - (w1 + w2) / 2;
+    const gapY = Math.abs(h1.y - h2.y) - (h1h + h2h) / 2;
     // If both axes overlap → negative (overlap); otherwise the gap is the max of the two axis gaps
     if (gapX < 0 && gapY < 0) return Math.max(gapX, gapY); // overlap amount
     if (gapX < 0) return gapY; // only Y gap matters
     if (gapY < 0) return gapX; // only X gap matters
     return Math.hypot(Math.max(0, gapX), Math.max(0, gapY)); // corner gap
   }
-  const d = Math.max(w, h);
-  return Math.hypot(h1.x - h2.x, h1.y - h2.y) - d;
+  const r1 = Math.max(w1, h1h) / 2, r2 = Math.max(w2, h2h) / 2;
+  return Math.hypot(h1.x - h2.x, h1.y - h2.y) - r1 - r2;
 }
 
-function findOverlaps(holes, shape, w, h) {
+function findOverlaps(holes, shape) {
   const overlaps = new Set();
   if (holes.length > 10000) return overlaps;
-  const gridSize = Math.max(w, h);
+  const gridSize = Math.max(0.001, ...holes.map(h => Math.max(h.w, h.h)));
   const grid = {};
   holes.forEach((hole, i) => {
     const key = `${Math.floor(hole.x / gridSize)},${Math.floor(hole.y / gridSize)}`;
@@ -293,7 +438,7 @@ function findOverlaps(holes, shape, w, h) {
     const gx = Math.floor(hole.x / gridSize), gy = Math.floor(hole.y / gridSize);
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
       for (const j of (grid[`${gx + dx},${gy + dy}`] || [])) {
-        if (j > i && checkShapeOverlap(hole, holes[j], shape, w, h)) {
+        if (j > i && checkShapeOverlap(hole, holes[j], shape)) {
           overlaps.add(i); overlaps.add(j);
         }
       }
@@ -302,10 +447,11 @@ function findOverlaps(holes, shape, w, h) {
   return overlaps;
 }
 
-function calcMinLigament(holes, shape, w, h) {
+function calcMinLigament(holes, shape, nominalSpacing = 0) {
   if (holes.length < 2 || holes.length > 10000) return null;
   let minGap = Infinity;
-  const gridSize = Math.max(w, h) * 2;
+  const maxExtent = Math.max(0.001, ...holes.map(h => Math.max(h.w, h.h)));
+  const gridSize = Math.max(maxExtent * 2, nominalSpacing * 1.5);
   const grid = {};
   holes.forEach((hole, i) => {
     const key = `${Math.floor(hole.x / gridSize)},${Math.floor(hole.y / gridSize)}`;
@@ -316,7 +462,7 @@ function calcMinLigament(holes, shape, w, h) {
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
       for (const j of (grid[`${gx + dx},${gy + dy}`] || [])) {
         if (j > i) {
-          const g = calcShapeGap(hole, holes[j], shape, w, h);
+          const g = calcShapeGap(hole, holes[j], shape);
           if (g < minGap) minGap = g;
         }
       }
@@ -341,27 +487,29 @@ function calcTheoreticalOAR(patternType, pitchX, pitchY, holeArea) {
 }
 
 function generateSVGString(holes, params) {
-  const { diameter, sheetW, sheetH, thickness, taperAngle, taperDirection, holeShape, holeW, holeH, holeRadius: hr } = params;
+  const { sheetW, sheetH, thickness, taperAngle, taperDirection, holeShape } = params;
   const shape = holeShape || "Circle";
-  const w = holeW || diameter, h = holeH || diameter;
   const taperActive = thickness > 0 && taperAngle > 0;
-  const taperScale = taperActive ? Math.max(0, calcExitDiameter(diameter, thickness, taperAngle)) / diameter : 1;
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${sheetW}mm" height="${sheetH}mm" viewBox="0 0 ${sheetW} ${sheetH}">\n`;
   svg += `  <rect width="${sheetW}" height="${sheetH}" fill="#c0c0c0" />\n`;
 
-  if (taperActive && taperScale > 0) {
-    const topW = taperDirection === "Top larger" ? w : w * taperScale;
-    const topH = taperDirection === "Top larger" ? h : h * taperScale;
-    const botW = taperDirection === "Top larger" ? w * taperScale : w;
-    const botH = taperDirection === "Top larger" ? h * taperScale : h;
+  if (taperActive) {
     svg += `  <g id="entry-side">\n`;
-    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, topW, topH, 'fill="#000"', '', pt.angle, hr); });
+    holes.forEach(pt => {
+      const topW = taperDirection === "Top larger" ? pt.w : pt.exitW;
+      const topH = taperDirection === "Top larger" ? pt.h : pt.exitH;
+      if (topW > 0 && topH > 0) svg += holeSVGElement(pt.x, pt.y, shape, topW, topH, 'fill="#000"', '', pt.angle, pt.holeRadius);
+    });
     svg += `  </g>\n  <g id="exit-side">\n`;
-    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, botW, botH, 'fill="none"', 'stroke="#666" stroke-width="0.15"', pt.angle, hr); });
+    holes.forEach(pt => {
+      const botW = taperDirection === "Top larger" ? pt.exitW : pt.w;
+      const botH = taperDirection === "Top larger" ? pt.exitH : pt.h;
+      if (botW > 0 && botH > 0) svg += holeSVGElement(pt.x, pt.y, shape, botW, botH, 'fill="none"', 'stroke="#666" stroke-width="0.15"', pt.angle, pt.exitHoleRadius);
+    });
     svg += `  </g>\n`;
   } else {
-    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, w, h, 'fill="#000"', '', pt.angle, hr); });
+    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, 'fill="#000"', '', pt.angle, pt.holeRadius); });
   }
   return svg + `</svg>`;
 }
@@ -469,6 +617,24 @@ function Toggle({ value, onChange, dark }) {
   );
 }
 
+function ProfileIcon({ type, active, dark }) {
+  const stroke = active ? (dark ? "#93c5fd" : "#1d4ed8") : (dark ? "#777" : "#777");
+  const paths = {
+    Ramp: "M2 15 L22 3",
+    Peak: "M2 16 L12 3 L22 16",
+    Valley: "M2 3 L12 16 L22 3",
+    Wave: "M2 10 C5 2 9 2 12 10 C15 18 19 18 22 10",
+    Noise: "M2 13 L5 6 L8 11 L11 4 L14 15 L17 8 L20 12 L22 5",
+    Steps: "M2 16 L7 16 L7 12 L12 12 L12 8 L17 8 L17 4 L22 4",
+  };
+  return (
+    <svg width="24" height="20" viewBox="0 0 24 20" aria-hidden="true">
+      <path d="M2 18 H22" stroke={dark ? "#333" : "#ddd"} strokeWidth="1" />
+      <path d={paths[type]} fill="none" stroke={stroke} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 // ─── Pitch Info Display (secondary info under edge gap slider) ────────
 function PitchInfo({ label, value, dark }) {
   return (
@@ -528,6 +694,17 @@ export default function PerforationGenerator() {
   const [taperDirection, setTaperDirection] = useState("Top larger");
   const [removedHoles, setRemovedHoles] = useState(new Set());
   const [holeRemovalMode, setHoleRemovalMode] = useState(false);
+  const [variation, setVariation] = useState(() => cloneVariation(DEFAULT_VARIATION));
+  const [variationEditMode, setVariationEditMode] = useState(false);
+  const [variationAdvanced, setVariationAdvanced] = useState(false);
+  const [variationHud, setVariationHud] = useState(null);
+  const variationRef = useRef(variation);
+  const variationPast = useRef([]);
+  const variationFuture = useRef([]);
+  const [variationHistoryVersion, setVariationHistoryVersion] = useState(0);
+  const variationDrag = useRef(null);
+  const gizmoRef = useRef(null);
+  const spacePressed = useRef(false);
 
   const canvasRef = useRef(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -536,6 +713,19 @@ export default function PerforationGenerator() {
   const panStart = useRef({ x: 0, y: 0 });
   const panOrigin = useRef({ x: 0, y: 0 });
   const containerRef = useRef(null);
+
+  useEffect(() => { variationRef.current = variation; }, [variation]);
+
+  useEffect(() => {
+    const handleKeyDown = e => { if (e.code === "Space") spacePressed.current = true; };
+    const handleKeyUp = e => { if (e.code === "Space") spacePressed.current = false; };
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, []);
 
   // Effective hole extents (w = horizontal, h = vertical)
   const hasCustomSize = holeShape === "Rectangle" || holeShape === "Pill";
@@ -584,6 +774,99 @@ export default function PerforationGenerator() {
   }, []);
   const hasAnyMargin = marginTop > 0 || marginBottom > 0 || marginLeft > 0 || marginRight > 0;
 
+  const commitVariation = useCallback((nextOrUpdater) => {
+    const current = variationRef.current;
+    const next = typeof nextOrUpdater === "function" ? nextOrUpdater(cloneVariation(current)) : nextOrUpdater;
+    if (JSON.stringify(current) === JSON.stringify(next)) return;
+    variationPast.current = [...variationPast.current.slice(-39), cloneVariation(current)];
+    variationFuture.current = [];
+    variationRef.current = next;
+    setVariation(next);
+    setVariationHistoryVersion(v => v + 1);
+  }, []);
+
+  const updateVariationLive = useCallback((nextOrUpdater) => {
+    const current = variationRef.current;
+    const next = typeof nextOrUpdater === "function" ? nextOrUpdater(cloneVariation(current)) : nextOrUpdater;
+    variationRef.current = next;
+    setVariation(next);
+  }, []);
+
+  const selectedVariationLayer = useMemo(
+    () => variation.layers.find(layer => layer.id === variation.selectedLayerId) || variation.layers[0],
+    [variation]
+  );
+
+  const updateSelectedVariationLayer = useCallback((patch, record = false) => {
+    const apply = current => ({
+      ...current,
+      layers: current.layers.map(layer => layer.id === current.selectedLayerId ? { ...layer, ...patch } : layer),
+    });
+    if (record) commitVariation(apply);
+    else updateVariationLive(apply);
+  }, [commitVariation, updateVariationLive]);
+
+  const undoVariation = useCallback(() => {
+    const previous = variationPast.current.pop();
+    if (!previous) return;
+    variationFuture.current.push(cloneVariation(variationRef.current));
+    variationRef.current = previous;
+    setVariation(previous);
+    setVariationHistoryVersion(v => v + 1);
+  }, []);
+
+  const redoVariation = useCallback(() => {
+    const next = variationFuture.current.pop();
+    if (!next) return;
+    variationPast.current.push(cloneVariation(variationRef.current));
+    variationRef.current = next;
+    setVariation(next);
+    setVariationHistoryVersion(v => v + 1);
+  }, []);
+
+  const applyVariationPreset = useCallback((name) => {
+    const preset = VARIATION_PRESETS[name];
+    if (!preset) return;
+    commitVariation(current => {
+      const selectedId = current.selectedLayerId || current.layers[0]?.id || "layer-1";
+      const baseLayer = current.layers.find(layer => layer.id === selectedId) || current.layers[0] || createVariationLayer(1);
+      return {
+        ...current,
+        enabled: true,
+        minScale: preset.minScale,
+        maxScale: preset.maxScale,
+        selectedLayerId: baseLayer.id,
+        layers: [{ ...baseLayer, ...preset.layer, enabled: true }],
+      };
+    });
+    setVariationEditMode(true);
+  }, [commitVariation]);
+
+  const addVariationLayer = useCallback(() => {
+    if (variationRef.current.layers.length >= 3) return;
+    commitVariation(current => {
+      const layer = createVariationLayer(current.layers.length + 1);
+      return { ...current, enabled: true, layers: [...current.layers, layer], selectedLayerId: layer.id };
+    });
+  }, [commitVariation]);
+
+  const removeSelectedVariationLayer = useCallback(() => {
+    if (variationRef.current.layers.length <= 1) return;
+    commitVariation(current => {
+      const layers = current.layers.filter(layer => layer.id !== current.selectedLayerId);
+      return { ...current, layers, selectedLayerId: layers[0].id };
+    });
+  }, [commitVariation]);
+
+  const randomizeVariation = useCallback(() => {
+    commitVariation(current => ({
+      ...current,
+      enabled: true,
+      layers: current.layers.map(layer => randomizeVariationLayer(layer)),
+    }));
+    setVariationEditMode(true);
+  }, [commitVariation]);
+
   const params = useMemo(() => ({
     diameter, holeShape, holeW: effW, holeH: effH, holeRadius, patternType, pitchX, pitchY, sheetW, sheetH,
     marginTop, marginBottom, marginLeft, marginRight, cornerRadius,
@@ -591,46 +874,91 @@ export default function PerforationGenerator() {
     thickness, taperAngle, taperDirection
   }), [diameter, holeShape, effW, effH, holeRadius, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole, thickness, taperAngle, taperDirection]);
 
-  const allHoles = useMemo(() => generateHoles(params), [params]);
+  const baseHoles = useMemo(() => generateHoles(params), [params]);
   // Reset removed holes when pattern params change
   useEffect(() => { setRemovedHoles(new Set()); }, [params]);
-  const activeHoleCount = allHoles.length - removedHoles.size;
-  const holes = allHoles; // keep full array for rendering; use removedHoles set for filtering
-  const overlaps = useMemo(() => findOverlaps(holes.filter((_, i) => !removedHoles.has(i)), holeShape, effW, effH), [holes, removedHoles, holeShape, effW, effH]);
-  const hasOverlap = overlaps.size > 0;
-  const holeCount = allHoles.length;
-  const singleHoleArea = calcHoleArea(holeShape, effW, effH, holeRadius);
-  const grossArea = sheetW * sheetH;
   const isRadialPattern = patternType === "Radial";
   const perfW = sheetW - marginLeft - marginRight, perfH = sheetH - marginTop - marginBottom;
+  const taperActive = thickness > 0 && taperAngle > 0;
+  const taperInset = taperActive ? 2 * thickness * Math.tan((taperAngle * Math.PI) / 180) : 0;
+
+  const holes = useMemo(() => baseHoles.map((hole, index) => {
+    const nx = perfW > 0 ? clamp((hole.x - marginLeft) / perfW, 0, 1) : 0.5;
+    const ny = perfH > 0 ? clamp((hole.y - marginTop) / perfH, 0, 1) : 0.5;
+    const scale = variationScaleAt(nx, ny, variation, index + 1);
+    const w = Math.max(0.01, effW * scale);
+    const h = Math.max(0.01, effH * scale);
+    const culled = variation.enabled && variation.cullBelow > 0 && Math.min(w, h) < variation.cullBelow;
+    const scaledRadius = Math.min(holeRadius * scale, w / 2, h / 2);
+    const exitW = taperActive ? Math.max(0, w - taperInset) : w;
+    const exitH = taperActive ? Math.max(0, h - taperInset) : h;
+    const exitHoleRadius = Math.max(0, Math.min(scaledRadius - taperInset / 2, exitW / 2, exitH / 2));
+    return {
+      ...hole,
+      id: hole.id || `hole-${index}`,
+      culled,
+      fieldValue: variation.enabled ? evaluateVariationField(nx, ny, variation, index + 1) : 1,
+      scale, w, h, holeRadius: scaledRadius,
+      area: calcHoleArea(holeShape, w, h, scaledRadius),
+      exitW, exitH, exitHoleRadius,
+      exitArea: exitW > 0 && exitH > 0 ? calcHoleArea(holeShape, exitW, exitH, exitHoleRadius) : 0,
+      isClosed: taperActive && (exitW <= 0 || exitH <= 0),
+    };
+  }), [baseHoles, perfW, perfH, marginLeft, marginTop, variation, effW, effH, holeRadius, taperActive, taperInset, holeShape]);
+
+  const activeHoles = useMemo(() => holes.filter((hole, i) => !removedHoles.has(i) && !hole.culled), [holes, removedHoles]);
+  const activeHoleCount = activeHoles.length;
+  const culledHoleCount = useMemo(() => holes.reduce((n, hole, i) => n + (hole.culled && !removedHoles.has(i) ? 1 : 0), 0), [holes, removedHoles]);
+  const overlaps = useMemo(() => findOverlaps(activeHoles, holeShape), [activeHoles, holeShape]);
+  const hasOverlap = overlaps.size > 0;
+  const holeCount = holes.length;
+  const grossArea = sheetW * sheetH;
   const radialCircleRadius = Math.min(perfW, perfH) / 2;
   const perforatedArea = (isRadialPattern && radialMode === "Circle")
     ? Math.PI * radialCircleRadius * radialCircleRadius
     : roundedRectArea(perfW, perfH, cornerRadius);
+  const perfBounds = useMemo(() => ({
+    xMin: marginLeft,
+    xMax: sheetW - marginRight,
+    yMin: marginTop,
+    yMax: sheetH - marginBottom,
+    cornerRadius,
+    circleMode: isRadialPattern && radialMode === "Circle",
+  }), [marginLeft, marginRight, marginTop, marginBottom, sheetW, sheetH, cornerRadius, isRadialPattern, radialMode]);
+  const visibleAreaTotals = useMemo(() => activeHoles.reduce((totals, hole) => ({
+    nominal: totals.nominal + estimateVisibleHoleArea(hole, holeShape, perfBounds, false),
+    exit: totals.exit + estimateVisibleHoleArea(hole, holeShape, perfBounds, true),
+  }), { nominal: 0, exit: 0 }), [activeHoles, holeShape, perfBounds]);
+  const totalHoleArea = visibleAreaTotals.nominal;
+  const totalExitHoleArea = visibleAreaTotals.exit;
+  const singleHoleArea = activeHoleCount > 0 ? totalHoleArea / activeHoleCount : 0;
 
   // OAR calculation: use counted OAR when holes removed or margins present; else theoretical
   const hasRemovedHoles = removedHoles.size > 0;
-  const useCountedOAR = hasRemovedHoles || hasAnyMargin || cornerRadius > 0 || isRadialPattern;
-  const theoreticalOAR = calcTheoreticalOAR(patternType, pitchX, pitchY, singleHoleArea);
-  const countedOAR = perforatedArea > 0 ? (singleHoleArea * activeHoleCount / perforatedArea) * 100 : 0;
+  const useCountedOAR = variation.enabled || hasRemovedHoles || hasAnyMargin || cornerRadius > 0 || isRadialPattern;
+  const theoreticalHoleArea = calcHoleArea(holeShape, effW, effH, holeRadius);
+  const theoreticalOAR = calcTheoreticalOAR(patternType, pitchX, pitchY, theoreticalHoleArea);
+  const countedOAR = perforatedArea > 0 ? (totalHoleArea / perforatedArea) * 100 : 0;
   const nominalOAR = useCountedOAR ? countedOAR : theoreticalOAR;
 
-  const taperActive = thickness > 0 && taperAngle > 0;
-  const dExitRaw = calcExitDiameter(diameter, thickness, taperAngle);
-  const dExit = Math.max(0, dExitRaw);
-  const holeClosed = dExitRaw <= 0;
-  const closedHoleCount = holeClosed ? activeHoleCount : 0;
-  // Taper scales hole dimensions uniformly
-  const taperScale = (diameter > 0 && taperActive) ? Math.max(0, dExit) / diameter : 1;
-  const exitW = effW * taperScale, exitH = effH * taperScale;
-  const exitHoleArea = calcHoleArea(holeShape, exitW, exitH, holeRadius);
-  const theoreticalEffOAR = calcTheoreticalOAR(patternType, pitchX, pitchY, exitHoleArea);
-  const countedEffOAR = perforatedArea > 0 ? (exitHoleArea * activeHoleCount / perforatedArea) * 100 : 0;
+  const closedHoleCount = activeHoles.filter(hole => hole.isClosed).length;
+  const holeClosed = activeHoleCount > 0 && closedHoleCount === activeHoleCount;
+  const hasClosedHoles = closedHoleCount > 0;
+  const dExitValues = activeHoles.filter(hole => !hole.isClosed).map(hole => Math.min(hole.exitW, hole.exitH));
+  const dExit = dExitValues.length ? dExitValues.reduce((sum, value) => sum + value, 0) / dExitValues.length : 0;
+  const minExit = dExitValues.length ? Math.min(...dExitValues) : 0;
+  const maxExit = dExitValues.length ? Math.max(...dExitValues) : 0;
+  const theoreticalExitW = taperActive ? Math.max(0, effW - taperInset) : effW;
+  const theoreticalExitH = taperActive ? Math.max(0, effH - taperInset) : effH;
+  const theoreticalExitRadius = Math.max(0, Math.min(holeRadius - taperInset / 2, theoreticalExitW / 2, theoreticalExitH / 2));
+  const theoreticalExitArea = theoreticalExitW > 0 && theoreticalExitH > 0 ? calcHoleArea(holeShape, theoreticalExitW, theoreticalExitH, theoreticalExitRadius) : 0;
+  const theoreticalEffOAR = calcTheoreticalOAR(patternType, pitchX, pitchY, theoreticalExitArea);
+  const countedEffOAR = perforatedArea > 0 ? (totalExitHoleArea / perforatedArea) * 100 : 0;
   const effectiveOAR = useCountedOAR ? countedEffOAR : theoreticalEffOAR;
   const oarDelta = taperActive ? effectiveOAR - nominalOAR : 0;
   const displayOAR = taperActive ? effectiveOAR : nominalOAR;
-  const activeHoles = useMemo(() => holes.filter((_, i) => !removedHoles.has(i)), [holes, removedHoles]);
-  const minLigament = useMemo(() => calcMinLigament(activeHoles, holeShape, effW, effH), [activeHoles, holeShape, effW, effH]);
+  const nominalNeighborSpacing = isRadialPattern ? Math.max(ringSpacing, circumSpacing) : Math.max(pitchX, pitchY);
+  const minLigament = useMemo(() => calcMinLigament(activeHoles, holeShape, nominalNeighborSpacing), [activeHoles, holeShape, nominalNeighborSpacing]);
   const perfMode = holeCount > 10000;
 
   const applyPreset = useCallback((idx) => {
@@ -661,6 +989,8 @@ export default function PerforationGenerator() {
     const fitScale = Math.min((cw - 80) / sheetW, (ch - 80) / sheetH);
     const baseScale = fitScale * zoom;
     const cx = cw / 2 + pan.x, cy = ch / 2 + pan.y;
+    // Store the view transform so pointer handlers can convert client <-> sheet space.
+    gizmoRef.current = { baseScale, originX: cx - baseScale * sheetW / 2, originY: cy - baseScale * sheetH / 2 };
 
     ctx.save();
     ctx.translate(cx, cy);
@@ -713,8 +1043,22 @@ export default function PerforationGenerator() {
       }
     }
 
-    const r = diameter / 2;
-    const rExit = dExit / 2;
+    if (variation.enabled && variationEditMode) {
+      const cols = 34, rows = Math.max(18, Math.round(cols * perfH / Math.max(1, perfW)));
+      const cellW = perfW / cols, cellH = perfH / rows;
+      ctx.save();
+      ctx.globalCompositeOperation = dark ? "screen" : "multiply";
+      for (let gy = 0; gy < rows; gy++) {
+        for (let gx = 0; gx < cols; gx++) {
+          const value = evaluateVariationField((gx + 0.5) / cols, (gy + 0.5) / rows, variation, gy * cols + gx + 1);
+          const alpha = 0.015 + value * 0.075;
+          ctx.fillStyle = dark ? `rgba(70,135,255,${alpha})` : `rgba(37,99,235,${alpha * 0.7})`;
+          ctx.fillRect(marginLeft + gx * cellW, marginTop + gy * cellH, cellW + 0.05, cellH + 0.05);
+        }
+      }
+      ctx.restore();
+    }
+
     const showTaperRings = taperActive && !perfMode;
 
     // Clip holes to sheet boundary
@@ -726,13 +1070,13 @@ export default function PerforationGenerator() {
     if (perfMode) {
       ctx.fillStyle = dark ? "#0a0a0c" : "#1a1a1e";
       holes.forEach((h, i) => {
-        if (removedHoles.has(i)) return;
-        ctx.fillRect(h.x - r * 0.7, h.y - r * 0.7, r * 1.4, r * 1.4);
+        if (removedHoles.has(i) || h.culled) return;
+        ctx.fillRect(h.x - h.w * 0.35, h.y - h.h * 0.35, h.w * 0.7, h.h * 0.7);
       });
     } else {
-      // Build overlap set based on active (non-removed) holes mapping
+      // Build overlap set based on active (non-removed, non-culled) holes mapping
       const activeIndices = [];
-      holes.forEach((_, i) => { if (!removedHoles.has(i)) activeIndices.push(i); });
+      holes.forEach((h, i) => { if (!removedHoles.has(i) && !h.culled) activeIndices.push(i); });
       const activeOverlapSet = new Set();
       overlaps.forEach((activeIdx) => {
         if (activeIdx < activeIndices.length) activeOverlapSet.add(activeIndices[activeIdx]);
@@ -740,9 +1084,19 @@ export default function PerforationGenerator() {
 
       holes.forEach((h, i) => {
         const isRemoved = removedHoles.has(i);
+        const r = Math.max(h.w, h.h) / 2;
+        if (h.culled && !isRemoved) {
+          // Culled by the size floor: gone from the real pattern. Show a faint ghost only while editing.
+          if (variation.enabled && variationEditMode) {
+            ctx.beginPath(); ctx.arc(h.x, h.y, Math.max(0.15, r), 0, Math.PI * 2);
+            ctx.strokeStyle = dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.12)";
+            ctx.lineWidth = 0.2; ctx.setLineDash([0.6, 0.6]); ctx.stroke(); ctx.setLineDash([]);
+          }
+          return;
+        }
         if (isRemoved) {
           // Draw removed hole as faint outline
-          ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle, holeRadius);
+          ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
           ctx.strokeStyle = dark ? "rgba(255,100,100,0.25)" : "rgba(200,50,50,0.2)";
           ctx.lineWidth = 0.4;
           ctx.setLineDash([1, 1]); ctx.stroke(); ctx.setLineDash([]);
@@ -755,9 +1109,9 @@ export default function PerforationGenerator() {
           return;
         }
         const isOverlap = activeOverlapSet.has(i);
-        const isClosed = taperActive && holeClosed;
+        const isClosed = h.isClosed;
         // Draw hole shape
-        ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle, holeRadius);
+        ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
         ctx.fillStyle = isClosed ? (dark ? "rgba(220,50,50,0.55)" : "rgba(200,30,30,0.45)")
           : isOverlap ? (dark ? "rgba(220,50,50,0.7)" : "rgba(200,30,30,0.6)")
           : (dark ? "#0f0f11" : "#1a1a1e");
@@ -775,17 +1129,17 @@ export default function PerforationGenerator() {
           ctx.fillStyle = grad; ctx.fill();
         }
         // Taper ring: fill gap between entry and exit shapes
-        if (showTaperRings && dExit > 0 && !isClosed) {
+        if (showTaperRings && h.exitW > 0 && h.exitH > 0 && !isClosed) {
           ctx.beginPath();
-          traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle, holeRadius);
+          traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
           // Cut out the exit shape (reverse winding)
           ctx.save();
           ctx.clip();
           // Fill the entire clipped area, then clear the exit shape
           ctx.fillStyle = dark ? "rgba(80,85,95,0.6)" : "rgba(160,165,175,0.5)";
-          ctx.fillRect(h.x - diameter, h.y - diameter, diameter * 2, diameter * 2);
+          ctx.fillRect(h.x - h.w, h.y - h.h, h.w * 2, h.h * 2);
           // Clear exit shape by drawing it with the hole color
-          ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, exitW, exitH, h.angle, holeRadius);
+          ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius);
           ctx.fillStyle = isClosed ? (dark ? "rgba(220,50,50,0.55)" : "rgba(200,30,30,0.45)")
             : (dark ? "#0f0f11" : "#1a1a1e");
           ctx.fill();
@@ -799,6 +1153,52 @@ export default function PerforationGenerator() {
 
     ctx.strokeStyle = dark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.15)";
     ctx.lineWidth = 0.5; ctx.strokeRect(0, 0, sheetW, sheetH);
+
+    if (variation.enabled && variationEditMode && selectedVariationLayer) {
+      const px = 1 / baseScale;                       // one screen pixel in sheet units
+      const g = computeGizmo(selectedVariationLayer, { marginLeft, marginTop, perfW, perfH }, 12 * px);
+      const accent = dark ? "#93c5fd" : "#2563eb";
+      const beadColor = dark ? "#fbbf24" : "#d97706";
+      const space = selectedVariationLayer.space;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, 0, sheetW, sheetH); ctx.clip();
+
+      // Spread ring (where the field reaches) — meaningful for radial-like spaces.
+      if (space === "Radial" || space === "Spiral") {
+        ctx.strokeStyle = accent; ctx.globalAlpha = 0.45;
+        ctx.lineWidth = 1 * px; ctx.setLineDash([4 * px, 4 * px]);
+        ctx.beginPath(); ctx.arc(g.centerX, g.centerY, g.reachLen, 0, Math.PI * 2); ctx.stroke();
+        ctx.setLineDash([]); ctx.globalAlpha = 1;
+      }
+
+      // Axis line: center -> reach handle.
+      ctx.strokeStyle = accent; ctx.lineWidth = 1.4 * px;
+      ctx.beginPath(); ctx.moveTo(g.centerX, g.centerY); ctx.lineTo(g.reachX, g.reachY); ctx.stroke();
+
+      // Connector center -> bead (shows the modulator offset).
+      ctx.strokeStyle = beadColor; ctx.globalAlpha = 0.5; ctx.lineWidth = 1 * px;
+      ctx.setLineDash([2 * px, 2 * px]);
+      ctx.beginPath(); ctx.moveTo(g.centerX, g.centerY); ctx.lineTo(g.beadX, g.beadY); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+
+      // Reach handle (open ring).
+      ctx.strokeStyle = accent; ctx.lineWidth = 1.6 * px;
+      ctx.fillStyle = dark ? "#0f0f11" : "#ffffff";
+      ctx.beginPath(); ctx.arc(g.reachX, g.reachY, 5 * px, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+      // Modulator bead (filled diamond).
+      ctx.fillStyle = beadColor;
+      ctx.save(); ctx.translate(g.beadX, g.beadY); ctx.rotate(Math.PI / 4);
+      ctx.fillRect(-3.4 * px, -3.4 * px, 6.8 * px, 6.8 * px); ctx.restore();
+
+      // Center handle (filled dot with light core).
+      ctx.fillStyle = accent;
+      ctx.beginPath(); ctx.arc(g.centerX, g.centerY, 5.5 * px, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = dark ? "#0f0f11" : "#ffffff";
+      ctx.beginPath(); ctx.arc(g.centerX, g.centerY, 2 * px, 0, Math.PI * 2); ctx.fill();
+
+      ctx.restore();
+    }
     ctx.restore();
 
     if (perfMode) {
@@ -806,7 +1206,7 @@ export default function PerforationGenerator() {
       ctx.font = "11px 'JetBrains Mono', monospace"; ctx.textAlign = "left";
       ctx.fillText(`⚡ Performance mode (${holeCount.toLocaleString()} holes)`, 12, ch - 12);
     }
-  }, [holes, overlaps, params, dark, pan, zoom, perfMode, holeCount, diameter, holeShape, effW, effH, holeRadius, pitchX, pitchY, patternType, marginTop, marginBottom, marginLeft, marginRight, hasAnyMargin, cornerRadius, radialMode, isRadialPattern, sheetW, sheetH, taperActive, dExit, holeClosed, thickness, taperAngle, taperDirection, removedHoles]);
+  }, [holes, overlaps, params, dark, pan, zoom, perfMode, holeCount, holeShape, pitchX, pitchY, patternType, marginTop, marginBottom, marginLeft, marginRight, hasAnyMargin, cornerRadius, radialMode, isRadialPattern, sheetW, sheetH, taperActive, thickness, taperAngle, taperDirection, removedHoles, variation, variationEditMode, selectedVariationLayer, perfW, perfH]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -841,19 +1241,94 @@ export default function PerforationGenerator() {
   }, []);
 
   const pointerDownPos = useRef(null);
+  const clientToSheet = useCallback((clientX, clientY) => {
+    const view = gizmoRef.current;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!view || !rect) return null;
+    return {
+      x: (clientX - rect.left - view.originX) / view.baseScale,
+      y: (clientY - rect.top - view.originY) / view.baseScale,
+    };
+  }, []);
+  const selectedLayerLive = useCallback(() => {
+    const v = variationRef.current;
+    return v.layers.find(l => l.id === v.selectedLayerId) || v.layers[0];
+  }, []);
+  const setBeadHud = useCallback((layer) => {
+    const usesPosition = gizmoUsesPosition(layer);
+    setVariationHud({
+      positionLabel: usesPosition ? "Position" : "Phase",
+      positionValue: usesPosition ? layer.position : layer.phase,
+      exponent: layer.exponent,
+    });
+  }, []);
   const handlePointerDown = useCallback((e) => {
     if (e.button !== 0) return;
     pointerDownPos.current = { x: e.clientX, y: e.clientY };
+    const view = gizmoRef.current;
+    if (variation.enabled && variationEditMode && !spacePressed.current && selectedVariationLayer && view) {
+      const sheet = clientToSheet(e.clientX, e.clientY);
+      if (sheet) {
+        const geom = { marginLeft, marginTop, perfW, perfH };
+        const g = computeGizmo(selectedVariationLayer, geom, 12 / view.baseScale);
+        const candidates = [
+          { handle: "bead", x: g.beadX, y: g.beadY },
+          { handle: "reach", x: g.reachX, y: g.reachY },
+          { handle: "center", x: g.centerX, y: g.centerY },
+        ];
+        let hit = null, hitDist = 16; // screen-px hit radius
+        for (const c of candidates) {
+          const d = Math.hypot(c.x - sheet.x, c.y - sheet.y) * view.baseScale;
+          if (d < hitDist) { hit = c.handle; hitDist = d; }
+        }
+        if (hit) {
+          variationDrag.current = { handle: hit, startVariation: cloneVariation(variationRef.current) };
+          if (hit === "bead") setBeadHud(selectedVariationLayer); else setVariationHud(null);
+          e.currentTarget.setPointerCapture(e.pointerId);
+          return;
+        }
+      }
+    }
     setIsPanning(true);
     panStart.current = { x: e.clientX, y: e.clientY };
     panOrigin.current = { ...pan };
     e.currentTarget.setPointerCapture(e.pointerId);
-  }, [pan]);
+  }, [pan, variation.enabled, variationEditMode, selectedVariationLayer, marginLeft, marginTop, perfW, perfH, clientToSheet, setBeadHud]);
   const handlePointerMove = useCallback((e) => {
+    if (variationDrag.current) {
+      const sheet = clientToSheet(e.clientX, e.clientY);
+      if (!sheet) return;
+      const layer = selectedLayerLive();
+      if (!layer) return;
+      const geom = { marginLeft, marginTop, perfW, perfH };
+      const handle = variationDrag.current.handle;
+      let patch;
+      if (handle === "center") patch = gizmoPatchForCenter(sheet.x, sheet.y, geom);
+      else if (handle === "reach") patch = gizmoPatchForReach(sheet.x, sheet.y, layer, geom, layer.space === "Angular");
+      else patch = gizmoPatchForBead(sheet.x, sheet.y, layer, geom);
+      updateVariationLive(current => ({
+        ...current,
+        layers: current.layers.map(l => l.id === current.selectedLayerId ? { ...l, ...patch } : l),
+      }));
+      if (handle === "bead") setBeadHud({ ...layer, ...patch });
+      return;
+    }
     if (!isPanning) return;
     setPan({ x: panOrigin.current.x + (e.clientX - panStart.current.x), y: panOrigin.current.y + (e.clientY - panStart.current.y) });
-  }, [isPanning]);
+  }, [isPanning, updateVariationLive, clientToSheet, selectedLayerLive, marginLeft, marginTop, perfW, perfH, setBeadHud]);
   const handlePointerUp = useCallback((e) => {
+    if (variationDrag.current) {
+      const startVariation = variationDrag.current.startVariation;
+      variationDrag.current = null;
+      if (JSON.stringify(startVariation) !== JSON.stringify(variationRef.current)) {
+        variationPast.current = [...variationPast.current.slice(-39), startVariation];
+        variationFuture.current = [];
+        setVariationHistoryVersion(v => v + 1);
+      }
+      window.setTimeout(() => setVariationHud(null), 650);
+      pointerDownPos.current = null;
+      return;
+    }
     setIsPanning(false);
     // Detect click (not drag) for hole removal
     if (holeRemovalMode && pointerDownPos.current) {
@@ -872,12 +1347,13 @@ export default function PerforationGenerator() {
         // Convert screen coords to sheet coords
         const sheetX = (clickX - cx) / baseScale + sheetW / 2;
         const sheetY = (clickY - cy) / baseScale + sheetH / 2;
-        // Find closest hole within diameter
-        const r = diameter / 2;
+        // Find closest hole using each hole's current, varied size.
         let closestIdx = -1, closestDist = Infinity;
         holes.forEach((h, i) => {
+          if (h.culled) return; // already gone from the pattern
           const d = Math.hypot(h.x - sheetX, h.y - sheetY);
-          if (d < r * 1.5 && d < closestDist) { closestDist = d; closestIdx = i; }
+          const hitRadius = Math.max(1.5, Math.max(h.w, h.h) * 0.75);
+          if (d < hitRadius && d < closestDist) { closestDist = d; closestIdx = i; }
         });
         if (closestIdx >= 0) {
           setRemovedHoles(prev => {
@@ -890,7 +1366,7 @@ export default function PerforationGenerator() {
       }
     }
     pointerDownPos.current = null;
-  }, [holeRemovalMode, holes, diameter, sheetW, sheetH, zoom, pan]);
+  }, [holeRemovalMode, holes, sheetW, sheetH, zoom, pan]);
 
   // Exports
   const exportSVG = useCallback(() => {
@@ -906,15 +1382,15 @@ export default function PerforationGenerator() {
     ctx.fillStyle = dark ? "#48484f" : "#d4d4da"; ctx.fillRect(0, 0, oc.width, oc.height);
     ctx.save(); ctx.scale(s, s);
     activeHoles.forEach(h => {
-      ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle, holeRadius);
-      ctx.fillStyle = (taperActive && holeClosed) ? "rgba(200,30,30,0.5)" : (dark ? "#0f0f11" : "#1a1a1e");
+      ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
+      ctx.fillStyle = h.isClosed ? "rgba(200,30,30,0.5)" : (dark ? "#0f0f11" : "#1a1a1e");
       ctx.fill();
-      if (taperActive && dExit > 0 && !holeClosed) {
-        ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, effW, effH, h.angle, holeRadius);
+      if (taperActive && h.exitW > 0 && h.exitH > 0 && !h.isClosed) {
+        ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
         ctx.save(); ctx.clip();
         ctx.fillStyle = dark ? "rgba(80,85,95,0.6)" : "rgba(160,165,175,0.5)";
-        ctx.fillRect(h.x - diameter, h.y - diameter, diameter * 2, diameter * 2);
-        ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, exitW, exitH, h.angle, holeRadius);
+        ctx.fillRect(h.x - h.w, h.y - h.h, h.w * 2, h.h * 2);
+        ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius);
         ctx.fillStyle = (dark ? "#0f0f11" : "#1a1a1e");
         ctx.fill();
         ctx.restore();
@@ -922,7 +1398,7 @@ export default function PerforationGenerator() {
     });
     ctx.restore();
     oc.toBlob(blob => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "perforation_pattern.png"; a.click(); });
-  }, [activeHoles, sheetW, sheetH, diameter, holeShape, effW, effH, dark, taperActive, holeClosed, dExit]);
+  }, [activeHoles, sheetW, sheetH, holeShape, dark, taperActive]);
 
   // Theme
   const sidebarBorder = dark ? "#27272a" : "#e0e0e5";
@@ -950,6 +1426,8 @@ export default function PerforationGenerator() {
     : patternType === "Staggered 45°"
       ? Math.max(pitchX, _sMinPY)
       : pitchY;
+  const canUndoVariation = variationHistoryVersion >= 0 && variationPast.current.length > 0;
+  const canRedoVariation = variationHistoryVersion >= 0 && variationFuture.current.length > 0;
 
   // Segmented button helper
   const SegBtn = ({ label, active, onClick }) => (
@@ -970,7 +1448,7 @@ export default function PerforationGenerator() {
       {/* Canvas */}
       <div ref={containerRef} style={{ flex: 1, position: "relative", overflow: "hidden" }}>
         <canvas ref={canvasRef}
-          style={{ width: "100%", height: "100%", cursor: isPanning ? "grabbing" : holeRemovalMode ? "crosshair" : "grab" }}
+          style={{ width: "100%", height: "100%", cursor: variation.enabled && variationEditMode ? "crosshair" : isPanning ? "grabbing" : holeRemovalMode ? "crosshair" : "grab", touchAction: "none" }}
           onWheel={handleWheel} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp}
         />
         {/* Top-left: key stats + warnings */}
@@ -990,10 +1468,19 @@ export default function PerforationGenerator() {
           {/* Warning badges */}
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {hasOverlap && <span style={{ fontSize: 10, color: "#fff", background: warnColor, padding: "3px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace" }}>⚠ Holes overlap</span>}
-            {taperActive && holeClosed && <span style={{ fontSize: 10, color: "#fff", background: warnColor, padding: "3px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace" }}>⚠ {closedHoleCount}/{activeHoleCount} holes closed</span>}
+            {taperActive && hasClosedHoles && <span style={{ fontSize: 10, color: "#fff", background: warnColor, padding: "3px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace" }}>⚠ {closedHoleCount}/{activeHoleCount} holes closed</span>}
             {holeRemovalMode && <span style={{ fontSize: 10, color: "#fff", background: dark ? "#7c3aed" : "#6d28d9", padding: "3px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace" }}>HOLE REMOVAL MODE{removedHoles.size > 0 ? ` (${removedHoles.size} removed)` : ""}</span>}
+            {variation.enabled && variationEditMode && <span style={{ fontSize: 10, color: "#fff", background: dark ? "#2563eb" : "#1d4ed8", padding: "3px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace" }}>EDIT VARIATION · SPACE TO PAN</span>}
           </div>
         </div>
+        {variationHud && (
+          <div style={{ position: "absolute", right: 18, bottom: 18, width: 190, padding: "10px 12px", borderRadius: 7, background: dark ? "rgba(10,10,14,0.82)" : "rgba(255,255,255,0.88)", border: `1px solid ${dark ? "rgba(147,197,253,0.25)" : "rgba(37,99,235,0.2)"}`, backdropFilter: "blur(12px)", pointerEvents: "none", boxShadow: "0 8px 28px rgba(0,0,0,0.18)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: textSecondary, marginBottom: 5 }}><span>{variationHud.positionLabel}</span><span style={{ color: accentColor }}>{variationHud.positionValue.toFixed(2)}</span></div>
+            <div style={{ height: 2, borderRadius: 2, background: dark ? "#292933" : "#ddd", marginBottom: 8 }}><div style={{ width: `${variationHud.positionValue * 100}%`, height: "100%", background: accentColor }} /></div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: textSecondary, marginBottom: 5 }}><span>Curve</span><span style={{ color: accentColor }}>{variationHud.exponent.toFixed(2)}</span></div>
+            <div style={{ height: 2, borderRadius: 2, background: dark ? "#292933" : "#ddd" }}><div style={{ width: `${clamp(variationHud.exponent / 5, 0, 1) * 100}%`, height: "100%", background: accentColor }} /></div>
+          </div>
+        )}
         <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
           style={{ position: "absolute", bottom: 12, left: 12, fontSize: 10, color: textSecondary, background: dark ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.7)", padding: "4px 10px", borderRadius: 4, border: "none", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", backdropFilter: "blur(8px)" }}>
           Reset View
@@ -1031,12 +1518,12 @@ export default function PerforationGenerator() {
               <div style={{ fontSize: 9, color: oarDelta < 0 ? (dark ? "#f87171" : "#dc2626") : textSecondary, textAlign: "center", padding: "2px 0 0", borderTop: `1px solid ${dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"}` }}>
                 {oarDelta < 0 ? `${oarDelta.toFixed(1)}%p due to taper` : "No taper loss"}
               </div>
-              {dExit > 0 && !holeClosed && <div style={{ fontSize: 9, color: textSecondary, textAlign: "center", marginTop: 3 }}>d_exit = {dExit.toFixed(2)} mm</div>}
+              {dExit > 0 && !holeClosed && <div style={{ fontSize: 9, color: textSecondary, textAlign: "center", marginTop: 3 }}>{variation.enabled ? `exit range = ${minExit.toFixed(2)}–${maxExit.toFixed(2)} mm` : `d_exit = ${dExit.toFixed(2)} mm`}</div>}
             </div>
           )}
-          {taperActive && holeClosed && (
+          {taperActive && hasClosedHoles && (
             <div style={{ margin: "6px 0", padding: "6px 8px", borderRadius: 5, background: dark ? "rgba(239,68,68,0.12)" : "rgba(239,68,68,0.08)", border: `1px solid ${dark ? "rgba(239,68,68,0.25)" : "rgba(239,68,68,0.2)"}`, fontSize: 10, color: warnColor, textAlign: "left", lineHeight: 1.4 }}>
-              Taper closes the hole at this thickness. Reduce angle or increase diameter.
+              Taper closes {closedHoleCount} varied hole{closedHoleCount === 1 ? "" : "s"} at this thickness. Raise the minimum scale, reduce angle, or increase the base size.
             </div>
           )}
 
@@ -1044,8 +1531,8 @@ export default function PerforationGenerator() {
             {[
               ["Total Holes", holeCount.toLocaleString()],
               ["Active Holes", hasRemovedHoles ? activeHoleCount.toLocaleString() : holeCount.toLocaleString()],
-              ["Hole Area", `${singleHoleArea.toFixed(2)} mm²`],
-              ["Open Area", `${(singleHoleArea * activeHoleCount).toFixed(1)} mm²`],
+              [variation.enabled ? "Avg Hole Area" : "Hole Area", `${singleHoleArea.toFixed(2)} mm²`],
+              ["Open Area", `${totalHoleArea.toFixed(1)} mm²`],
               ["Panel Area", `${grossArea.toFixed(0)} mm²`],
               ["Perf. Area", `${perforatedArea.toFixed(0)} mm²`],
             ].map(([l, v]) => (
@@ -1105,6 +1592,109 @@ export default function PerforationGenerator() {
             <SliderRow label="Hole Diameter" value={diameter} min={0.5} max={20} step={0.1} onChange={v => { setDiameter(v); setSelectedPreset(0); }} unit="mm" dark={dark} />
           )}
           {patternType === "Custom Angle" && <SliderRow label="Stagger Angle" value={customAngle} min={0} max={90} step={1} onChange={setCustomAngle} unit="°" dark={dark} />}
+        </div>
+
+        {/* Size Variation */}
+        <div style={sectionStyle}>
+          <div style={{ ...sectionTitle, display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <span>Size Variation</span>
+            <Toggle value={variation.enabled} onChange={enabled => {
+              commitVariation(current => ({ ...current, enabled }));
+              if (!enabled) setVariationEditMode(false);
+            }} dark={dark} />
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 5, marginBottom: 8 }}>
+            <select value="" onChange={e => applyVariationPreset(e.target.value)}
+              style={{ minWidth: 0, height: 30, fontSize: 10, background: controlBg, color: textPrimary, border: `1px solid ${sidebarBorder}`, borderRadius: 4, padding: "0 8px", outline: "none", fontFamily: "'JetBrains Mono', monospace" }}>
+              <option value="">Load a field preset…</option>
+              {Object.keys(VARIATION_PRESETS).map(name => <option key={name} value={name}>{name}</option>)}
+            </select>
+            <button onClick={undoVariation} disabled={!canUndoVariation} title="Undo variation" style={{ width: 30, border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: canUndoVariation ? textPrimary : textSecondary, cursor: canUndoVariation ? "pointer" : "default", opacity: canUndoVariation ? 1 : 0.45 }}>↶</button>
+            <button onClick={redoVariation} disabled={!canRedoVariation} title="Redo variation" style={{ width: 30, border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: canRedoVariation ? textPrimary : textSecondary, cursor: canRedoVariation ? "pointer" : "default", opacity: canRedoVariation ? 1 : 0.45 }}>↷</button>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 12 }}>
+            <button onClick={randomizeVariation} style={{ height: 31, border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: textPrimary, fontSize: 10, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>✦ Randomize</button>
+            <button onClick={() => {
+              const next = !variationEditMode;
+              setVariationEditMode(next);
+              if (next) { setHoleRemovalMode(false); if (!variation.enabled) commitVariation(current => ({ ...current, enabled: true })); }
+            }} style={{ height: 31, border: `1px solid ${variationEditMode ? accentColor : sidebarBorder}`, borderRadius: 4, background: variationEditMode ? (dark ? "rgba(96,165,250,0.14)" : "rgba(37,99,235,0.08)") : controlBg, color: variationEditMode ? accentColor : textPrimary, fontSize: 10, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>{variationEditMode ? "✓ Editing Canvas" : "⌁ Edit on Canvas"}</button>
+          </div>
+
+          {variation.enabled && selectedVariationLayer && <>
+            <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 12 }}>
+              {variation.layers.map((layer, index) => (
+                <button key={layer.id} onClick={() => updateVariationLive(current => ({ ...current, selectedLayerId: layer.id }))}
+                  style={{ flex: 1, height: 28, border: `1px solid ${variation.selectedLayerId === layer.id ? accentColor : sidebarBorder}`, borderRadius: 4, background: variation.selectedLayerId === layer.id ? (dark ? "rgba(96,165,250,0.12)" : "rgba(37,99,235,0.07)") : "transparent", color: variation.selectedLayerId === layer.id ? accentColor : textSecondary, fontSize: 9, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", opacity: layer.enabled ? 1 : 0.45 }}>
+                  {layer.locked ? "◆" : "◇"} Layer {index + 1}
+                </button>
+              ))}
+              <button onClick={addVariationLayer} disabled={variation.layers.length >= 3} title="Add layer" style={{ width: 28, height: 28, border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: textPrimary, cursor: variation.layers.length >= 3 ? "default" : "pointer", opacity: variation.layers.length >= 3 ? 0.4 : 1 }}>+</button>
+              {variation.layers.length > 1 && <button onClick={removeSelectedVariationLayer} title="Remove selected layer" style={{ width: 28, height: 28, border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: warnColor, cursor: "pointer" }}>×</button>}
+            </div>
+
+            <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.8, color: textSecondary, marginBottom: 6 }}>Field Space</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4, marginBottom: 13 }}>
+              {FIELD_SPACES.map(space => <button key={space} onClick={() => updateSelectedVariationLayer({ space }, true)} style={{ padding: "6px 2px", border: `1px solid ${selectedVariationLayer.space === space ? accentColor : sidebarBorder}`, borderRadius: 4, background: selectedVariationLayer.space === space ? (dark ? "rgba(96,165,250,0.13)" : "rgba(37,99,235,0.07)") : "transparent", color: selectedVariationLayer.space === space ? accentColor : textSecondary, fontSize: 9, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>{space}</button>)}
+            </div>
+
+            <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.8, color: textSecondary, marginBottom: 6 }}>Size Profile</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 5, marginBottom: 13 }}>
+              {SIZE_PROFILES.map(profile => {
+                const active = selectedVariationLayer.profile === profile;
+                return <button key={profile} onClick={() => updateSelectedVariationLayer({ profile }, true)} style={{ height: 48, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, border: `1px solid ${active ? accentColor : sidebarBorder}`, borderRadius: 5, background: active ? (dark ? "rgba(96,165,250,0.12)" : "rgba(37,99,235,0.06)") : "transparent", color: active ? accentColor : textSecondary, fontSize: 9, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}><ProfileIcon type={profile} active={active} dark={dark} />{profile}</button>;
+              })}
+            </div>
+
+            {/* Geometry, position and curve live on the canvas handles. Only count-style knobs stay here. */}
+            {selectedVariationLayer.space === "Spiral" && <SliderRow label="Spiral Turns" value={selectedVariationLayer.turns} min={0.25} max={8} step={0.05} onChange={turns => updateSelectedVariationLayer({ turns })} dark={dark} />}
+            {["Wave", "Noise"].includes(selectedVariationLayer.profile) && <SliderRow label={selectedVariationLayer.profile === "Wave" ? "Frequency" : "Noise Scale"} value={selectedVariationLayer.frequency} min={0.25} max={10} step={0.05} onChange={frequency => updateSelectedVariationLayer({ frequency })} dark={dark} />}
+            {selectedVariationLayer.profile === "Noise" && <SliderRow label="Noise Detail" value={selectedVariationLayer.detail} min={1} max={6} step={1} onChange={detail => updateSelectedVariationLayer({ detail })} dark={dark} />}
+            {selectedVariationLayer.profile === "Steps" && <SliderRow label="Step Count" value={selectedVariationLayer.steps} min={2} max={16} step={1} onChange={steps => updateSelectedVariationLayer({ steps })} dark={dark} />}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <SliderRow label="Min Scale" value={variation.minScale * 100} min={1} max={200} step={1} onChange={value => updateVariationLive(current => ({ ...current, minScale: Math.min(value / 100, current.maxScale) }))} unit="%" dark={dark} />
+              <SliderRow label="Max Scale" value={variation.maxScale * 100} min={5} max={250} step={1} onChange={value => updateVariationLive(current => ({ ...current, maxScale: Math.max(value / 100, current.minScale) }))} unit="%" dark={dark} />
+            </div>
+            <div style={{ marginTop: -5, marginBottom: 10, padding: "6px 8px", borderRadius: 4, background: dark ? "rgba(96,165,250,0.06)" : "rgba(37,99,235,0.04)", fontSize: 9, color: textSecondary, display: "flex", justifyContent: "space-between" }}>
+              <span>Actual extent</span><span style={{ color: accentColor }}>{(Math.min(effW, effH) * variation.minScale).toFixed(2)}–{(Math.max(effW, effH) * variation.maxScale).toFixed(2)} mm</span>
+            </div>
+
+            <SliderRow label="Remove Below ⌀" value={variation.cullBelow} min={0} max={Math.max(1, +Math.max(effW, effH).toFixed(1))} step={0.05} onChange={value => updateVariationLive(current => ({ ...current, cullBelow: value }))} unit={variation.cullBelow > 0 ? "mm" : "off"} dark={dark} />
+            {culledHoleCount > 0 && <div style={{ marginTop: -5, marginBottom: 10, fontSize: 9, color: textSecondary, display: "flex", justifyContent: "space-between" }}>
+              <span>Holes removed by size floor</span><span style={{ color: warnColor }}>{culledHoleCount.toLocaleString()}</span>
+            </div>}
+
+            <button onClick={() => setVariationAdvanced(value => !value)} style={{ width: "100%", height: 28, display: "flex", alignItems: "center", justifyContent: "space-between", border: "none", borderTop: `1px solid ${sectionBorder}`, background: "transparent", color: textSecondary, fontSize: 9, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}><span>ADVANCED MODIFIERS</span><span>{variationAdvanced ? "−" : "+"}</span></button>
+            {variationAdvanced && <div style={{ paddingTop: 9 }}>
+              <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.8, color: textSecondary, marginBottom: 6 }}>Numeric (canvas handle equivalents)</div>
+              <SliderRow label="Direction" value={selectedVariationLayer.angle} min={-180} max={180} step={1} onChange={angle => updateSelectedVariationLayer({ angle })} unit="°" dark={dark} />
+              <SliderRow label="Center X" value={selectedVariationLayer.centerX} min={0} max={1} step={0.01} onChange={centerX => updateSelectedVariationLayer({ centerX })} dark={dark} />
+              <SliderRow label="Center Y" value={selectedVariationLayer.centerY} min={0} max={1} step={0.01} onChange={centerY => updateSelectedVariationLayer({ centerY })} dark={dark} />
+              <SliderRow label="Field Reach" value={selectedVariationLayer.radius} min={0.1} max={2} step={0.01} onChange={radius => updateSelectedVariationLayer({ radius })} dark={dark} />
+              {gizmoUsesPosition(selectedVariationLayer)
+                ? <SliderRow label={selectedVariationLayer.profile === "Peak" ? "Peak Position" : "Valley Position"} value={selectedVariationLayer.position} min={0.01} max={0.99} step={0.01} onChange={position => updateSelectedVariationLayer({ position })} dark={dark} />
+                : <SliderRow label={selectedVariationLayer.profile === "Noise" ? "Noise Scrub" : "Phase"} value={selectedVariationLayer.phase} min={0} max={1} step={0.01} onChange={phase => updateSelectedVariationLayer({ phase })} dark={dark} />}
+              <SliderRow label="Curve Exponent" value={selectedVariationLayer.exponent} min={0.12} max={5} step={0.01} onChange={exponent => updateSelectedVariationLayer({ exponent })} dark={dark} />
+              <div style={{ height: 1, background: sectionBorder, margin: "4px 0 11px" }} />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                {[['Mirror', selectedVariationLayer.mirror, 'mirror'], ['Invert', selectedVariationLayer.invert, 'invert'], ['Layer Enabled', selectedVariationLayer.enabled, 'enabled'], ['Lock Randomize', selectedVariationLayer.locked, 'locked']].map(([label, value, key]) => <label key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 9, color: textSecondary }}>{label}<Toggle value={value} onChange={next => updateSelectedVariationLayer({ [key]: next }, true)} dark={dark} /></label>)}
+              </div>
+              <SliderRow label="Jitter" value={selectedVariationLayer.jitter} min={0} max={0.5} step={0.01} onChange={jitter => updateSelectedVariationLayer({ jitter })} dark={dark} />
+              <SliderRow label="Quantize Sizes" value={variation.quantize} min={0} max={12} step={1} onChange={quantize => updateVariationLive(current => ({ ...current, quantize }))} unit={variation.quantize >= 2 ? "levels" : "off"} dark={dark} />
+              <SliderRow label="Layer Opacity" value={selectedVariationLayer.opacity * 100} min={0} max={100} step={1} onChange={opacity => updateSelectedVariationLayer({ opacity: opacity / 100 })} unit="%" dark={dark} />
+              {variation.layers.length > 1 && <div style={{ marginBottom: 10 }}><div style={{ fontSize: 10, color: textSecondary, marginBottom: 5 }}>Blend Mode</div><select value={selectedVariationLayer.blendMode} onChange={e => updateSelectedVariationLayer({ blendMode: e.target.value }, true)} style={{ width: "100%", height: 30, fontSize: 10, background: controlBg, color: textPrimary, border: `1px solid ${sidebarBorder}`, borderRadius: 4, padding: "0 8px", fontFamily: "'JetBrains Mono', monospace" }}>{BLEND_MODES.map(mode => <option key={mode}>{mode}</option>)}</select></div>}
+              {selectedVariationLayer.profile === "Noise" && <SliderRow label="Noise Seed" value={selectedVariationLayer.seed} min={0} max={99999} step={1} onChange={seed => updateSelectedVariationLayer({ seed })} dark={dark} />}
+            </div>}
+            {variationEditMode && <div style={{ padding: "7px 9px", borderRadius: 5, border: `1px solid ${dark ? "rgba(96,165,250,0.18)" : "rgba(37,99,235,0.14)"}`, background: dark ? "rgba(96,165,250,0.06)" : "rgba(37,99,235,0.04)", color: textSecondary, fontSize: 9, lineHeight: 1.6 }}>
+              <div><span style={{ color: accentColor }}>●</span> center — drag to move the origin.</div>
+              <div><span style={{ color: accentColor }}>◯</span> reach — drag to aim direction &amp; spread.</div>
+              <div><span style={{ color: dark ? "#fbbf24" : "#d97706" }}>◆</span> bead — along axis = {gizmoUsesPosition(selectedVariationLayer) ? 'position' : 'phase'}, across = curve.</div>
+              <div style={{ opacity: 0.8, marginTop: 2 }}>Drag empty space (or hold Space) to pan.</div>
+            </div>}
+          </>}
         </div>
 
         {/* Dimensions */}
@@ -1208,9 +1798,9 @@ export default function PerforationGenerator() {
                   {["Top larger", "Bottom larger"].map(dir => <SegBtn key={dir} label={dir} active={taperDirection === dir} onClick={() => setTaperDirection(dir)} />)}
                 </div>
               </div>
-              <div style={{ marginTop: 8, padding: "5px 8px", borderRadius: 4, background: holeClosed ? (dark ? "rgba(239,68,68,0.12)" : "rgba(239,68,68,0.08)") : (dark ? "rgba(96,165,250,0.08)" : "rgba(37,99,235,0.06)"), display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 9, color: textSecondary }}>Exit Diameter</span>
-                <span style={{ fontSize: 11, fontWeight: 500, color: holeClosed ? warnColor : accentColor }}>{holeClosed ? "0 (closed)" : `${dExit.toFixed(2)} mm`}</span>
+              <div style={{ marginTop: 8, padding: "5px 8px", borderRadius: 4, background: hasClosedHoles ? (dark ? "rgba(239,68,68,0.12)" : "rgba(239,68,68,0.08)") : (dark ? "rgba(96,165,250,0.08)" : "rgba(37,99,235,0.06)"), display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 9, color: textSecondary }}>{variation.enabled ? "Exit Range" : "Exit Diameter"}</span>
+                <span style={{ fontSize: 11, fontWeight: 500, color: hasClosedHoles ? warnColor : accentColor }}>{holeClosed ? "0 (all closed)" : variation.enabled ? `${minExit.toFixed(2)}–${maxExit.toFixed(2)} mm` : `${dExit.toFixed(2)} mm`}</span>
               </div>
             </>
           )}

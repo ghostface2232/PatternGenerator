@@ -14,13 +14,19 @@
 <body>
   <div id="root"></div>
   <script type="module" src="/src/main.jsx"></script>
-  <script>
+  <script type="module">
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').catch(err => {
-          console.error('SW registration failed:', err);
+      if (import.meta.env.PROD) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('./sw.js').catch(err => {
+            console.error('SW registration failed:', err);
+          });
         });
-      });
+      } else {
+        // Never let a previously installed production worker cache development modules.
+        navigator.serviceWorker.getRegistrations().then(registrations => registrations.forEach(registration => registration.unregister()));
+        if ('caches' in window) caches.keys().then(keys => keys.forEach(key => caches.delete(key)));
+      }
     }
   </script>
 </body>
