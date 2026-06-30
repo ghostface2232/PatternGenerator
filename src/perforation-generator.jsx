@@ -50,6 +50,7 @@ const GIZMO_DIAL_SWEEP = 1.15;  // radians of knob travel per EXP_K log-unit
 // hard snap to the nearest target; with the bare mouse the value moves freely but
 // is gently pulled in as it approaches a snap point (a soft magnet).
 const SNAP_QUARTERS = [0, 0.25, 0.5, 0.75, 1]; // 0/25/50/75/100%
+const SNAP_CENTER = [0, 0.5, 1];               // panel centre, edge mids & corners (quadrant vertices)
 const SNAP_ANGLE_STEP = 45;                    // degrees
 const SOFT_SNAP_FRAC = 0.06;                   // capture radius for 0..1 ranges
 const SOFT_SNAP_DEG = 7;                        // capture radius for angles (deg)
@@ -127,10 +128,14 @@ function computeGizmo(layer, geom, minSep = 0) {
 }
 
 // Inverse maps: cursor in sheet space -> layer param patch, for the grabbed handle.
-function gizmoPatchForCenter(mx, my, geom) {
+function gizmoPatchForCenter(mx, my, geom, shift) {
+  // Each axis snaps to 0/50/100% so the origin clicks onto the panel centre,
+  // the edge midpoints and the corners (the quadrant vertices).
+  const x = clamp((mx - geom.marginLeft) / Math.max(1e-6, geom.perfW), 0, 1);
+  const y = clamp((my - geom.marginTop) / Math.max(1e-6, geom.perfH), 0, 1);
   return {
-    centerX: clamp((mx - geom.marginLeft) / Math.max(1e-6, geom.perfW), 0, 1),
-    centerY: clamp((my - geom.marginTop) / Math.max(1e-6, geom.perfH), 0, 1),
+    centerX: applySnap(x, SNAP_CENTER, SOFT_SNAP_FRAC, shift),
+    centerY: applySnap(y, SNAP_CENTER, SOFT_SNAP_FRAC, shift),
   };
 }
 
@@ -1429,7 +1434,7 @@ export default function PerforationGenerator() {
       const handle = variationDrag.current.handle;
       let patch;
       const shift = e.shiftKey;
-      if (handle === "center") patch = gizmoPatchForCenter(sheet.x, sheet.y, geom);
+      if (handle === "center") patch = gizmoPatchForCenter(sheet.x, sheet.y, geom, shift);
       else if (handle === "reach") patch = gizmoPatchForReach(sheet.x, sheet.y, layer, geom, layer.space === "Angular", shift);
       else if (handle === "stop") patch = gizmoPatchForStop(sheet.x, sheet.y, layer, geom, shift);
       else patch = gizmoPatchForCurve(sheet.x, sheet.y, layer, geom, shift);
@@ -1814,7 +1819,7 @@ export default function PerforationGenerator() {
               <div><span style={{ color: accentColor }}>◯</span> reach — drag the end point to aim direction &amp; spread.</div>
               <div><span style={{ color: accentColor }}>◆</span> stop — slide along the line to set {gizmoUsesPosition(selectedVariationLayer) ? 'position' : 'phase'}.</div>
               <div><span style={{ color: dark ? "#fbbf24" : "#d97706" }}>⟳</span> curve — turn the dial to shape the falloff.</div>
-              <div style={{ opacity: 0.8, marginTop: 4 }}>Spread &amp; position snap to 0/25/50/75/100%, angles to 45°. Hold Shift to lock to a snap; otherwise it gently pulls in near one.</div>
+              <div style={{ opacity: 0.8, marginTop: 4 }}>Center snaps to the panel centre, edges &amp; corners; spread &amp; position to 0/25/50/75/100%; angles to 45°. Hold Shift to lock to a snap; otherwise it gently pulls in near one.</div>
               <div style={{ opacity: 0.8, marginTop: 2 }}>Drag empty space (or hold Space) to pan.</div>
             </div>}
           </>}
