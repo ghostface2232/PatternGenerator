@@ -34,11 +34,15 @@ const cloneVariation = variation => ({
 });
 
 // ─── Variation gizmo geometry ─────────────────────────────────────────
-// Three on-canvas handles map directly to layer params, all in sheet (mm) space:
-//   center  -> centerX / centerY      reach -> angle (direction) + radius (length)
-//   bead    -> position|phase (along the axis) + exponent (perpendicular to it)
-const GIZMO_EXP_K = 1.2;      // exponent <-> perpendicular offset (log scale)
-const GIZMO_PERP_SPAN = 0.3;  // perpendicular offset = perpNorm * span * minDim
+// Four on-canvas handles, each mapping to ONE concept (sheet/mm space). Modelled
+// on Photoshop's gradient + lens-blur tools so every drag does a single thing:
+//   center -> centerX / centerY (origin = gradient start)
+//   reach  -> angle (direction) + radius (length)  -- gradient end point
+//   stop   -> position|phase, slides ALONG the gradient line only
+//   curve  -> exponent, a rotary dial hugging the centre (lens-blur amount ring)
+const GIZMO_EXP_K = 1.2;        // exponent <-> dial sweep (log scale)
+const GIZMO_DIAL_R = 0.13;      // curve-dial radius as a fraction of minDim
+const GIZMO_DIAL_SWEEP = 1.15;  // radians of knob travel per EXP_K log-unit
 
 const gizmoUsesPosition = layer => layer.profile === "Peak" || layer.profile === "Valley";
 
@@ -56,22 +60,23 @@ function computeGizmo(layer, geom, minSep = 0) {
   const alongFrac = usesPosition
     ? clamp(layer.position ?? 0.5, 0, 1)
     : (((layer.phase || 0) % 1) + 1) % 1;
-  const along = alongFrac * reachLen;
-  const perpNorm = Math.log(clamp(layer.exponent || 1, 0.12, 5)) / GIZMO_EXP_K;
-  const perpOff = perpNorm * GIZMO_PERP_SPAN * minDim;
-  let beadX = cx + dirX * along + perpX * perpOff;
-  let beadY = cy + dirY * along + perpY * perpOff;
-  // Keep the bead from hiding under the center handle (render/hit only; inverse uses the true cursor).
-  if (minSep > 0) {
-    const bdx = beadX - cx, bdy = beadY - cy;
-    const dist = Math.hypot(bdx, bdy);
-    if (dist < minSep) { beadX = cx + dirX * minSep; beadY = cy + dirY * minSep; }
-  }
+  // Position/phase stop lives strictly ON the gradient line (no perpendicular meaning).
+  let along = alongFrac * reachLen;
+  if (minSep > 0 && along < minSep) along = minSep; // keep it grabbable near the origin
+  const stopX = cx + dirX * along, stopY = cy + dirY * along;
+  // Curve dial: a rotary knob hugging the centre. Its sweep encodes the falloff exponent;
+  // neutral (exponent = 1) points perpendicular to the axis, like a dial's 12-o'clock.
+  const dialR = Math.max(minDim * 0.07, GIZMO_DIAL_R * minDim);
+  const baseAngle = Math.atan2(perpY, perpX);
+  const theta = (Math.log(clamp(layer.exponent || 1, 0.12, 5)) / GIZMO_EXP_K) * GIZMO_DIAL_SWEEP;
+  const knobAngle = baseAngle + theta;
   return {
-    minDim, reachLen, dirX, dirY, perpX, perpY, usesPosition,
+    minDim, reachLen, dirX, dirY, perpX, perpY, usesPosition, dialR, baseAngle,
     centerX: cx, centerY: cy,
     reachX: cx + dirX * reachLen, reachY: cy + dirY * reachLen,
-    beadX, beadY,
+    stopX, stopY,
+    curveX: cx + Math.cos(knobAngle) * dialR,
+    curveY: cy + Math.sin(knobAngle) * dialR,
   };
 }
 
@@ -94,17 +99,21 @@ function gizmoPatchForReach(mx, my, layer, geom, lockRadius) {
   return patch;
 }
 
-function gizmoPatchForBead(mx, my, layer, geom) {
+// Stop: project the cursor onto the gradient axis -> position|phase only.
+function gizmoPatchForStop(mx, my, layer, geom) {
   const g = computeGizmo(layer, geom);
   const dx = mx - g.centerX, dy = my - g.centerY;
-  const along = dx * g.dirX + dy * g.dirY;
-  const perp = dx * g.perpX + dy * g.perpY;
-  const alongFrac = along / Math.max(1e-6, g.reachLen);
-  const exponent = clamp(Math.exp((perp / (GIZMO_PERP_SPAN * g.minDim)) * GIZMO_EXP_K), 0.12, 5);
-  if (g.usesPosition) {
-    return { position: clamp(alongFrac, 0.01, 0.99), exponent };
-  }
-  return { phase: ((alongFrac % 1) + 1) % 1, exponent };
+  const alongFrac = (dx * g.dirX + dy * g.dirY) / Math.max(1e-6, g.reachLen);
+  if (g.usesPosition) return { position: clamp(alongFrac, 0.01, 0.99) };
+  return { phase: ((alongFrac % 1) + 1) % 1 };
+}
+
+// Curve: the knob's angle around the centre -> exponent (rotary dial).
+function gizmoPatchForCurve(mx, my, layer, geom) {
+  const g = computeGizmo(layer, geom);
+  let theta = Math.atan2(my - g.centerY, mx - g.centerX) - g.baseAngle;
+  theta = Math.atan2(Math.sin(theta), Math.cos(theta)); // wrap to [-π, π]
+  return { exponent: clamp(Math.exp((theta / GIZMO_DIAL_SWEEP) * GIZMO_EXP_K), 0.12, 5) };
 }
 
 // ─── Hole shape helpers (w = horizontal extent, h = vertical extent) ──
@@ -1208,7 +1217,7 @@ export default function PerforationGenerator() {
       const px = 1 / baseScale;                       // one screen pixel in sheet units
       const g = computeGizmo(selectedVariationLayer, { marginLeft, marginTop, perfW, perfH }, 12 * px);
       const accent = dark ? "#93c5fd" : "#2563eb";
-      const beadColor = dark ? "#fbbf24" : "#d97706";
+      const dialColor = dark ? "#fbbf24" : "#d97706";
       const space = selectedVariationLayer.space;
       ctx.save();
       ctx.beginPath(); ctx.rect(0, 0, sheetW, sheetH); ctx.clip();
@@ -1221,27 +1230,33 @@ export default function PerforationGenerator() {
         ctx.setLineDash([]); ctx.globalAlpha = 1;
       }
 
-      // Axis line: center -> reach handle.
+      // Gradient line: center (start) -> reach (end).
       ctx.strokeStyle = accent; ctx.lineWidth = 1.4 * px;
       ctx.beginPath(); ctx.moveTo(g.centerX, g.centerY); ctx.lineTo(g.reachX, g.reachY); ctx.stroke();
 
-      // Connector center -> bead (shows the modulator offset).
-      ctx.strokeStyle = beadColor; ctx.globalAlpha = 0.5; ctx.lineWidth = 1 * px;
-      ctx.setLineDash([2 * px, 2 * px]);
-      ctx.beginPath(); ctx.moveTo(g.centerX, g.centerY); ctx.lineTo(g.beadX, g.beadY); ctx.stroke();
-      ctx.setLineDash([]); ctx.globalAlpha = 1;
+      // Curve dial: rotary track + needle hugging the centre (lens-blur amount ring).
+      ctx.strokeStyle = dialColor; ctx.globalAlpha = 0.35; ctx.lineWidth = 1 * px;
+      ctx.beginPath(); ctx.arc(g.centerX, g.centerY, g.dialR, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath(); ctx.moveTo(g.centerX, g.centerY); ctx.lineTo(g.curveX, g.curveY); ctx.stroke();
+      ctx.globalAlpha = 1;
 
-      // Reach handle (open ring).
+      // Reach handle (open ring) — gradient end point.
       ctx.strokeStyle = accent; ctx.lineWidth = 1.6 * px;
       ctx.fillStyle = dark ? "#0f0f11" : "#ffffff";
       ctx.beginPath(); ctx.arc(g.reachX, g.reachY, 5 * px, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
 
-      // Modulator bead (filled diamond).
-      ctx.fillStyle = beadColor;
-      ctx.save(); ctx.translate(g.beadX, g.beadY); ctx.rotate(Math.PI / 4);
-      ctx.fillRect(-3.4 * px, -3.4 * px, 6.8 * px, 6.8 * px); ctx.restore();
+      // Position/phase stop (filled diamond) — slides along the gradient line.
+      ctx.fillStyle = accent; ctx.strokeStyle = dark ? "#0f0f11" : "#ffffff"; ctx.lineWidth = 1 * px;
+      ctx.save(); ctx.translate(g.stopX, g.stopY); ctx.rotate(Math.PI / 4);
+      ctx.fillRect(-3.4 * px, -3.4 * px, 6.8 * px, 6.8 * px);
+      ctx.strokeRect(-3.4 * px, -3.4 * px, 6.8 * px, 6.8 * px); ctx.restore();
 
-      // Center handle (filled dot with light core).
+      // Curve knob (filled dot on the dial).
+      ctx.fillStyle = dialColor; ctx.strokeStyle = dark ? "#0f0f11" : "#ffffff"; ctx.lineWidth = 1 * px;
+      ctx.beginPath(); ctx.arc(g.curveX, g.curveY, 4 * px, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+      // Center handle (filled dot with light core) — gradient start.
       ctx.fillStyle = accent;
       ctx.beginPath(); ctx.arc(g.centerX, g.centerY, 5.5 * px, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = dark ? "#0f0f11" : "#ffffff";
@@ -1304,7 +1319,7 @@ export default function PerforationGenerator() {
     const v = variationRef.current;
     return v.layers.find(l => l.id === v.selectedLayerId) || v.layers[0];
   }, []);
-  const setBeadHud = useCallback((layer) => {
+  const setShapeHud = useCallback((layer) => {
     const usesPosition = gizmoUsesPosition(layer);
     setVariationHud({
       positionLabel: usesPosition ? "Position" : "Phase",
@@ -1322,7 +1337,8 @@ export default function PerforationGenerator() {
         const geom = { marginLeft, marginTop, perfW, perfH };
         const g = computeGizmo(selectedVariationLayer, geom, 12 / view.baseScale);
         const candidates = [
-          { handle: "bead", x: g.beadX, y: g.beadY },
+          { handle: "stop", x: g.stopX, y: g.stopY },
+          { handle: "curve", x: g.curveX, y: g.curveY },
           { handle: "reach", x: g.reachX, y: g.reachY },
           { handle: "center", x: g.centerX, y: g.centerY },
         ];
@@ -1333,7 +1349,7 @@ export default function PerforationGenerator() {
         }
         if (hit) {
           variationDrag.current = { handle: hit, startVariation: cloneVariation(variationRef.current) };
-          if (hit === "bead") setBeadHud(selectedVariationLayer); else setVariationHud(null);
+          if (hit === "stop" || hit === "curve") setShapeHud(selectedVariationLayer); else setVariationHud(null);
           e.currentTarget.setPointerCapture(e.pointerId);
           return;
         }
@@ -1343,7 +1359,7 @@ export default function PerforationGenerator() {
     panStart.current = { x: e.clientX, y: e.clientY };
     panOrigin.current = { ...pan };
     e.currentTarget.setPointerCapture(e.pointerId);
-  }, [pan, variation.enabled, variationEditMode, selectedVariationLayer, marginLeft, marginTop, perfW, perfH, clientToSheet, setBeadHud]);
+  }, [pan, variation.enabled, variationEditMode, selectedVariationLayer, marginLeft, marginTop, perfW, perfH, clientToSheet, setShapeHud]);
   const handlePointerMove = useCallback((e) => {
     if (variationDrag.current) {
       const sheet = clientToSheet(e.clientX, e.clientY);
@@ -1355,17 +1371,18 @@ export default function PerforationGenerator() {
       let patch;
       if (handle === "center") patch = gizmoPatchForCenter(sheet.x, sheet.y, geom);
       else if (handle === "reach") patch = gizmoPatchForReach(sheet.x, sheet.y, layer, geom, layer.space === "Angular");
-      else patch = gizmoPatchForBead(sheet.x, sheet.y, layer, geom);
+      else if (handle === "stop") patch = gizmoPatchForStop(sheet.x, sheet.y, layer, geom);
+      else patch = gizmoPatchForCurve(sheet.x, sheet.y, layer, geom);
       updateVariationLive(current => ({
         ...current,
         layers: current.layers.map(l => l.id === current.selectedLayerId ? { ...l, ...patch } : l),
       }));
-      if (handle === "bead") setBeadHud({ ...layer, ...patch });
+      if (handle === "stop" || handle === "curve") setShapeHud({ ...layer, ...patch });
       return;
     }
     if (!isPanning) return;
     setPan({ x: panOrigin.current.x + (e.clientX - panStart.current.x), y: panOrigin.current.y + (e.clientY - panStart.current.y) });
-  }, [isPanning, updateVariationLive, clientToSheet, selectedLayerLive, marginLeft, marginTop, perfW, perfH, setBeadHud]);
+  }, [isPanning, updateVariationLive, clientToSheet, selectedLayerLive, marginLeft, marginTop, perfW, perfH, setShapeHud]);
   const handlePointerUp = useCallback((e) => {
     if (variationDrag.current) {
       const startVariation = variationDrag.current.startVariation;
@@ -1722,16 +1739,7 @@ export default function PerforationGenerator() {
 
             <button onClick={() => setVariationAdvanced(value => !value)} style={{ width: "100%", height: 28, display: "flex", alignItems: "center", justifyContent: "space-between", border: "none", borderTop: `1px solid ${sectionBorder}`, background: "transparent", color: textSecondary, fontSize: 9, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}><span>ADVANCED MODIFIERS</span><span>{variationAdvanced ? "−" : "+"}</span></button>
             {variationAdvanced && <div style={{ paddingTop: 9 }}>
-              <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.8, color: textSecondary, marginBottom: 6 }}>Numeric (canvas handle equivalents)</div>
-              <SliderRow label="Direction" value={selectedVariationLayer.angle} min={-180} max={180} step={1} onChange={angle => updateSelectedVariationLayer({ angle })} unit="°" dark={dark} />
-              <SliderRow label="Center X" value={selectedVariationLayer.centerX} min={0} max={1} step={0.01} onChange={centerX => updateSelectedVariationLayer({ centerX })} dark={dark} />
-              <SliderRow label="Center Y" value={selectedVariationLayer.centerY} min={0} max={1} step={0.01} onChange={centerY => updateSelectedVariationLayer({ centerY })} dark={dark} />
-              <SliderRow label="Field Reach" value={selectedVariationLayer.radius} min={0.1} max={2} step={0.01} onChange={radius => updateSelectedVariationLayer({ radius })} dark={dark} />
-              {gizmoUsesPosition(selectedVariationLayer)
-                ? <SliderRow label={selectedVariationLayer.profile === "Peak" ? "Peak Position" : "Valley Position"} value={selectedVariationLayer.position} min={0.01} max={0.99} step={0.01} onChange={position => updateSelectedVariationLayer({ position })} dark={dark} />
-                : <SliderRow label={selectedVariationLayer.profile === "Noise" ? "Noise Scrub" : "Phase"} value={selectedVariationLayer.phase} min={0} max={1} step={0.01} onChange={phase => updateSelectedVariationLayer({ phase })} dark={dark} />}
-              <SliderRow label="Curve Exponent" value={selectedVariationLayer.exponent} min={0.12} max={5} step={0.01} onChange={exponent => updateSelectedVariationLayer({ exponent })} dark={dark} />
-              <div style={{ height: 1, background: sectionBorder, margin: "4px 0 11px" }} />
+              <div style={{ fontSize: 9, color: textSecondary, marginBottom: 11, lineHeight: 1.5 }}>Direction, origin, reach, position &amp; curve live on the canvas handles. These are the extra modifiers.</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                 {[['Mirror', selectedVariationLayer.mirror, 'mirror'], ['Invert', selectedVariationLayer.invert, 'invert'], ['Layer Enabled', selectedVariationLayer.enabled, 'enabled'], ['Lock Randomize', selectedVariationLayer.locked, 'locked']].map(([label, value, key]) => <label key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 9, color: textSecondary }}>{label}<Toggle value={value} onChange={next => updateSelectedVariationLayer({ [key]: next }, true)} dark={dark} /></label>)}
               </div>
@@ -1742,9 +1750,10 @@ export default function PerforationGenerator() {
               {selectedVariationLayer.profile === "Noise" && <SliderRow label="Noise Seed" value={selectedVariationLayer.seed} min={0} max={99999} step={1} onChange={seed => updateSelectedVariationLayer({ seed })} dark={dark} />}
             </div>}
             {variationEditMode && <div style={{ padding: "7px 9px", borderRadius: 5, border: `1px solid ${dark ? "rgba(96,165,250,0.18)" : "rgba(37,99,235,0.14)"}`, background: dark ? "rgba(96,165,250,0.06)" : "rgba(37,99,235,0.04)", color: textSecondary, fontSize: 9, lineHeight: 1.6 }}>
-              <div><span style={{ color: accentColor }}>●</span> center — drag to move the origin.</div>
-              <div><span style={{ color: accentColor }}>◯</span> reach — drag to aim direction &amp; spread.</div>
-              <div><span style={{ color: dark ? "#fbbf24" : "#d97706" }}>◆</span> bead — along axis = {gizmoUsesPosition(selectedVariationLayer) ? 'position' : 'phase'}, across = curve.</div>
+              <div><span style={{ color: accentColor }}>●</span> center — drag to move the origin (gradient start).</div>
+              <div><span style={{ color: accentColor }}>◯</span> reach — drag the end point to aim direction &amp; spread.</div>
+              <div><span style={{ color: accentColor }}>◆</span> stop — slide along the line to set {gizmoUsesPosition(selectedVariationLayer) ? 'position' : 'phase'}.</div>
+              <div><span style={{ color: dark ? "#fbbf24" : "#d97706" }}>⟳</span> curve — turn the dial to shape the falloff.</div>
               <div style={{ opacity: 0.8, marginTop: 2 }}>Drag empty space (or hold Space) to pan.</div>
             </div>}
           </>}
