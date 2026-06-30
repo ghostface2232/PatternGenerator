@@ -124,6 +124,18 @@ function calcHoleArea(shape, w, h, holeRadius) {
   return Math.PI * (w / 2) ** 2;
 }
 
+// Pointy-top regular hexagon: distance from centre to its boundary in a given direction.
+// Edge normals lie at multiples of 60°; apothem (centre→edge) = R·√3/2. Used for accurate
+// hexagon gap/overlap so the honeycomb ligament reflects the true edge-to-edge spacing.
+function hexEdgeReach(R, dirAngle) {
+  const apothem = R * Math.sqrt(3) / 2;
+  const sector = Math.PI / 3;
+  let d = dirAngle % sector;
+  if (d > sector / 2) d -= sector;
+  else if (d < -sector / 2) d += sector;
+  return apothem / Math.cos(d);
+}
+
 function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
   const hw = w / 2, hh = h / 2;
   // For rotated rectangles/pills, use transform
@@ -139,8 +151,11 @@ function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
     else { ctx.rect(cx - hw, cy - hh, w, h); }
   } else if (shape === "Hexagon") {
     const R = hw;
-    ctx.moveTo(cx + R, cy);
-    for (let i = 1; i <= 6; i++) { const a = (Math.PI / 3) * i; ctx.lineTo(cx + R * Math.cos(a), cy + R * Math.sin(a)); }
+    for (let i = 0; i < 6; i++) {
+      const a = (Math.PI / 3) * i + Math.PI / 6; // pointy-top orientation for honeycomb tiling
+      const vx = cx + R * Math.cos(a), vy = cy + R * Math.sin(a);
+      if (i === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
+    }
     ctx.closePath();
   } else if (shape === "Pill") {
     if (w >= h) {
@@ -179,7 +194,7 @@ function holeSVGElement(x, y, shape, w, h, fill, extra, angle, holeRadius) {
   }
   if (shape === "Hexagon") {
     const R = hw;
-    const pts = Array.from({ length: 6 }, (_, i) => { const a = (Math.PI / 3) * i; return `${(x + R * Math.cos(a)).toFixed(3)},${(y + R * Math.sin(a)).toFixed(3)}`; }).join(" ");
+    const pts = Array.from({ length: 6 }, (_, i) => { const a = (Math.PI / 3) * i + Math.PI / 6; return `${(x + R * Math.cos(a)).toFixed(3)},${(y + R * Math.sin(a)).toFixed(3)}`; }).join(" ");
     return `    <polygon points="${pts}" ${fill} ${attrs}/>\n`;
   }
   if (shape === "Pill") {
@@ -241,8 +256,8 @@ function isPointInsideHole(px, py, hole, shape, useExit = false) {
     return x * x + sy * sy <= (w / 2) ** 2;
   }
   if (shape === "Hexagon") {
-    const R = w / 2;
-    return Math.abs(x) <= R && Math.abs(y) <= Math.sqrt(3) * R / 2 && Math.sqrt(3) * Math.abs(x) + Math.abs(y) <= Math.sqrt(3) * R;
+    const R = w / 2; // pointy-top: vertical corner-to-corner = 2R, flats on left/right
+    return Math.abs(y) <= R && Math.abs(x) <= Math.sqrt(3) * R / 2 && Math.sqrt(3) * Math.abs(y) + Math.abs(x) <= Math.sqrt(3) * R;
   }
   return (x / (w / 2)) ** 2 + (y / (h / 2)) ** 2 <= 1;
 }
@@ -287,7 +302,7 @@ function estimateVisibleHoleArea(hole, shape, bounds, useExit = false) {
 }
 
 function generateHoles(params) {
-  const { diameter, holeW, holeH, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole } = params;
+  const { diameter, holeShape, holeW, holeH, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole } = params;
   const hw = (holeW || diameter) / 2, hh = (holeH || diameter) / 2;
   const r = Math.max(hw, hh);
   const holes = [];
@@ -334,7 +349,20 @@ function generateHoles(params) {
   // This produces a true 45° angle: arctan((t/√2) / (t/√2)) = 45°.
   // For 60° staggered, pitchX = in-row pitch = nearest-neighbor distance (equilateral).
   const is45 = patternType === "Staggered 45°";
-  const inRowPitchX = is45 ? pitchX * Math.SQRT2 : pitchX;
+  const holeHeight = holeH || diameter;
+  const holeWidth = holeW || diameter;
+
+  // Hexagon + 60° staggered → true honeycomb. Pointy-top hexagons share an edge with all
+  // six neighbours, so the requested edge gap becomes a uniform ligament between facing
+  // parallel edges. Circumradius R = holeWidth/2 (corner-to-corner), apothem = R·√3/2;
+  // touching centres sit 2·apothem apart, so centre spacing = 2·apothem + gap and rows
+  // step by spacing·√3/2 to keep the lattice equilateral (every neighbour the same gap).
+  const isHexHoneycomb = holeShape === "Hexagon" && patternType === "Staggered 60°";
+  const hexGap = Math.max(0, pitchX - holeWidth);
+  const hexSpacing = holeWidth * Math.sqrt(3) / 2 + hexGap;
+
+  let inRowPitchX = is45 ? pitchX * Math.SQRT2 : pitchX;
+  if (isHexHoneycomb) inRowPitchX = hexSpacing;
 
   let offsetFn = () => 0;
   if (patternType === "Staggered 60°" || is45) {
@@ -344,13 +372,14 @@ function generateHoles(params) {
     offsetFn = (rowIdx) => (rowIdx % 2 !== 0 ? pitchY * Math.tan(angleRad) : 0);
   }
 
-  const holeHeight = holeH || diameter;
-  const holeWidth = holeW || diameter;
   const minEdgeGap = Math.min(pitchX - holeWidth, pitchY - holeHeight);
   const safeMinGap = Math.max(0, minEdgeGap);
 
   let effPY = pitchY;
-  if (patternType === "Staggered 60°" || is45) {
+  if (isHexHoneycomb) {
+    // Equilateral hex lattice: row spacing = inRowPitchX·√3/2 gives a uniform gap on every edge.
+    effPY = inRowPitchX * Math.sqrt(3) / 2;
+  } else if (patternType === "Staggered 60°" || is45) {
     // In staggered layouts, adjacent rows are offset by inRowPitchX/2 horizontally.
     // The nearest neighbor is diagonal, so use Euclidean distance for min gap check
     // instead of purely vertical distance which over-constrains the spacing.
@@ -405,9 +434,18 @@ function checkShapeOverlap(h1, h2, shape) {
     const gapY = Math.abs(h1.y - h2.y) - (h1h + h2h) / 2;
     return gapX < -0.001 && gapY < -0.001;
   }
-  // Circle / Hexagon: distance-based conservative extent.
   const r1 = Math.max(w1, h1h) / 2, r2 = Math.max(w2, h2h) / 2;
-  return Math.hypot(h1.x - h2.x, h1.y - h2.y) < r1 + r2 - 0.001;
+  const dx = h2.x - h1.x, dy = h2.y - h1.y;
+  const dist = Math.hypot(dx, dy);
+  if (shape === "Hexagon") {
+    // Edge-aware: use each hexagon's reach toward the other instead of the circumradius,
+    // otherwise tightly-spaced honeycombs read as overlapping when they only share edges.
+    if (dist < 1e-9) return true;
+    const dir = Math.atan2(dy, dx);
+    return dist < hexEdgeReach(r1, dir) + hexEdgeReach(r2, dir) - 0.001;
+  }
+  // Circle: distance-based extent.
+  return dist < r1 + r2 - 0.001;
 }
 
 function calcShapeGap(h1, h2, shape) {
@@ -422,7 +460,14 @@ function calcShapeGap(h1, h2, shape) {
     return Math.hypot(Math.max(0, gapX), Math.max(0, gapY)); // corner gap
   }
   const r1 = Math.max(w1, h1h) / 2, r2 = Math.max(w2, h2h) / 2;
-  return Math.hypot(h1.x - h2.x, h1.y - h2.y) - r1 - r2;
+  const dx = h2.x - h1.x, dy = h2.y - h1.y;
+  const dist = Math.hypot(dx, dy);
+  if (shape === "Hexagon") {
+    if (dist < 1e-9) return -(r1 + r2);
+    const dir = Math.atan2(dy, dx);
+    return dist - hexEdgeReach(r1, dir) - hexEdgeReach(r2, dir);
+  }
+  return dist - r1 - r2;
 }
 
 function findOverlaps(holes, shape) {
@@ -735,6 +780,11 @@ export default function PerforationGenerator() {
   // Derived pitches (hole extent + edge gap)
   const pitchX = effW + edgeGapX;
   const pitchY = effH + edgeGapY;
+  // Hexagon honeycomb (pointy-top, 60° staggered): the edge gap is a uniform ligament, so the
+  // centre spacing is 2·apothem + gap (= effW·√3/2 + gap), not effW + gap.
+  const isHexHoneycomb = holeShape === "Hexagon" && patternType === "Staggered 60°";
+  const honeyPitchX = isHexHoneycomb ? effW * Math.sqrt(3) / 2 + edgeGapX : pitchX;
+  const honeyPitchY = isHexHoneycomb ? honeyPitchX * Math.sqrt(3) / 2 : pitchY;
   const ringSpacing = diameter + radialEdgeGap;
   const circumSpacing = diameter + circumEdgeGap;
 
@@ -937,7 +987,7 @@ export default function PerforationGenerator() {
   const hasRemovedHoles = removedHoles.size > 0;
   const useCountedOAR = variation.enabled || hasRemovedHoles || hasAnyMargin || cornerRadius > 0 || isRadialPattern;
   const theoreticalHoleArea = calcHoleArea(holeShape, effW, effH, holeRadius);
-  const theoreticalOAR = calcTheoreticalOAR(patternType, pitchX, pitchY, theoreticalHoleArea);
+  const theoreticalOAR = calcTheoreticalOAR(patternType, honeyPitchX, honeyPitchY, theoreticalHoleArea);
   const countedOAR = perforatedArea > 0 ? (totalHoleArea / perforatedArea) * 100 : 0;
   const nominalOAR = useCountedOAR ? countedOAR : theoreticalOAR;
 
@@ -952,7 +1002,7 @@ export default function PerforationGenerator() {
   const theoreticalExitH = taperActive ? Math.max(0, effH - taperInset) : effH;
   const theoreticalExitRadius = Math.max(0, Math.min(holeRadius - taperInset / 2, theoreticalExitW / 2, theoreticalExitH / 2));
   const theoreticalExitArea = theoreticalExitW > 0 && theoreticalExitH > 0 ? calcHoleArea(holeShape, theoreticalExitW, theoreticalExitH, theoreticalExitRadius) : 0;
-  const theoreticalEffOAR = calcTheoreticalOAR(patternType, pitchX, pitchY, theoreticalExitArea);
+  const theoreticalEffOAR = calcTheoreticalOAR(patternType, honeyPitchX, honeyPitchY, theoreticalExitArea);
   const countedEffOAR = perforatedArea > 0 ? (totalExitHoleArea / perforatedArea) * 100 : 0;
   const effectiveOAR = useCountedOAR ? countedEffOAR : theoreticalEffOAR;
   const oarDelta = taperActive ? effectiveOAR - nominalOAR : 0;
@@ -1421,11 +1471,14 @@ export default function PerforationGenerator() {
   const _sHoleDim = Math.max(effW, effH);
   const _sMinDist = _sHoleDim + _sMinGap;
   const _sMinPY = Math.sqrt(Math.max(effH * effH, _sMinDist * _sMinDist - _sHalfPX * _sHalfPX));
-  const effPitchY = patternType === "Staggered 60°"
-    ? Math.max(pitchX * Math.sqrt(3) / 2, _sMinPY)
-    : patternType === "Staggered 45°"
-      ? Math.max(pitchX, _sMinPY)
-      : pitchY;
+  const effPitchX = honeyPitchX;
+  const effPitchY = isHexHoneycomb
+    ? honeyPitchY
+    : patternType === "Staggered 60°"
+      ? Math.max(pitchX * Math.sqrt(3) / 2, _sMinPY)
+      : patternType === "Staggered 45°"
+        ? Math.max(pitchX, _sMinPY)
+        : pitchY;
   const canUndoVariation = variationHistoryVersion >= 0 && variationPast.current.length > 0;
   const canRedoVariation = variationHistoryVersion >= 0 && variationFuture.current.length > 0;
 
@@ -1749,13 +1802,22 @@ export default function PerforationGenerator() {
             </>
           ) : (
             <>
-              <SliderRow label="X Edge Gap" value={edgeGapX} min={0} max={50} step={0.1} onChange={handleEdgeGapX} unit="mm" dark={dark} />
-              <PitchInfo label="X pitch" value={pitchX} dark={dark} />
+              <SliderRow label={isHexHoneycomb ? "Edge Gap (all sides)" : "X Edge Gap"} value={edgeGapX} min={0} max={50} step={0.1} onChange={handleEdgeGapX} unit="mm" dark={dark} />
+              <PitchInfo label={isHexHoneycomb ? "spacing" : "X pitch"} value={effPitchX} dark={dark} />
               <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>
-                Y Edge Gap: {(effPitchY - effH).toFixed(2)} mm (auto)
-                <span style={{ marginLeft: 6, fontSize: 9, color: dark ? "#555" : "#aaa" }}>
-                  pitch {effPitchY.toFixed(2)}
-                </span>
+                {isHexHoneycomb ? (
+                  <>Uniform ligament on all 6 edges
+                    <span style={{ marginLeft: 6, fontSize: 9, color: dark ? "#555" : "#aaa" }}>
+                      row pitch {effPitchY.toFixed(2)}
+                    </span>
+                  </>
+                ) : (
+                  <>Y Edge Gap: {(effPitchY - effH).toFixed(2)} mm (auto)
+                    <span style={{ marginLeft: 6, fontSize: 9, color: dark ? "#555" : "#aaa" }}>
+                      pitch {effPitchY.toFixed(2)}
+                    </span>
+                  </>
+                )}
               </div>
             </>
           )}
