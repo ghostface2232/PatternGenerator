@@ -44,6 +44,53 @@ const GIZMO_EXP_K = 1.2;        // exponent <-> dial sweep (log scale)
 const GIZMO_DIAL_R = 0.13;      // curve-dial radius as a fraction of minDim
 const GIZMO_DIAL_SWEEP = 1.15;  // radians of knob travel per EXP_K log-unit
 
+// ─── Handle snapping ──────────────────────────────────────────────────
+// Range handles (reach spread, stop position/phase) snap to quarter steps;
+// angle handles (reach direction, curve dial) snap to 45°. Holding Shift forces a
+// hard snap to the nearest target; with the bare mouse the value moves freely but
+// is gently pulled in as it approaches a snap point (a soft magnet).
+const SNAP_QUARTERS = [0, 0.25, 0.5, 0.75, 1]; // 0/25/50/75/100%
+const SNAP_CENTER = [0, 0.5, 1];               // panel centre, edge mids & corners (quadrant vertices)
+const SNAP_ANGLE_STEP = 45;                    // degrees
+const SOFT_SNAP_FRAC = 0.06;                   // capture radius for 0..1 ranges
+const SOFT_SNAP_DEG = 7;                        // capture radius for angles (deg)
+const RADIUS_MIN = 0.1, RADIUS_MAX = 2;         // reach spread bounds
+
+function nearestSnap(value, snaps) {
+  let snap = snaps[0], dist = Infinity;
+  for (const s of snaps) {
+    const d = Math.abs(value - s);
+    if (d < dist) { dist = d; snap = s; }
+  }
+  return { snap, dist };
+}
+
+// Soft magnet: ease toward the nearest snap when within `radius`, fully reaching it
+// at the centre. smoothstep keeps the pull gentle at the edge and firm at the point.
+function magnetize(value, snaps, radius) {
+  const { snap, dist } = nearestSnap(value, snaps);
+  if (dist >= radius) return value;
+  const t = 1 - dist / radius;       // 0 at edge → 1 at the snap point
+  const pull = t * t * (3 - 2 * t);  // smoothstep easing
+  return value + (snap - value) * pull;
+}
+
+// Apply snapping to a 0..1-style value: Shift → hard snap, otherwise soft magnet.
+function applySnap(value, snaps, radius, shift) {
+  return shift ? nearestSnap(value, snaps).snap : magnetize(value, snaps, radius);
+}
+
+// Angles wrap, so snap relative to the nearest multiple of `step`.
+function snapAngleDeg(angle, step, radiusDeg, shift) {
+  const nearest = Math.round(angle / step) * step;
+  const diff = angle - nearest;
+  if (shift) return nearest;
+  if (Math.abs(diff) >= radiusDeg) return angle;
+  const t = 1 - Math.abs(diff) / radiusDeg;
+  const pull = t * t * (3 - 2 * t);
+  return angle - diff * pull;
+}
+
 const gizmoUsesPosition = layer => layer.profile === "Peak" || layer.profile === "Valley";
 
 function computeGizmo(layer, geom, minSep = 0) {
@@ -81,38 +128,55 @@ function computeGizmo(layer, geom, minSep = 0) {
 }
 
 // Inverse maps: cursor in sheet space -> layer param patch, for the grabbed handle.
-function gizmoPatchForCenter(mx, my, geom) {
+function gizmoPatchForCenter(mx, my, geom, shift) {
+  // Each axis snaps to 0/50/100% so the origin clicks onto the panel centre,
+  // the edge midpoints and the corners (the quadrant vertices).
+  const x = clamp((mx - geom.marginLeft) / Math.max(1e-6, geom.perfW), 0, 1);
+  const y = clamp((my - geom.marginTop) / Math.max(1e-6, geom.perfH), 0, 1);
   return {
-    centerX: clamp((mx - geom.marginLeft) / Math.max(1e-6, geom.perfW), 0, 1),
-    centerY: clamp((my - geom.marginTop) / Math.max(1e-6, geom.perfH), 0, 1),
+    centerX: applySnap(x, SNAP_CENTER, SOFT_SNAP_FRAC, shift),
+    centerY: applySnap(y, SNAP_CENTER, SOFT_SNAP_FRAC, shift),
   };
 }
 
-function gizmoPatchForReach(mx, my, layer, geom, lockRadius) {
+function gizmoPatchForReach(mx, my, layer, geom, lockRadius, shift) {
   const g = computeGizmo(layer, geom);
   const dx = mx - g.centerX, dy = my - g.centerY;
-  const angle = Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
-  const patch = { angle };
+  // Direction snaps to 45° increments.
+  const angle = snapAngleDeg((Math.atan2(dy, dx) * 180) / Math.PI, SNAP_ANGLE_STEP, SOFT_SNAP_DEG, shift);
+  const patch = { angle: Math.round(angle) };
   if (!lockRadius) {
-    patch.radius = clamp(Math.hypot(dx, dy) / (0.5 * g.minDim), 0.1, 2);
+    // Spread snaps to 0/25/50/75/100% of its range.
+    const raw = clamp(Math.hypot(dx, dy) / (0.5 * g.minDim), RADIUS_MIN, RADIUS_MAX);
+    const frac = applySnap((raw - RADIUS_MIN) / (RADIUS_MAX - RADIUS_MIN), SNAP_QUARTERS, SOFT_SNAP_FRAC, shift);
+    patch.radius = clamp(RADIUS_MIN + frac * (RADIUS_MAX - RADIUS_MIN), RADIUS_MIN, RADIUS_MAX);
   }
   return patch;
 }
 
 // Stop: project the cursor onto the gradient axis -> position|phase only.
-function gizmoPatchForStop(mx, my, layer, geom) {
+function gizmoPatchForStop(mx, my, layer, geom, shift) {
   const g = computeGizmo(layer, geom);
   const dx = mx - g.centerX, dy = my - g.centerY;
   const alongFrac = (dx * g.dirX + dy * g.dirY) / Math.max(1e-6, g.reachLen);
-  if (g.usesPosition) return { position: clamp(alongFrac, 0.01, 0.99) };
-  return { phase: ((alongFrac % 1) + 1) % 1 };
+  // Position/phase snaps to 0/25/50/75/100% along the gradient line.
+  if (g.usesPosition) {
+    const snapped = applySnap(clamp(alongFrac, 0, 1), SNAP_QUARTERS, SOFT_SNAP_FRAC, shift);
+    return { position: clamp(snapped, 0.01, 0.99) };
+  }
+  const phase = ((alongFrac % 1) + 1) % 1;
+  const snapped = applySnap(phase, SNAP_QUARTERS, SOFT_SNAP_FRAC, shift);
+  return { phase: ((snapped % 1) + 1) % 1 }; // 100% wraps back to 0
 }
 
 // Curve: the knob's angle around the centre -> exponent (rotary dial).
-function gizmoPatchForCurve(mx, my, layer, geom) {
+function gizmoPatchForCurve(mx, my, layer, geom, shift) {
   const g = computeGizmo(layer, geom);
   let theta = Math.atan2(my - g.centerY, mx - g.centerX) - g.baseAngle;
   theta = Math.atan2(Math.sin(theta), Math.cos(theta)); // wrap to [-π, π]
+  // The dial is angular, so it snaps to 45° steps (0° = neutral, exponent 1).
+  const deg = snapAngleDeg((theta * 180) / Math.PI, SNAP_ANGLE_STEP, SOFT_SNAP_DEG, shift);
+  theta = (deg * Math.PI) / 180;
   return { exponent: clamp(Math.exp((theta / GIZMO_DIAL_SWEEP) * GIZMO_EXP_K), 0.12, 5) };
 }
 
@@ -1369,10 +1433,11 @@ export default function PerforationGenerator() {
       const geom = { marginLeft, marginTop, perfW, perfH };
       const handle = variationDrag.current.handle;
       let patch;
-      if (handle === "center") patch = gizmoPatchForCenter(sheet.x, sheet.y, geom);
-      else if (handle === "reach") patch = gizmoPatchForReach(sheet.x, sheet.y, layer, geom, layer.space === "Angular");
-      else if (handle === "stop") patch = gizmoPatchForStop(sheet.x, sheet.y, layer, geom);
-      else patch = gizmoPatchForCurve(sheet.x, sheet.y, layer, geom);
+      const shift = e.shiftKey;
+      if (handle === "center") patch = gizmoPatchForCenter(sheet.x, sheet.y, geom, shift);
+      else if (handle === "reach") patch = gizmoPatchForReach(sheet.x, sheet.y, layer, geom, layer.space === "Angular", shift);
+      else if (handle === "stop") patch = gizmoPatchForStop(sheet.x, sheet.y, layer, geom, shift);
+      else patch = gizmoPatchForCurve(sheet.x, sheet.y, layer, geom, shift);
       updateVariationLive(current => ({
         ...current,
         layers: current.layers.map(l => l.id === current.selectedLayerId ? { ...l, ...patch } : l),
@@ -1754,6 +1819,7 @@ export default function PerforationGenerator() {
               <div><span style={{ color: accentColor }}>◯</span> reach — drag the end point to aim direction &amp; spread.</div>
               <div><span style={{ color: accentColor }}>◆</span> stop — slide along the line to set {gizmoUsesPosition(selectedVariationLayer) ? 'position' : 'phase'}.</div>
               <div><span style={{ color: dark ? "#fbbf24" : "#d97706" }}>⟳</span> curve — turn the dial to shape the falloff.</div>
+              <div style={{ opacity: 0.8, marginTop: 4 }}>Center snaps to the panel centre, edges &amp; corners; spread &amp; position to 0/25/50/75/100%; angles to 45°. Hold Shift to lock to a snap; otherwise it gently pulls in near one.</div>
               <div style={{ opacity: 0.8, marginTop: 2 }}>Drag empty space (or hold Space) to pan.</div>
             </div>}
           </>}
