@@ -12,7 +12,9 @@ import {
 } from "./variation-engine.js";
 
 const PATTERN_TYPES = ["Straight", "Staggered 60°", "Staggered 45°", "Radial", "Custom Angle"];
-const HOLE_SHAPES = ["Circle", "Rectangle", "Pill", "Hexagon"];
+const HOLE_SHAPES = ["Circle", "Rectangle", "Pill", "Hexagon", "Diamond", "Triangle"];
+const CUSTOM_SIZE_SHAPES = ["Rectangle", "Pill", "Diamond", "Triangle"];
+const DIAMOND_ORIENTATIONS = ["Point up", "Flat up"];
 const DIN_PRESETS = [
   { name: "Custom", d: 5, pitchX: 8, pitchY: 8, pattern: "Straight" },
   { name: "Rv 2-4 (60° staggered)", d: 2, pitchX: 4, pitchY: 3.46, pattern: "Staggered 60°" },
@@ -199,6 +201,9 @@ function calcHoleArea(shape, w, h, holeRadius) {
     // Rounding each of the 6 corners removes (2√3 − π)·r² of area total.
     return cr > 0 ? sharp - (2 * Math.sqrt(3) - Math.PI) * cr * cr : sharp;
   }
+  if (shape === "Diamond" || shape === "Triangle") {
+    return roundedPolyArea(basePolyVerts(shape, w, h), holeRadius);
+  }
   // Circle
   return Math.PI * (w / 2) ** 2;
 }
@@ -232,10 +237,199 @@ function unitToward(from, to) {
   return [dx / len, dy / len];
 }
 
+// ─── Convex polygon helpers (Diamond & Triangle) ──────────────────────
+// Isoceles triangle inradius (base w, height h): r = area / semiperimeter.
+function triInradius(w, h) {
+  const slant = Math.hypot(w / 2, h);
+  return (w * h / 2) / (w / 2 + slant);
+}
+
+// Canonical vertices relative to the hole centre, wound clockwise on screen.
+// Diamond: w/h are the horizontal/vertical diagonals, point-up. "Flat up" is
+// expressed downstream as a rotation (see diamondFlatAngle) so one canonical
+// polygon serves both orientations.
+// Triangle: base w, apex-up, origin = INCENTER (not centroid) so that shrinking
+// a hole (gap, taper, size variation) keeps the ligament uniform on all 3 edges.
+// A point-down triangle is the same polygon rotated by π.
+function basePolyVerts(shape, w, h) {
+  if (shape === "Diamond") return [[0, -h / 2], [w / 2, 0], [0, h / 2], [-w / 2, 0]];
+  const r = triInradius(w, h);
+  return [[0, -(h - r)], [w / 2, r], [-w / 2, r]];
+}
+
+// Rotation that lays a point-up rhombus onto one of its edges (flat side up).
+// For a square diamond this is exactly -45°.
+function diamondFlatAngle(w, h) {
+  return -Math.atan2(h, w);
+}
+
+// Interior angle + shortest adjacent edge at vertex i (for corner rounding).
+function polyCorner(verts, i) {
+  const n = verts.length;
+  const v = verts[i], p = verts[(i + n - 1) % n], q = verts[(i + 1) % n];
+  const up = unitToward(v, p), un = unitToward(v, q);
+  const ang = Math.acos(clamp(up[0] * un[0] + up[1] * un[1], -1, 1));
+  const edge = Math.min(Math.hypot(p[0] - v[0], p[1] - v[1]), Math.hypot(q[0] - v[0], q[1] - v[1]));
+  return { up, un, ang, edge };
+}
+
+// Largest corner radius whose tangent points stay within half of each edge.
+function maxCornerRadius(verts) {
+  let rMax = Infinity;
+  for (let i = 0; i < verts.length; i++) {
+    const { ang, edge } = polyCorner(verts, i);
+    rMax = Math.min(rMax, Math.tan(ang / 2) * (edge / 2));
+  }
+  return Math.max(0, rMax * 0.999);
+}
+
+// Area of a convex polygon with rounded corners. Each rounded corner removes a
+// kite of area r²·cot(α/2) and gives back a circular sector of ½r²(π−α).
+function roundedPolyArea(verts, holeRadius) {
+  let area = 0;
+  for (let i = 0; i < verts.length; i++) {
+    const [x1, y1] = verts[i], [x2, y2] = verts[(i + 1) % verts.length];
+    area += x1 * y2 - x2 * y1;
+  }
+  area = Math.abs(area) / 2;
+  const r = Math.min(holeRadius || 0, maxCornerRadius(verts));
+  if (r <= 0) return area;
+  for (let i = 0; i < verts.length; i++) {
+    const { ang } = polyCorner(verts, i);
+    area -= r * r / Math.tan(ang / 2) - (r * r * (Math.PI - ang)) / 2;
+  }
+  return area;
+}
+
+// Trace a (possibly corner-rounded) convex polygon centred at (cx, cy).
+function tracePolyPath(ctx, cx, cy, verts, holeRadius) {
+  const n = verts.length;
+  const r = Math.min(holeRadius || 0, maxCornerRadius(verts));
+  if (r > 0) {
+    ctx.moveTo((verts[n - 1][0] + verts[0][0]) / 2 + cx, (verts[n - 1][1] + verts[0][1]) / 2 + cy);
+    for (let i = 0; i < n; i++) {
+      const v = verts[i], q = verts[(i + 1) % n];
+      ctx.arcTo(v[0] + cx, v[1] + cy, q[0] + cx, q[1] + cy, r);
+    }
+    ctx.closePath();
+  } else {
+    ctx.moveTo(verts[0][0] + cx, verts[0][1] + cy);
+    for (let i = 1; i < n; i++) ctx.lineTo(verts[i][0] + cx, verts[i][1] + cy);
+    ctx.closePath();
+  }
+}
+
+// SVG path for the same rounded polygon, in absolute sheet coordinates.
+function roundedPolySVGPath(x, y, verts, holeRadius) {
+  const n = verts.length;
+  const f = v => v.toFixed(3);
+  const abs = verts.map(([vx, vy]) => [vx + x, vy + y]);
+  const r = Math.min(holeRadius || 0, maxCornerRadius(verts));
+  if (r <= 0) return `M ${abs.map(([px, py]) => `${f(px)} ${f(py)}`).join(" L ")} Z`;
+  const tin = [], tout = [];
+  for (let i = 0; i < n; i++) {
+    const { up, un, ang } = polyCorner(verts, i);
+    const t = r / Math.tan(ang / 2);
+    tin.push([abs[i][0] + up[0] * t, abs[i][1] + up[1] * t]);
+    tout.push([abs[i][0] + un[0] * t, abs[i][1] + un[1] * t]);
+  }
+  let d = `M ${f(tin[0][0])} ${f(tin[0][1])}`;
+  for (let i = 0; i < n; i++) {
+    d += ` A ${f(r)} ${f(r)} 0 0 1 ${f(tout[i][0])} ${f(tout[i][1])}`;
+    const ni = tin[(i + 1) % n];
+    d += ` L ${f(ni[0])} ${f(ni[1])}`;
+  }
+  return d + " Z";
+}
+
+function distPointSeg(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+  t = clamp(t, 0, 1);
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+function isInsideConvexPoly(px, py, verts) {
+  const n = verts.length;
+  for (let i = 0; i < n; i++) {
+    const [x1, y1] = verts[i], [x2, y2] = verts[(i + 1) % n];
+    if ((x2 - x1) * (py - y1) - (y2 - y1) * (px - x1) < -1e-9) return false;
+  }
+  return true;
+}
+
+// Rounded convex polygon = polygon inset by r, grown back by a disk of radius r.
+function isInsideRoundedPoly(px, py, verts, holeRadius) {
+  const r = Math.min(holeRadius || 0, maxCornerRadius(verts));
+  if (r <= 0) return isInsideConvexPoly(px, py, verts);
+  const inner = verts.map((v, i) => {
+    const { up, un, ang } = polyCorner(verts, i);
+    const bx = up[0] + un[0], by = up[1] + un[1];
+    const len = Math.hypot(bx, by) || 1;
+    const d = r / Math.sin(ang / 2);
+    return [v[0] + (bx / len) * d, v[1] + (by / len) * d];
+  });
+  if (isInsideConvexPoly(px, py, inner)) return true;
+  let dmin = Infinity;
+  for (let i = 0; i < inner.length; i++) {
+    const a = inner[i], b = inner[(i + 1) % inner.length];
+    dmin = Math.min(dmin, distPointSeg(px, py, a[0], a[1], b[0], b[1]));
+  }
+  return dmin <= r;
+}
+
+// Absolute (rotated + translated) polygon vertices for a hole.
+function holePolyVerts(shape, x, y, w, h, angle) {
+  const verts = basePolyVerts(shape, w, h);
+  const a = angle || 0;
+  if (!a) return verts.map(([vx, vy]) => [vx + x, vy + y]);
+  const c = Math.cos(a), s = Math.sin(a);
+  return verts.map(([vx, vy]) => [x + vx * c - vy * s, y + vx * s + vy * c]);
+}
+
+// Signed clearance between two convex polygons: SAT separation when they
+// overlap (negative), exact vertex↔edge distance when they are disjoint.
+function convexPolyGap(A, B) {
+  let sep = -Infinity;
+  const project = (P, nx, ny) => {
+    let lo = Infinity, hi = -Infinity;
+    for (const [px, py] of P) {
+      const d = px * nx + py * ny;
+      if (d < lo) lo = d;
+      if (d > hi) hi = d;
+    }
+    return [lo, hi];
+  };
+  for (const [P, Q] of [[A, B], [B, A]]) {
+    for (let i = 0; i < P.length; i++) {
+      const [x1, y1] = P[i], [x2, y2] = P[(i + 1) % P.length];
+      let nx = y2 - y1, ny = x1 - x2;
+      const len = Math.hypot(nx, ny) || 1;
+      nx /= len; ny /= len;
+      const [aLo, aHi] = project(P, nx, ny);
+      const [bLo, bHi] = project(Q, nx, ny);
+      sep = Math.max(sep, Math.max(bLo - aHi, aLo - bHi));
+    }
+  }
+  if (sep < 0) return sep;
+  let dmin = Infinity;
+  for (const [P, Q] of [[A, B], [B, A]]) {
+    for (const [px, py] of P) {
+      for (let i = 0; i < Q.length; i++) {
+        const a = Q[i], b = Q[(i + 1) % Q.length];
+        dmin = Math.min(dmin, distPointSeg(px, py, a[0], a[1], b[0], b[1]));
+      }
+    }
+  }
+  return dmin;
+}
+
 function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
   const hw = w / 2, hh = h / 2;
-  // For rotated rectangles/pills, use transform
-  const needsRotation = angle && (shape === "Rectangle" || shape === "Pill");
+  // For rotated shapes, use transform (Diamond "Flat up" and point-down
+  // Triangles are canonical polygons carrying a rotation angle).
+  const needsRotation = angle && (shape === "Rectangle" || shape === "Pill" || shape === "Diamond" || shape === "Triangle");
   if (needsRotation) {
     ctx.translate(x, y);
     ctx.rotate(angle);
@@ -265,6 +459,8 @@ function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
       }
       ctx.closePath();
     }
+  } else if (shape === "Diamond" || shape === "Triangle") {
+    tracePolyPath(ctx, cx, cy, basePolyVerts(shape, w, h), holeRadius);
   } else if (shape === "Pill") {
     if (w >= h) {
       const s = hw - hh;
@@ -294,7 +490,11 @@ function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
 function holeSVGElement(x, y, shape, w, h, fill, extra, angle, holeRadius) {
   const hw = w / 2, hh = h / 2;
   const attrs = extra || '';
-  const rotAttr = angle && (shape === "Rectangle" || shape === "Pill") ? ` transform="rotate(${(angle * 180 / Math.PI).toFixed(2)} ${x.toFixed(3)} ${y.toFixed(3)})"` : '';
+  const rotAttr = angle && (shape === "Rectangle" || shape === "Pill" || shape === "Diamond" || shape === "Triangle") ? ` transform="rotate(${(angle * 180 / Math.PI).toFixed(2)} ${x.toFixed(3)} ${y.toFixed(3)})"` : '';
+  if (shape === "Diamond" || shape === "Triangle") {
+    const d = roundedPolySVGPath(x, y, basePolyVerts(shape, w, h), holeRadius);
+    return `    <path d="${d}" ${fill} ${attrs}${rotAttr}/>\n`;
+  }
   if (shape === "Rectangle") {
     const r = Math.min(holeRadius || 0, w / 2, h / 2);
     const rxAttr = r > 0 ? ` rx="${r.toFixed(3)}" ry="${r.toFixed(3)}"` : '';
@@ -413,6 +613,9 @@ function isPointInsideHole(px, py, hole, shape, useExit = false) {
     }
     return dmin <= cr;
   }
+  if (shape === "Diamond" || shape === "Triangle") {
+    return isInsideRoundedPoly(x, y, basePolyVerts(shape, w, h), radius);
+  }
   return (x / (w / 2)) ** 2 + (y / (h / 2)) ** 2 <= 1;
 }
 
@@ -431,10 +634,20 @@ function estimateVisibleHoleArea(hole, shape, bounds, useExit = false) {
   const exactArea = useExit ? hole.exitArea : hole.area;
   if (w <= 0 || h <= 0) return 0;
   const angle = hole.angle || 0;
-  const boxW = Math.abs(Math.cos(angle)) * w + Math.abs(Math.sin(angle)) * h;
-  const boxH = Math.abs(Math.sin(angle)) * w + Math.abs(Math.cos(angle)) * h;
-  const left = hole.x - boxW / 2, right = hole.x + boxW / 2;
-  const top = hole.y - boxH / 2, bottom = hole.y + boxH / 2;
+  let left, right, top, bottom;
+  if (shape === "Diamond" || shape === "Triangle") {
+    // Polygon shapes are not centred in their w×h box (triangle origin = incenter),
+    // so take the exact bounding box of the rotated vertices.
+    const verts = holePolyVerts(shape, hole.x, hole.y, w, h, angle);
+    left = Math.min(...verts.map(v => v[0])); right = Math.max(...verts.map(v => v[0]));
+    top = Math.min(...verts.map(v => v[1])); bottom = Math.max(...verts.map(v => v[1]));
+  } else {
+    const bw = Math.abs(Math.cos(angle)) * w + Math.abs(Math.sin(angle)) * h;
+    const bh = Math.abs(Math.sin(angle)) * w + Math.abs(Math.cos(angle)) * h;
+    left = hole.x - bw / 2; right = hole.x + bw / 2;
+    top = hole.y - bh / 2; bottom = hole.y + bh / 2;
+  }
+  const boxW = right - left, boxH = bottom - top;
 
   if ([[left, top], [right, top], [left, bottom], [right, bottom]].every(([x, y]) => isPointInsidePerfBoundary(x, y, bounds))) return exactArea;
   if (bounds.circleMode) {
@@ -456,13 +669,19 @@ function estimateVisibleHoleArea(hole, shape, bounds, useExit = false) {
 }
 
 function generateHoles(params) {
-  const { diameter, holeShape, holeW, holeH, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole } = params;
+  const { diameter, holeShape, holeW, holeH, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole, diamondOrient } = params;
   const hw = (holeW || diameter) / 2, hh = (holeH || diameter) / 2;
   const r = Math.max(hw, hh);
   const holes = [];
   const xMin = marginLeft, xMax = sheetW - marginRight;
   const yMin = marginTop, yMax = sheetH - marginBottom;
   if (xMin >= xMax || yMin >= yMax) return holes;
+
+  // Diamond "Flat up" = canonical point-up rhombus rotated onto one of its edges.
+  const flatTheta = holeShape === "Diamond" && diamondOrient === "Flat up" ? diamondFlatAngle(hw * 2, hh * 2) : 0;
+  const clipToBoundary = pts => cornerRadius > 0
+    ? pts.filter(p => isInsideRoundedRect(p.x, p.y, xMin, yMin, xMax, yMax, cornerRadius))
+    : pts;
 
   if (patternType === "Radial") {
     const cx = sheetW / 2, cy = sheetH / 2;
@@ -473,29 +692,99 @@ function generateHoles(params) {
     const maxR = (radialMode === "Circle") ? maxRadiusCircle : maxRadiusFull;
     const numRingsAuto = Math.max(0, Math.floor(maxR / ringSpacing));
 
-    if (centerHole) holes.push({ x: cx, y: cy, angle: 0 });
+    if (centerHole) holes.push({ x: cx, y: cy, angle: flatTheta });
     for (let ring = 1; ring <= numRingsAuto; ring++) {
       const ringR = ring * ringSpacing;
       const count = Math.max(1, Math.floor((2 * Math.PI * ringR) / circumSpacing));
       for (let i = 0; i < count; i++) {
         const angle = (2 * Math.PI * i) / count;
+        // Triangles point their apex outward along the ring, alternating in/out.
+        const holeAngle = holeShape === "Triangle"
+          ? angle + Math.PI / 2 + (i % 2) * Math.PI
+          : angle + flatTheta;
         const hx = cx + ringR * Math.cos(angle), hy = cy + ringR * Math.sin(angle);
         if (radialMode === "Circle") {
           // Only include if the hole center is within the inscribed circle
           if (Math.hypot(hx - cx, hy - cy) <= maxRadiusCircle) {
-            holes.push({ x: hx, y: hy, angle });
+            holes.push({ x: hx, y: hy, angle: holeAngle });
           }
         } else {
           // Full mode: include if inside the (rounded) rect boundary
           if (cornerRadius > 0) {
-            if (isInsideRoundedRect(hx, hy, xMin, yMin, xMax, yMax, cornerRadius)) holes.push({ x: hx, y: hy, angle });
+            if (isInsideRoundedRect(hx, hy, xMin, yMin, xMax, yMax, cornerRadius)) holes.push({ x: hx, y: hy, angle: holeAngle });
           } else if (hx >= xMin - r && hx <= xMax + r && hy >= yMin - r && hy <= yMax + r) {
-            holes.push({ x: hx, y: hy, angle });
+            holes.push({ x: hx, y: hy, angle: holeAngle });
           }
         }
       }
     }
     return holes;
+  }
+
+  // ─── Triangle: dedicated alternating ▲▽ row tiling ───────────────────
+  // Triangles of base W × height H tile the plane exactly when up/down copies
+  // alternate every half-base within a row and the alternation phase flips per
+  // row. The edge gap becomes a uniform ligament by keeping that perfect
+  // lattice for the EXPANDED triangle (offset outward by gap/2) and drawing
+  // each actual triangle inset at the shared incenter — every facing pair of
+  // edges then sits exactly `gap` apart, so gap 0 is a seamless fit.
+  if (holeShape === "Triangle") {
+    const w = hw * 2, h = hh * 2;
+    const rIn = triInradius(w, h);
+    const gap = Math.max(0, pitchX - w);
+    const k = (rIn + gap / 2) / rIn;
+    const cellW = w * k, cellH = h * k, rCell = rIn + gap / 2;
+    const cx = (xMin + xMax) / 2, cy = (yMin + yMax) / 2;
+    const rowsUp = Math.ceil((cy - yMin + r) / cellH) + 1;
+    const rowsDown = Math.ceil((yMax + r - cy) / cellH) + 1;
+    const cols = Math.ceil((Math.max(cx - xMin, xMax - cx) + r) / (cellW / 2)) + 1;
+    for (let j = -rowsUp; j <= rowsDown; j++) {
+      const rowTop = cy - cellH / 2 + j * cellH;
+      if (rowTop > yMax + r || rowTop + cellH < yMin - r) continue;
+      for (let i = -cols; i <= cols; i++) {
+        const up = ((i + j) % 2 + 2) % 2 === 0;
+        const x = cx + i * (cellW / 2);
+        const y = up ? rowTop + cellH - rCell : rowTop + rCell;
+        if (x < xMin - r || x > xMax + r) continue;
+        holes.push({ x, y, angle: up ? 0 : Math.PI });
+      }
+    }
+    return clipToBoundary(holes);
+  }
+
+  // ─── Diamond + Staggered 60°: interlocking rhombus lattice ───────────
+  // Point-up rhombi tile edge-to-edge on the lattice u=(W,0), v=(W/2, H/2).
+  // As with the triangle tiling, the gap is a uniform ligament: the lattice is
+  // that of the expanded rhombus (offset outward by gap/2). "Flat up" rotates
+  // the lattice together with the shapes so the tiling stays exact.
+  if (holeShape === "Diamond" && patternType === "Staggered 60°") {
+    const w = hw * 2, h = hh * 2;
+    const rho = (w * h) / (2 * Math.hypot(w, h));
+    const gap = Math.max(0, pitchX - w);
+    const k = (rho + gap / 2) / rho;
+    const cellW = w * k, cellH = h * k;
+    const ct = Math.cos(flatTheta), st = Math.sin(flatTheta);
+    const u = [cellW * ct, cellW * st];
+    const v = [(cellW / 2) * ct - (cellH / 2) * st, (cellW / 2) * st + (cellH / 2) * ct];
+    const cx = (xMin + xMax) / 2, cy = (yMin + yMax) / 2;
+    const det = u[0] * v[1] - u[1] * v[0];
+    let iMin = Infinity, iMax = -Infinity, jMin = Infinity, jMax = -Infinity;
+    for (const [bx, by] of [[xMin - r, yMin - r], [xMax + r, yMin - r], [xMin - r, yMax + r], [xMax + r, yMax + r]]) {
+      const dx = bx - cx, dy = by - cy;
+      const fi = (dx * v[1] - dy * v[0]) / det;
+      const fj = (u[0] * dy - u[1] * dx) / det;
+      iMin = Math.min(iMin, fi); iMax = Math.max(iMax, fi);
+      jMin = Math.min(jMin, fj); jMax = Math.max(jMax, fj);
+    }
+    for (let j = Math.floor(jMin) - 1; j <= Math.ceil(jMax) + 1; j++) {
+      for (let i = Math.floor(iMin) - 1; i <= Math.ceil(iMax) + 1; i++) {
+        const x = cx + i * u[0] + j * v[0];
+        const y = cy + i * u[1] + j * v[1];
+        if (x < xMin - r || x > xMax + r || y < yMin - r || y > yMax + r) continue;
+        holes.push({ x, y, angle: flatTheta });
+      }
+    }
+    return clipToBoundary(holes);
   }
 
   // For 45° staggered, pitchX is the nearest-neighbor (diagonal) distance t.
@@ -567,7 +856,7 @@ function generateHoles(params) {
     for (let ci = -colsLeft; ci <= colsRight; ci++) {
       const x = cx + ci * inRowPitchX + off;
       if (x >= xMin - r && x <= xMax + r) {
-        holes.push({ x, y });
+        holes.push(flatTheta ? { x, y, angle: flatTheta } : { x, y });
       }
     }
   }
@@ -582,6 +871,12 @@ function generateHoles(params) {
 // ─── Overlap & ligament: shape-aware (AABB for rect/pill, circle for others) ──
 function checkShapeOverlap(h1, h2, shape) {
   const w1 = h1.w, h1h = h1.h, w2 = h2.w, h2h = h2.h;
+  if (shape === "Diamond" || shape === "Triangle") {
+    return convexPolyGap(
+      holePolyVerts(shape, h1.x, h1.y, w1, h1h, h1.angle),
+      holePolyVerts(shape, h2.x, h2.y, w2, h2h, h2.angle)
+    ) < -0.001;
+  }
   if (shape === "Rectangle" || shape === "Pill") {
     // Conservative AABB check; radial rotation is intentionally treated safely.
     const gapX = Math.abs(h1.x - h2.x) - (w1 + w2) / 2;
@@ -604,6 +899,12 @@ function checkShapeOverlap(h1, h2, shape) {
 
 function calcShapeGap(h1, h2, shape) {
   const w1 = h1.w, h1h = h1.h, w2 = h2.w, h2h = h2.h;
+  if (shape === "Diamond" || shape === "Triangle") {
+    return convexPolyGap(
+      holePolyVerts(shape, h1.x, h1.y, w1, h1h, h1.angle),
+      holePolyVerts(shape, h2.x, h2.y, w2, h2h, h2.angle)
+    );
+  }
   if (shape === "Rectangle" || shape === "Pill") {
     const gapX = Math.abs(h1.x - h2.x) - (w1 + w2) / 2;
     const gapY = Math.abs(h1.y - h2.y) - (h1h + h2h) / 2;
@@ -869,6 +1170,8 @@ export default function PerforationGenerator() {
   const [holeW, setHoleW] = useState(5);   // for Rectangle & Pill (mm)
   const [holeH, setHoleH] = useState(5);   // for Rectangle & Pill (mm)
   const [holeRadius, setHoleRadius] = useState(0); // corner radius for Rectangle holes
+  const [diamondOrient, setDiamondOrient] = useState("Point up"); // Diamond: point-up vs flat-side-up
+  const [triEquilateral, setTriEquilateral] = useState(true);     // Triangle: lock H = W·√3/2
   const [patternType, setPatternType] = useState("Staggered 60°");
   const [edgeGapX, setEdgeGapX] = useState(3);
   const [edgeGapY, setEdgeGapY] = useState(3);
@@ -928,9 +1231,11 @@ export default function PerforationGenerator() {
   }, []);
 
   // Effective hole extents (w = horizontal, h = vertical)
-  const hasCustomSize = holeShape === "Rectangle" || holeShape === "Pill";
+  const hasCustomSize = CUSTOM_SIZE_SHAPES.includes(holeShape);
   const effW = hasCustomSize ? holeW : diameter;
-  const effH = hasCustomSize ? holeH : diameter;
+  const effH = holeShape === "Triangle" && triEquilateral
+    ? holeW * Math.sqrt(3) / 2
+    : hasCustomSize ? holeH : diameter;
 
   // Derived pitches (hole extent + edge gap)
   const pitchX = effW + edgeGapX;
@@ -940,15 +1245,26 @@ export default function PerforationGenerator() {
   const isHexHoneycomb = holeShape === "Hexagon" && patternType === "Staggered 60°";
   const honeyPitchX = isHexHoneycomb ? effW * Math.sqrt(3) / 2 + edgeGapX : pitchX;
   const honeyPitchY = isHexHoneycomb ? honeyPitchX * Math.sqrt(3) / 2 : pitchY;
+  // Triangle always fills via its alternating ▲▽ tiling (except Radial);
+  // Diamond interlocks into a rhombus lattice under the staggered mode.
+  // Both keep the edge gap as a uniform ligament, so the cell that tiles the
+  // plane is the hole expanded outward by gap/2 (a scale about the incenter).
+  const isTriTiling = holeShape === "Triangle" && patternType !== "Radial";
+  const isDiamondLattice = holeShape === "Diamond" && patternType === "Staggered 60°";
+  const uniformGapMode = isHexHoneycomb || isTriTiling || isDiamondLattice;
+  const triIn = triInradius(effW, effH);
+  const triCellK = (triIn + edgeGapX / 2) / triIn;
+  const diaIn = (effW * effH) / (2 * Math.hypot(effW, effH));
+  const diaCellK = (diaIn + edgeGapX / 2) / diaIn;
   const ringSpacing = diameter + radialEdgeGap;
   const circumSpacing = diameter + circumEdgeGap;
 
   // Shape change: sync dimensions
   const handleShapeChange = useCallback((s) => {
-    if ((s === "Rectangle" || s === "Pill") && holeShape !== "Rectangle" && holeShape !== "Pill") {
+    if (CUSTOM_SIZE_SHAPES.includes(s) && !CUSTOM_SIZE_SHAPES.includes(holeShape)) {
       // Switching from Circle/Hex → custom size: init from diameter
       setHoleW(s === "Pill" ? diameter * 2 : diameter);
-      setHoleH(diameter);
+      setHoleH(s === "Triangle" ? diameter * Math.sqrt(3) / 2 : diameter);
     }
     setHoleShape(s);
   }, [holeShape, diameter]);
@@ -1073,11 +1389,11 @@ export default function PerforationGenerator() {
   }, [commitVariation]);
 
   const params = useMemo(() => ({
-    diameter, holeShape, holeW: effW, holeH: effH, holeRadius, patternType, pitchX, pitchY, sheetW, sheetH,
+    diameter, holeShape, holeW: effW, holeH: effH, holeRadius, diamondOrient, patternType, pitchX, pitchY, sheetW, sheetH,
     marginTop, marginBottom, marginLeft, marginRight, cornerRadius,
     customAngle, ringSpacing, circumSpacing, radialMode, centerHole,
     thickness: showTaper ? thickness : 0, taperAngle: showTaper ? taperAngle : 0, taperDirection
-  }), [diameter, holeShape, effW, effH, holeRadius, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole, showTaper, thickness, taperAngle, taperDirection]);
+  }), [diameter, holeShape, effW, effH, holeRadius, diamondOrient, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole, showTaper, thickness, taperAngle, taperDirection]);
 
   const baseHoles = useMemo(() => generateHoles(params), [params]);
   // Reset removed holes when pattern params change
@@ -1142,7 +1458,14 @@ export default function PerforationGenerator() {
   const hasRemovedHoles = removedHoles.size > 0;
   const useCountedOAR = variation.enabled || hasRemovedHoles || hasAnyMargin || cornerRadius > 0 || isRadialPattern;
   const theoreticalHoleArea = calcHoleArea(holeShape, effW, effH, holeRadius);
-  const theoreticalOAR = calcTheoreticalOAR(patternType, honeyPitchX, honeyPitchY, theoreticalHoleArea);
+  // Triangle tiling / diamond lattice: one hole per tiling cell (the hole
+  // expanded by gap/2), so the unit cell is simply that cell's area.
+  const uniformCellArea = isTriTiling ? (effW * effH / 2) * triCellK * triCellK
+    : isDiamondLattice ? (effW * effH / 2) * diaCellK * diaCellK
+    : null;
+  const theoreticalOAR = uniformCellArea
+    ? Math.min((theoreticalHoleArea / uniformCellArea) * 100, 100)
+    : calcTheoreticalOAR(patternType, honeyPitchX, honeyPitchY, theoreticalHoleArea);
   const countedOAR = perforatedArea > 0 ? (totalHoleArea / perforatedArea) * 100 : 0;
   const nominalOAR = useCountedOAR ? countedOAR : theoreticalOAR;
 
@@ -1157,7 +1480,9 @@ export default function PerforationGenerator() {
   const theoreticalExitH = taperActive ? Math.max(0, effH - taperInset) : effH;
   const theoreticalExitRadius = Math.max(0, Math.min(holeRadius - taperInset / 2, theoreticalExitW / 2, theoreticalExitH / 2));
   const theoreticalExitArea = theoreticalExitW > 0 && theoreticalExitH > 0 ? calcHoleArea(holeShape, theoreticalExitW, theoreticalExitH, theoreticalExitRadius) : 0;
-  const theoreticalEffOAR = calcTheoreticalOAR(patternType, honeyPitchX, honeyPitchY, theoreticalExitArea);
+  const theoreticalEffOAR = uniformCellArea
+    ? Math.min((theoreticalExitArea / uniformCellArea) * 100, 100)
+    : calcTheoreticalOAR(patternType, honeyPitchX, honeyPitchY, theoreticalExitArea);
   const countedEffOAR = perforatedArea > 0 ? (totalExitHoleArea / perforatedArea) * 100 : 0;
   const effectiveOAR = useCountedOAR ? countedEffOAR : theoreticalEffOAR;
   const oarDelta = taperActive ? effectiveOAR - nominalOAR : 0;
@@ -1643,6 +1968,12 @@ export default function PerforationGenerator() {
       : patternType === "Staggered 45°"
         ? Math.max(pitchX, _sMinPY)
         : pitchY;
+  // Spacing readouts for the uniform-ligament modes (hex / triangle / diamond)
+  const uniformColPitch = isTriTiling ? (effW * triCellK) / 2 : isDiamondLattice ? effW * diaCellK : effPitchX;
+  const uniformRowPitch = isTriTiling ? effH * triCellK : isDiamondLattice ? (effH * diaCellK) / 2 : effPitchY;
+  const polyCornerMax = (holeShape === "Diamond" || holeShape === "Triangle")
+    ? Math.max(0.1, Math.floor(maxCornerRadius(basePolyVerts(holeShape, effW, effH)) * 10) / 10)
+    : 0;
   const canUndoVariation = variationHistoryVersion >= 0 && variationPast.current.length > 0;
   const canRedoVariation = variationHistoryVersion >= 0 && variationFuture.current.length > 0;
 
@@ -1798,18 +2129,51 @@ export default function PerforationGenerator() {
                 </button>
               ))}
             </div>
+            {holeShape === "Triangle" && !isRadial && (
+              <div style={{ fontSize: 9, color: textSecondary, marginTop: 8, lineHeight: 1.5 }}>
+                ▲▽ Triangles fill in alternating up/down rows — a seamless fit at 0 gap. All grid types share this tiling; Radial places them on rings instead.
+              </div>
+            )}
+            {isDiamondLattice && (
+              <div style={{ fontSize: 9, color: textSecondary, marginTop: 8, lineHeight: 1.5 }}>
+                ◆ Staggered 60° interlocks diamonds into a rhombus lattice — a seamless fit at 0 gap.
+              </div>
+            )}
           </div>
+          {holeShape === "Diamond" && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, color: textSecondary, marginBottom: 6 }}>Diamond Orientation</div>
+              <div style={{ display: "flex", gap: 5 }}>
+                {DIAMOND_ORIENTATIONS.map(o => (
+                  <SegBtn key={o} label={o === "Point up" ? "◆ Point up" : "◼ Flat up"} active={diamondOrient === o} onClick={() => setDiamondOrient(o)} />
+                ))}
+              </div>
+            </div>
+          )}
           {hasCustomSize ? (
             <>
-              <SliderRow label="Width (W)" value={holeW} min={0.5} max={30} step={0.1} onChange={v => { setHoleW(v); setSelectedPreset(0); }} unit="mm" dark={dark} />
-              <SliderRow label="Height (H)" value={holeH} min={0.5} max={30} step={0.1} onChange={v => { setHoleH(v); setSelectedPreset(0); }} unit="mm" dark={dark} />
+              <SliderRow label={holeShape === "Triangle" ? "Base Width (W)" : holeShape === "Diamond" ? "Width (diagonal)" : "Width (W)"} value={holeW} min={0.5} max={30} step={0.1} onChange={v => { setHoleW(v); setSelectedPreset(0); }} unit="mm" dark={dark} />
+              {holeShape === "Triangle" && (
+                <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <span style={{ fontSize: 11, color: textSecondary }}>Equilateral (H = W·√3/2)</span>
+                  <Toggle value={triEquilateral} onChange={setTriEquilateral} dark={dark} />
+                </label>
+              )}
+              {holeShape === "Triangle" && triEquilateral ? (
+                <div style={{ fontSize: 9, color: dark ? "#555" : "#aaa", marginTop: -4, marginBottom: 10, paddingLeft: 2, fontFamily: "'JetBrains Mono', monospace" }}>
+                  ↕ Height (H): {effH.toFixed(2)} mm
+                </div>
+              ) : (
+                <SliderRow label={holeShape === "Diamond" ? "Height (diagonal)" : "Height (H)"} value={holeH} min={0.5} max={30} step={0.1} onChange={v => { setHoleH(v); setSelectedPreset(0); }} unit="mm" dark={dark} />
+              )}
               {holeShape === "Rectangle" && <SliderRow label="Hole Corner R" value={holeRadius} min={0} max={Math.min(holeW, holeH) / 2} step={0.1} onChange={setHoleRadius} unit="mm" dark={dark} />}
+              {(holeShape === "Diamond" || holeShape === "Triangle") && <SliderRow label="Hole Corner R" value={holeRadius} min={0} max={polyCornerMax} step={0.1} onChange={setHoleRadius} unit="mm" dark={dark} />}
             </>
           ) : (
             <SliderRow label="Hole Diameter" value={diameter} min={0.5} max={20} step={0.1} onChange={v => { setDiameter(v); setSelectedPreset(0); }} unit="mm" dark={dark} />
           )}
           {holeShape === "Hexagon" && <SliderRow label="Hole Corner R" value={holeRadius} min={0} max={Math.sqrt(3) * diameter / 4} step={0.1} onChange={setHoleRadius} unit="mm" dark={dark} />}
-          {patternType === "Custom Angle" && <SliderRow label="Stagger Angle" value={customAngle} min={0} max={90} step={1} onChange={setCustomAngle} unit="°" dark={dark} />}
+          {patternType === "Custom Angle" && holeShape !== "Triangle" && <SliderRow label="Stagger Angle" value={customAngle} min={0} max={90} step={1} onChange={setCustomAngle} unit="°" dark={dark} />}
         </div>
 
         {/* Size Variation */}
@@ -1941,6 +2305,17 @@ export default function PerforationGenerator() {
                 Center hole
               </label>
             </>
+          ) : uniformGapMode ? (
+            <>
+              <SliderRow label="Edge Gap (all sides)" value={edgeGapX} min={0} max={50} step={0.1} onChange={handleEdgeGapX} unit="mm" dark={dark} />
+              <PitchInfo label={isTriTiling ? "column pitch" : "spacing"} value={uniformColPitch} dark={dark} />
+              <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>
+                Uniform ligament on all {isHexHoneycomb ? 6 : isDiamondLattice ? 4 : 3} edges
+                <span style={{ marginLeft: 6, fontSize: 9, color: dark ? "#555" : "#aaa" }}>
+                  row pitch {uniformRowPitch.toFixed(2)}
+                </span>
+              </div>
+            </>
           ) : showGapY ? (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
@@ -1960,22 +2335,13 @@ export default function PerforationGenerator() {
             </>
           ) : (
             <>
-              <SliderRow label={isHexHoneycomb ? "Edge Gap (all sides)" : "X Edge Gap"} value={edgeGapX} min={0} max={50} step={0.1} onChange={handleEdgeGapX} unit="mm" dark={dark} />
-              <PitchInfo label={isHexHoneycomb ? "spacing" : "X pitch"} value={effPitchX} dark={dark} />
+              <SliderRow label="X Edge Gap" value={edgeGapX} min={0} max={50} step={0.1} onChange={handleEdgeGapX} unit="mm" dark={dark} />
+              <PitchInfo label="X pitch" value={effPitchX} dark={dark} />
               <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>
-                {isHexHoneycomb ? (
-                  <>Uniform ligament on all 6 edges
-                    <span style={{ marginLeft: 6, fontSize: 9, color: dark ? "#555" : "#aaa" }}>
-                      row pitch {effPitchY.toFixed(2)}
-                    </span>
-                  </>
-                ) : (
-                  <>Y Edge Gap: {(effPitchY - effH).toFixed(2)} mm (auto)
-                    <span style={{ marginLeft: 6, fontSize: 9, color: dark ? "#555" : "#aaa" }}>
-                      pitch {effPitchY.toFixed(2)}
-                    </span>
-                  </>
-                )}
+                Y Edge Gap: {(effPitchY - effH).toFixed(2)} mm (auto)
+                <span style={{ marginLeft: 6, fontSize: 9, color: dark ? "#555" : "#aaa" }}>
+                  pitch {effPitchY.toFixed(2)}
+                </span>
               </div>
             </>
           )}
