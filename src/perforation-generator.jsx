@@ -192,7 +192,13 @@ function calcHoleArea(shape, w, h, holeRadius) {
     const r = s / 2;
     return Math.PI * r * r + s * (l - s);
   }
-  if (shape === "Hexagon") { const r = w / 2; return (3 * Math.sqrt(3) / 2) * r * r; }
+  if (shape === "Hexagon") {
+    const R = w / 2; // circumradius
+    const sharp = (3 * Math.sqrt(3) / 2) * R * R;
+    const cr = Math.min(holeRadius || 0, R * Math.sqrt(3) / 2); // clamp to apothem
+    // Rounding each of the 6 corners removes (2√3 − π)·r² of area total.
+    return cr > 0 ? sharp - (2 * Math.sqrt(3) - Math.PI) * cr * cr : sharp;
+  }
   // Circle
   return Math.PI * (w / 2) ** 2;
 }
@@ -207,6 +213,23 @@ function hexEdgeReach(R, dirAngle) {
   if (d > sector / 2) d -= sector;
   else if (d < -sector / 2) d += sector;
   return apothem / Math.cos(d);
+}
+
+// Pointy-top regular hexagon vertices (circumradius R), oriented for honeycomb tiling.
+function hexVertices(cx, cy, R) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 3) * i + Math.PI / 6;
+    pts.push([cx + R * Math.cos(a), cy + R * Math.sin(a)]);
+  }
+  return pts;
+}
+
+// Unit vector from point `from` toward point `to`.
+function unitToward(from, to) {
+  const dx = to[0] - from[0], dy = to[1] - from[1];
+  const len = Math.hypot(dx, dy) || 1;
+  return [dx / len, dy / len];
 }
 
 function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
@@ -224,12 +247,24 @@ function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
     else { ctx.rect(cx - hw, cy - hh, w, h); }
   } else if (shape === "Hexagon") {
     const R = hw;
-    for (let i = 0; i < 6; i++) {
-      const a = (Math.PI / 3) * i + Math.PI / 6; // pointy-top orientation for honeycomb tiling
-      const vx = cx + R * Math.cos(a), vy = cy + R * Math.sin(a);
-      if (i === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
+    const pts = hexVertices(cx, cy, R);
+    const cr = Math.min(holeRadius || 0, R * Math.sqrt(3) / 2);
+    if (cr > 0) {
+      // Rounded corners via arcTo: start at the midpoint of the last edge, then
+      // round each vertex toward the next.
+      const mid = [(pts[5][0] + pts[0][0]) / 2, (pts[5][1] + pts[0][1]) / 2];
+      ctx.moveTo(mid[0], mid[1]);
+      for (let i = 0; i < 6; i++) {
+        const v = pts[i], n = pts[(i + 1) % 6];
+        ctx.arcTo(v[0], v[1], n[0], n[1], cr);
+      }
+      ctx.closePath();
+    } else {
+      for (let i = 0; i < 6; i++) {
+        if (i === 0) ctx.moveTo(pts[i][0], pts[i][1]); else ctx.lineTo(pts[i][0], pts[i][1]);
+      }
+      ctx.closePath();
     }
-    ctx.closePath();
   } else if (shape === "Pill") {
     if (w >= h) {
       const s = hw - hh;
@@ -267,7 +302,28 @@ function holeSVGElement(x, y, shape, w, h, fill, extra, angle, holeRadius) {
   }
   if (shape === "Hexagon") {
     const R = hw;
-    const pts = Array.from({ length: 6 }, (_, i) => { const a = (Math.PI / 3) * i + Math.PI / 6; return `${(x + R * Math.cos(a)).toFixed(3)},${(y + R * Math.sin(a)).toFixed(3)}`; }).join(" ");
+    const verts = hexVertices(x, y, R);
+    const cr = Math.min(holeRadius || 0, R * Math.sqrt(3) / 2);
+    if (cr > 0) {
+      const t = cr / Math.sqrt(3); // tangent length from each vertex (120° interior angle)
+      const tin = [], tout = [];
+      for (let i = 0; i < 6; i++) {
+        const v = verts[i], prev = verts[(i + 5) % 6], next = verts[(i + 1) % 6];
+        const up = unitToward(v, prev), un = unitToward(v, next);
+        tin.push([v[0] + up[0] * t, v[1] + up[1] * t]);
+        tout.push([v[0] + un[0] * t, v[1] + un[1] * t]);
+      }
+      const f = n => n.toFixed(3);
+      let d = `M ${f(tin[0][0])} ${f(tin[0][1])}`;
+      for (let i = 0; i < 6; i++) {
+        d += ` A ${f(cr)} ${f(cr)} 0 0 1 ${f(tout[i][0])} ${f(tout[i][1])}`;
+        const ni = tin[(i + 1) % 6];
+        d += ` L ${f(ni[0])} ${f(ni[1])}`;
+      }
+      d += ' Z';
+      return `    <path d="${d}" ${fill} ${attrs}/>\n`;
+    }
+    const pts = verts.map(v => `${v[0].toFixed(3)},${v[1].toFixed(3)}`).join(" ");
     return `    <polygon points="${pts}" ${fill} ${attrs}/>\n`;
   }
   if (shape === "Pill") {
@@ -330,7 +386,32 @@ function isPointInsideHole(px, py, hole, shape, useExit = false) {
   }
   if (shape === "Hexagon") {
     const R = w / 2; // pointy-top: vertical corner-to-corner = 2R, flats on left/right
-    return Math.abs(y) <= R && Math.abs(x) <= Math.sqrt(3) * R / 2 && Math.sqrt(3) * Math.abs(y) + Math.abs(x) <= Math.sqrt(3) * R;
+    const apothem = Math.sqrt(3) * R / 2;
+    const cr = Math.min(radius || 0, apothem);
+    if (cr <= 0) {
+      return Math.abs(y) <= R && Math.abs(x) <= apothem && Math.sqrt(3) * Math.abs(y) + Math.abs(x) <= Math.sqrt(3) * R;
+    }
+    // Rounded hexagon = inner hexagon (shrunk inward by cr) grown by a disk of radius cr.
+    // Inside iff distance from the point to that inner hexagon ≤ cr.
+    const ai = apothem - cr;                 // inner apothem
+    const Ri = ai * 2 / Math.sqrt(3);        // inner circumradius
+    let inside = true;
+    for (let k = 0; k < 6; k++) {
+      const ang = k * Math.PI / 3;           // edge normals at 0,60,120,…
+      if (x * Math.cos(ang) + y * Math.sin(ang) - ai > 1e-9) { inside = false; break; }
+    }
+    if (inside) return true;
+    const iv = hexVertices(0, 0, Ri);
+    let dmin = Infinity;
+    for (let k = 0; k < 6; k++) {
+      const a = iv[k], b = iv[(k + 1) % 6];
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const len2 = dx * dx + dy * dy;
+      let t = len2 > 0 ? ((x - a[0]) * dx + (y - a[1]) * dy) / len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      dmin = Math.min(dmin, Math.hypot(x - (a[0] + t * dx), y - (a[1] + t * dy)));
+    }
+    return dmin <= cr;
   }
   return (x / (w / 2)) ** 2 + (y / (h / 2)) ** 2 <= 1;
 }
@@ -810,6 +891,7 @@ export default function PerforationGenerator() {
   const [thickness, setThickness] = useState(0);
   const [taperAngle, setTaperAngle] = useState(0);
   const [taperDirection, setTaperDirection] = useState("Top larger");
+  const [showTaper, setShowTaper] = useState(false); // reveal thickness & taper controls
   const [removedHoles, setRemovedHoles] = useState(new Set());
   const [holeRemovalMode, setHoleRemovalMode] = useState(false);
   const [variation, setVariation] = useState(() => cloneVariation(DEFAULT_VARIATION));
@@ -994,15 +1076,15 @@ export default function PerforationGenerator() {
     diameter, holeShape, holeW: effW, holeH: effH, holeRadius, patternType, pitchX, pitchY, sheetW, sheetH,
     marginTop, marginBottom, marginLeft, marginRight, cornerRadius,
     customAngle, ringSpacing, circumSpacing, radialMode, centerHole,
-    thickness, taperAngle, taperDirection
-  }), [diameter, holeShape, effW, effH, holeRadius, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole, thickness, taperAngle, taperDirection]);
+    thickness: showTaper ? thickness : 0, taperAngle: showTaper ? taperAngle : 0, taperDirection
+  }), [diameter, holeShape, effW, effH, holeRadius, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole, showTaper, thickness, taperAngle, taperDirection]);
 
   const baseHoles = useMemo(() => generateHoles(params), [params]);
   // Reset removed holes when pattern params change
   useEffect(() => { setRemovedHoles(new Set()); }, [params]);
   const isRadialPattern = patternType === "Radial";
   const perfW = sheetW - marginLeft - marginRight, perfH = sheetH - marginTop - marginBottom;
-  const taperActive = thickness > 0 && taperAngle > 0;
+  const taperActive = showTaper && thickness > 0 && taperAngle > 0;
   const taperInset = taperActive ? 2 * thickness * Math.tan((taperAngle * Math.PI) / 180) : 0;
 
   const holes = useMemo(() => baseHoles.map((hole, index) => {
@@ -1726,6 +1808,7 @@ export default function PerforationGenerator() {
           ) : (
             <SliderRow label="Hole Diameter" value={diameter} min={0.5} max={20} step={0.1} onChange={v => { setDiameter(v); setSelectedPreset(0); }} unit="mm" dark={dark} />
           )}
+          {holeShape === "Hexagon" && <SliderRow label="Hole Corner R" value={holeRadius} min={0} max={Math.sqrt(3) * diameter / 4} step={0.1} onChange={setHoleRadius} unit="mm" dark={dark} />}
           {patternType === "Custom Angle" && <SliderRow label="Stagger Angle" value={customAngle} min={0} max={90} step={1} onChange={setCustomAngle} unit="°" dark={dark} />}
         </div>
 
@@ -1924,7 +2007,12 @@ export default function PerforationGenerator() {
 
         {/* Taper */}
         <div style={sectionStyle}>
-          <div style={sectionTitle}>Sheet Thickness & Hole Taper</div>
+          <div style={{ ...sectionTitle, display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: showTaper ? undefined : 0 }}>
+            <span>Sheet Thickness & Hole Taper</span>
+            <Toggle value={showTaper} onChange={setShowTaper} dark={dark} />
+          </div>
+          {showTaper && (
+          <>
           <SliderRow label="Thickness (t)" value={thickness} min={0} max={10} step={0.1} onChange={setThickness} unit="mm" dark={dark} />
           <SliderRow label="Taper Angle (θ)" value={taperAngle} min={0} max={15} step={0.1} onChange={setTaperAngle} unit="°" dark={dark} />
           {taperActive && (
@@ -1942,6 +2030,8 @@ export default function PerforationGenerator() {
             </>
           )}
           {!taperActive && <div style={{ fontSize: 9, color: dark ? "#444" : "#bbb", marginTop: 6, lineHeight: 1.4 }}>Set thickness and angle above 0 to enable taper compensation.</div>}
+          </>
+          )}
         </div>
 
         {/* Hole Removal */}
