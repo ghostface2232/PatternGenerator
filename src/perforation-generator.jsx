@@ -990,16 +990,19 @@ function generateSVGString(holes, params) {
   const { sheetW, sheetH, thickness, taperAngle, taperDirection, holeShape } = params;
   const shape = holeShape || "Circle";
   const taperActive = thickness > 0 && taperAngle > 0;
+  const bgColor = params.bgColor || "#c0c0c0";
+  const holeColor = params.holeColor || "#000000";
+  const holeFill = `fill="${holeColor}"`;
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${sheetW}mm" height="${sheetH}mm" viewBox="0 0 ${sheetW} ${sheetH}">\n`;
-  svg += `  <rect width="${sheetW}" height="${sheetH}" fill="#c0c0c0" />\n`;
+  svg += `  <rect width="${sheetW}" height="${sheetH}" fill="${bgColor}" />\n`;
 
   if (taperActive) {
     svg += `  <g id="entry-side">\n`;
     holes.forEach(pt => {
       const topW = taperDirection === "Top larger" ? pt.w : pt.exitW;
       const topH = taperDirection === "Top larger" ? pt.h : pt.exitH;
-      if (topW > 0 && topH > 0) svg += holeSVGElement(pt.x, pt.y, shape, topW, topH, 'fill="#000"', '', pt.angle, pt.holeRadius);
+      if (topW > 0 && topH > 0) svg += holeSVGElement(pt.x, pt.y, shape, topW, topH, holeFill, '', pt.angle, pt.holeRadius);
     });
     svg += `  </g>\n  <g id="exit-side">\n`;
     holes.forEach(pt => {
@@ -1009,7 +1012,7 @@ function generateSVGString(holes, params) {
     });
     svg += `  </g>\n`;
   } else {
-    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, 'fill="#000"', '', pt.angle, pt.holeRadius); });
+    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, holeFill, '', pt.angle, pt.holeRadius); });
   }
   return svg + `</svg>`;
 }
@@ -1195,6 +1198,8 @@ export default function PerforationGenerator() {
   const [taperAngle, setTaperAngle] = useState(0);
   const [taperDirection, setTaperDirection] = useState("Top larger");
   const [showTaper, setShowTaper] = useState(false); // reveal thickness & taper controls
+  const [holeColor, setHoleColor] = useState("#141418"); // custom hole (foreground) color, shared by preview & export
+  const [bgColor, setBgColor] = useState("#c8c8cd");      // custom sheet (background) color, shared by preview & export
   const [removedHoles, setRemovedHoles] = useState(new Set());
   const [holeRemovalMode, setHoleRemovalMode] = useState(false);
   const [variation, setVariation] = useState(() => cloneVariation(DEFAULT_VARIATION));
@@ -1531,11 +1536,11 @@ export default function PerforationGenerator() {
     ctx.shadowColor = dark ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.15)";
     ctx.shadowBlur = 20 / baseScale;
     ctx.shadowOffsetX = 3 / baseScale; ctx.shadowOffsetY = 3 / baseScale;
-    ctx.fillStyle = dark ? "#3a3a40" : "#c8c8cd";
+    ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, sheetW, sheetH);
     ctx.shadowColor = "transparent";
 
-    ctx.fillStyle = dark ? "#48484f" : "#d4d4da";
+    ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, sheetW, sheetH);
 
     {
@@ -1598,7 +1603,7 @@ export default function PerforationGenerator() {
     ctx.clip();
 
     if (perfMode) {
-      ctx.fillStyle = dark ? "#0a0a0c" : "#1a1a1e";
+      ctx.fillStyle = holeColor;
       holes.forEach((h, i) => {
         if (removedHoles.has(i) || h.culled) return;
         ctx.fillRect(h.x - h.w * 0.35, h.y - h.h * 0.35, h.w * 0.7, h.h * 0.7);
@@ -1644,7 +1649,7 @@ export default function PerforationGenerator() {
         ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
         ctx.fillStyle = isClosed ? (dark ? "rgba(220,50,50,0.55)" : "rgba(200,30,30,0.45)")
           : isOverlap ? (dark ? "rgba(220,50,50,0.7)" : "rgba(200,30,30,0.6)")
-          : (dark ? "#0f0f11" : "#1a1a1e");
+          : holeColor;
         ctx.fill();
         if (showTaperRings && !isClosed) {
           ctx.strokeStyle = dark ? "rgba(200,200,210,0.4)" : "rgba(60,60,70,0.35)";
@@ -1671,7 +1676,7 @@ export default function PerforationGenerator() {
           // Clear exit shape by drawing it with the hole color
           ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius);
           ctx.fillStyle = isClosed ? (dark ? "rgba(220,50,50,0.55)" : "rgba(200,30,30,0.45)")
-            : (dark ? "#0f0f11" : "#1a1a1e");
+            : holeColor;
           ctx.fill();
           ctx.restore();
         }
@@ -1742,7 +1747,7 @@ export default function PerforationGenerator() {
       ctx.font = "11px 'JetBrains Mono', monospace"; ctx.textAlign = "left";
       ctx.fillText(`⚡ Performance mode (${holeCount.toLocaleString()} holes)`, 12, ch - 12);
     }
-  }, [holes, overlaps, params, dark, pan, zoom, perfMode, holeCount, holeShape, pitchX, pitchY, patternType, marginTop, marginBottom, marginLeft, marginRight, hasAnyMargin, cornerRadius, radialMode, isRadialPattern, sheetW, sheetH, taperActive, thickness, taperAngle, taperDirection, removedHoles, variation, variationEditMode, selectedVariationLayer, perfW, perfH]);
+  }, [holes, overlaps, params, dark, pan, zoom, perfMode, holeCount, holeShape, pitchX, pitchY, patternType, marginTop, marginBottom, marginLeft, marginRight, hasAnyMargin, cornerRadius, radialMode, isRadialPattern, sheetW, sheetH, taperActive, thickness, taperAngle, taperDirection, removedHoles, variation, variationEditMode, selectedVariationLayer, perfW, perfH, holeColor, bgColor]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1909,20 +1914,20 @@ export default function PerforationGenerator() {
 
   // Exports
   const exportSVG = useCallback(() => {
-    const blob = new Blob([generateSVGString(activeHoles, params)], { type: "image/svg+xml" });
+    const blob = new Blob([generateSVGString(activeHoles, { ...params, holeColor, bgColor })], { type: "image/svg+xml" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "perforation_pattern.svg"; a.click();
-  }, [activeHoles, params]);
+  }, [activeHoles, params, holeColor, bgColor]);
 
   const exportPNG = useCallback(() => {
     const oc = document.createElement("canvas");
     oc.width = sheetW * 8; oc.height = sheetH * 8;
     const ctx = oc.getContext("2d");
     const s = Math.min(oc.width / sheetW, oc.height / sheetH);
-    ctx.fillStyle = dark ? "#48484f" : "#d4d4da"; ctx.fillRect(0, 0, oc.width, oc.height);
+    ctx.fillStyle = bgColor; ctx.fillRect(0, 0, oc.width, oc.height);
     ctx.save(); ctx.scale(s, s);
     activeHoles.forEach(h => {
       ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
-      ctx.fillStyle = h.isClosed ? "rgba(200,30,30,0.5)" : (dark ? "#0f0f11" : "#1a1a1e");
+      ctx.fillStyle = h.isClosed ? "rgba(200,30,30,0.5)" : holeColor;
       ctx.fill();
       if (taperActive && h.exitW > 0 && h.exitH > 0 && !h.isClosed) {
         ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
@@ -1930,14 +1935,14 @@ export default function PerforationGenerator() {
         ctx.fillStyle = dark ? "rgba(80,85,95,0.6)" : "rgba(160,165,175,0.5)";
         ctx.fillRect(h.x - h.w, h.y - h.h, h.w * 2, h.h * 2);
         ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius);
-        ctx.fillStyle = (dark ? "#0f0f11" : "#1a1a1e");
+        ctx.fillStyle = holeColor;
         ctx.fill();
         ctx.restore();
       }
     });
     ctx.restore();
     oc.toBlob(blob => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "perforation_pattern.png"; a.click(); });
-  }, [activeHoles, sheetW, sheetH, holeShape, dark, taperActive]);
+  }, [activeHoles, sheetW, sheetH, holeShape, dark, taperActive, holeColor, bgColor]);
 
   // Theme
   const sidebarBorder = dark ? "#27272a" : "#e0e0e5";
@@ -2428,6 +2433,30 @@ export default function PerforationGenerator() {
           </div>
         </div>
 
+
+        {/* Colors */}
+        <div style={sectionStyle}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+            <div style={{ ...sectionTitle, marginBottom: 0 }}>Colors</div>
+            <button onClick={() => { setHoleColor("#141418"); setBgColor("#c8c8cd"); }} title="Reset colors" style={{
+              fontSize: 9, color: textSecondary, background: "transparent", border: `1px solid ${sidebarBorder}`,
+              borderRadius: 4, padding: "3px 8px", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace"
+            }}>Reset</button>
+          </div>
+          {[["Holes", holeColor, setHoleColor], ["Background", bgColor, setBgColor]].map(([label, value, setter]) => (
+            <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <label style={{ flex: 1, fontSize: 11, color: textSecondary, fontFamily: "'JetBrains Mono', monospace" }}>{label}</label>
+              <input type="text" value={value}
+                onChange={e => { const v = e.target.value; if (/^#[0-9a-fA-F]{0,6}$/.test(v)) setter(v); }}
+                style={{ width: 84, height: 28, fontSize: 11, background: controlBg, color: textPrimary, border: `1px solid ${sidebarBorder}`, borderRadius: 4, padding: "0 8px", outline: "none", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }} />
+              <input type="color" value={value} onChange={e => setter(e.target.value)}
+                style={{ width: 34, height: 28, padding: 0, border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, cursor: "pointer" }} />
+            </div>
+          ))}
+          <div style={{ fontSize: 9, color: textSecondary, marginTop: 4, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.4 }}>
+            Applies to the preview and to SVG / PNG export.
+          </div>
+        </div>
 
         {/* Export */}
         <div style={{ ...sectionStyle, borderBottom: "none", paddingBottom: 20 }}>
