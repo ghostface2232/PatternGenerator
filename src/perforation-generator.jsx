@@ -1095,6 +1095,33 @@ function Toggle({ value, onChange, dark }) {
   );
 }
 
+// Hex color field: swatch + text input. Partial text is held locally and only
+// pushed to the shared color once it is a complete #rrggbb value, so the
+// preview/export never sees an invalid fill.
+function HexColorField({ label, value, onChange, labelStyle, sidebarBorder, controlBg, textPrimary }) {
+  const [text, setText] = useState(value);
+  // Keep the text in sync when the color changes from outside (swatch, reset).
+  useEffect(() => { setText(value); }, [value]);
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <span style={labelStyle}>{label}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <input type="color" value={value} onChange={e => onChange(e.target.value)}
+          style={{ width: 28, height: 30, padding: 0, border: `1px solid ${sidebarBorder}`, borderRadius: 5, background: controlBg, cursor: "pointer" }} />
+        <input type="text" value={text}
+          onChange={e => {
+            const v = e.target.value;
+            if (!/^#[0-9a-fA-F]{0,6}$/.test(v)) return;   // ignore non-hex keystrokes
+            setText(v);
+            if (/^#[0-9a-fA-F]{6}$/.test(v)) onChange(v);  // commit only complete colors
+          }}
+          onBlur={() => setText(value)}                     // drop an incomplete edit
+          style={{ width: 68, height: 30, fontSize: 10, background: controlBg, color: textPrimary, border: `1px solid ${sidebarBorder}`, borderRadius: 5, padding: "0 6px", outline: "none", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }} />
+      </div>
+    </label>
+  );
+}
+
 function ProfileIcon({ type, active, dark }) {
   const stroke = active ? (dark ? "#93c5fd" : "#1d4ed8") : (dark ? "#777" : "#777");
   const paths = {
@@ -1986,18 +2013,6 @@ export default function PerforationGenerator() {
       <span style={{ fontSize: 11, fontWeight: 500, color: color || textPrimary, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.1 }}>{value}</span>
     </div>
   );
-  const topColor = (label, value, setter) => (
-    <label key={label} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <span style={topLabelStyle}>{label}</span>
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <input type="color" value={value} onChange={e => setter(e.target.value)}
-          style={{ width: 28, height: 30, padding: 0, border: `1px solid ${sidebarBorder}`, borderRadius: 5, background: controlBg, cursor: "pointer" }} />
-        <input type="text" value={value}
-          onChange={e => { const v = e.target.value; if (/^#[0-9a-fA-F]{0,6}$/.test(v)) setter(v); }}
-          style={{ width: 68, height: 30, fontSize: 10, background: controlBg, color: textPrimary, border: `1px solid ${sidebarBorder}`, borderRadius: 5, padding: "0 6px", outline: "none", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }} />
-      </div>
-    </label>
-  );
   const topDivider = <div style={{ width: 1, alignSelf: "stretch", background: sectionBorder, margin: "8px 0" }} />;
 
   return (
@@ -2033,8 +2048,9 @@ export default function PerforationGenerator() {
         {topDropdown("Hole Shape", holeShape, e => handleShapeChange(e.target.value), HOLE_SHAPES.map(s => <option key={s} value={s}>{s}</option>), 120)}
         {topDivider}
         {/* Colors */}
-        {topColor("Hole Color", holeColor, setHoleColor)}
-        {topColor("Background", bgColor, setBgColor)}
+        <HexColorField label="Hole Color" value={holeColor} onChange={setHoleColor} labelStyle={topLabelStyle} sidebarBorder={sidebarBorder} controlBg={controlBg} textPrimary={textPrimary} />
+        <HexColorField label="Background" value={bgColor} onChange={setBgColor} labelStyle={topLabelStyle} sidebarBorder={sidebarBorder} controlBg={controlBg} textPrimary={textPrimary} />
+
       </div>
 
       {/* Body: canvas + sidebar */}
