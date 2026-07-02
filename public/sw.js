@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pattern-generator-v5';
+const CACHE_NAME = 'pattern-generator-v8';
 const APP_SHELL = [
   './',
   './index.html',

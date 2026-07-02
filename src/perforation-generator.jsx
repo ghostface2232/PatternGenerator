@@ -990,16 +990,19 @@ function generateSVGString(holes, params) {
   const { sheetW, sheetH, thickness, taperAngle, taperDirection, holeShape } = params;
   const shape = holeShape || "Circle";
   const taperActive = thickness > 0 && taperAngle > 0;
+  const bgColor = params.bgColor || "#c0c0c0";
+  const holeColor = params.holeColor || "#000000";
+  const holeFill = `fill="${holeColor}"`;
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${sheetW}mm" height="${sheetH}mm" viewBox="0 0 ${sheetW} ${sheetH}">\n`;
-  svg += `  <rect width="${sheetW}" height="${sheetH}" fill="#c0c0c0" />\n`;
+  svg += `  <rect width="${sheetW}" height="${sheetH}" fill="${bgColor}" />\n`;
 
   if (taperActive) {
     svg += `  <g id="entry-side">\n`;
     holes.forEach(pt => {
       const topW = taperDirection === "Top larger" ? pt.w : pt.exitW;
       const topH = taperDirection === "Top larger" ? pt.h : pt.exitH;
-      if (topW > 0 && topH > 0) svg += holeSVGElement(pt.x, pt.y, shape, topW, topH, 'fill="#000"', '', pt.angle, pt.holeRadius);
+      if (topW > 0 && topH > 0) svg += holeSVGElement(pt.x, pt.y, shape, topW, topH, holeFill, '', pt.angle, pt.holeRadius);
     });
     svg += `  </g>\n  <g id="exit-side">\n`;
     holes.forEach(pt => {
@@ -1009,34 +1012,9 @@ function generateSVGString(holes, params) {
     });
     svg += `  </g>\n`;
   } else {
-    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, 'fill="#000"', '', pt.angle, pt.holeRadius); });
+    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, holeFill, '', pt.angle, pt.holeRadius); });
   }
   return svg + `</svg>`;
-}
-
-// ─── Gauge ───────────────────────────────────────────────────────────
-function Gauge({ value, nominalValue, dark }) {
-  const R = 54, S = 7, nr = R - S;
-  const circ = nr * 2 * Math.PI, arc = circ * 0.75;
-  const off = arc - (clamp(value, 0, 100) / 100) * arc;
-  const hasGhost = nominalValue != null && Math.abs(nominalValue - value) > 0.01;
-  const ghostOff = hasGhost ? arc - (clamp(nominalValue, 0, 100) / 100) * arc : 0;
-  const fg = dark ? "#60a5fa" : "#2563eb";
-
-  return (
-    <svg width={R * 2} height={R * 2} viewBox={`0 0 ${R * 2} ${R * 2}`} style={{ display: "block", margin: "0 auto" }}>
-      <circle cx={R} cy={R} r={nr} fill="none" stroke={dark ? "#2a2a2e" : "#e2e2e8"} strokeWidth={S}
-        strokeDasharray={`${arc} ${circ}`} strokeLinecap="round" transform={`rotate(135 ${R} ${R})`} />
-      {hasGhost && <circle cx={R} cy={R} r={nr} fill="none" stroke={dark ? "rgba(96,165,250,0.2)" : "rgba(37,99,235,0.15)"} strokeWidth={S}
-        strokeDasharray={`${arc} ${circ}`} strokeDashoffset={ghostOff} strokeLinecap="round" transform={`rotate(135 ${R} ${R})`}
-        style={{ transition: "stroke-dashoffset 0.2s" }} />}
-      <circle cx={R} cy={R} r={nr} fill="none" stroke={fg} strokeWidth={S}
-        strokeDasharray={`${arc} ${circ}`} strokeDashoffset={off} strokeLinecap="round" transform={`rotate(135 ${R} ${R})`}
-        style={{ transition: "stroke-dashoffset 0.2s" }} />
-      <text x={R} y={R - 4} textAnchor="middle" fill={dark ? "#f0f0f0" : "#111"} fontSize="22" fontWeight="600" fontFamily="'JetBrains Mono', monospace">{value.toFixed(1)}</text>
-      <text x={R} y={R + 14} textAnchor="middle" fill={dark ? "#888" : "#666"} fontSize="11" fontFamily="'JetBrains Mono', monospace">% Open</text>
-    </svg>
-  );
 }
 
 // ─── Slider Row (improved: empty input doesn't snap) ─────────────────
@@ -1114,6 +1092,33 @@ function Toggle({ value, onChange, dark }) {
         transition: "transform 0.2s", boxShadow: "0 1px 2px rgba(0,0,0,0.2)"
       }} />
     </div>
+  );
+}
+
+// Hex color field: swatch + text input. Partial text is held locally and only
+// pushed to the shared color once it is a complete #rrggbb value, so the
+// preview/export never sees an invalid fill.
+function HexColorField({ label, value, onChange, labelStyle, sidebarBorder, controlBg, textPrimary }) {
+  const [text, setText] = useState(value);
+  // Keep the text in sync when the color changes from outside (swatch, reset).
+  useEffect(() => { setText(value); }, [value]);
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <span style={labelStyle}>{label}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <input type="color" value={value} onChange={e => onChange(e.target.value)}
+          style={{ width: 28, height: 30, padding: 0, border: `1px solid ${sidebarBorder}`, borderRadius: 5, background: controlBg, cursor: "pointer" }} />
+        <input type="text" value={text}
+          onChange={e => {
+            const v = e.target.value;
+            if (!/^#[0-9a-fA-F]{0,6}$/.test(v)) return;   // ignore non-hex keystrokes
+            setText(v);
+            if (/^#[0-9a-fA-F]{6}$/.test(v)) onChange(v);  // commit only complete colors
+          }}
+          onBlur={() => setText(value)}                     // drop an incomplete edit
+          style={{ width: 68, height: 30, fontSize: 10, background: controlBg, color: textPrimary, border: `1px solid ${sidebarBorder}`, borderRadius: 5, padding: "0 6px", outline: "none", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }} />
+      </div>
+    </label>
   );
 }
 
@@ -1195,6 +1200,8 @@ export default function PerforationGenerator() {
   const [taperAngle, setTaperAngle] = useState(0);
   const [taperDirection, setTaperDirection] = useState("Top larger");
   const [showTaper, setShowTaper] = useState(false); // reveal thickness & taper controls
+  const [holeColor, setHoleColor] = useState("#141418"); // custom hole (foreground) color, shared by preview & export
+  const [bgColor, setBgColor] = useState("#c8c8cd");      // custom sheet (background) color, shared by preview & export
   const [removedHoles, setRemovedHoles] = useState(new Set());
   const [holeRemovalMode, setHoleRemovalMode] = useState(false);
   const [variation, setVariation] = useState(() => cloneVariation(DEFAULT_VARIATION));
@@ -1531,11 +1538,11 @@ export default function PerforationGenerator() {
     ctx.shadowColor = dark ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.15)";
     ctx.shadowBlur = 20 / baseScale;
     ctx.shadowOffsetX = 3 / baseScale; ctx.shadowOffsetY = 3 / baseScale;
-    ctx.fillStyle = dark ? "#3a3a40" : "#c8c8cd";
+    ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, sheetW, sheetH);
     ctx.shadowColor = "transparent";
 
-    ctx.fillStyle = dark ? "#48484f" : "#d4d4da";
+    ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, sheetW, sheetH);
 
     {
@@ -1598,7 +1605,7 @@ export default function PerforationGenerator() {
     ctx.clip();
 
     if (perfMode) {
-      ctx.fillStyle = dark ? "#0a0a0c" : "#1a1a1e";
+      ctx.fillStyle = holeColor;
       holes.forEach((h, i) => {
         if (removedHoles.has(i) || h.culled) return;
         ctx.fillRect(h.x - h.w * 0.35, h.y - h.h * 0.35, h.w * 0.7, h.h * 0.7);
@@ -1644,7 +1651,7 @@ export default function PerforationGenerator() {
         ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
         ctx.fillStyle = isClosed ? (dark ? "rgba(220,50,50,0.55)" : "rgba(200,30,30,0.45)")
           : isOverlap ? (dark ? "rgba(220,50,50,0.7)" : "rgba(200,30,30,0.6)")
-          : (dark ? "#0f0f11" : "#1a1a1e");
+          : holeColor;
         ctx.fill();
         if (showTaperRings && !isClosed) {
           ctx.strokeStyle = dark ? "rgba(200,200,210,0.4)" : "rgba(60,60,70,0.35)";
@@ -1671,7 +1678,7 @@ export default function PerforationGenerator() {
           // Clear exit shape by drawing it with the hole color
           ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius);
           ctx.fillStyle = isClosed ? (dark ? "rgba(220,50,50,0.55)" : "rgba(200,30,30,0.45)")
-            : (dark ? "#0f0f11" : "#1a1a1e");
+            : holeColor;
           ctx.fill();
           ctx.restore();
         }
@@ -1742,7 +1749,7 @@ export default function PerforationGenerator() {
       ctx.font = "11px 'JetBrains Mono', monospace"; ctx.textAlign = "left";
       ctx.fillText(`⚡ Performance mode (${holeCount.toLocaleString()} holes)`, 12, ch - 12);
     }
-  }, [holes, overlaps, params, dark, pan, zoom, perfMode, holeCount, holeShape, pitchX, pitchY, patternType, marginTop, marginBottom, marginLeft, marginRight, hasAnyMargin, cornerRadius, radialMode, isRadialPattern, sheetW, sheetH, taperActive, thickness, taperAngle, taperDirection, removedHoles, variation, variationEditMode, selectedVariationLayer, perfW, perfH]);
+  }, [holes, overlaps, params, dark, pan, zoom, perfMode, holeCount, holeShape, pitchX, pitchY, patternType, marginTop, marginBottom, marginLeft, marginRight, hasAnyMargin, cornerRadius, radialMode, isRadialPattern, sheetW, sheetH, taperActive, thickness, taperAngle, taperDirection, removedHoles, variation, variationEditMode, selectedVariationLayer, perfW, perfH, holeColor, bgColor]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1909,20 +1916,20 @@ export default function PerforationGenerator() {
 
   // Exports
   const exportSVG = useCallback(() => {
-    const blob = new Blob([generateSVGString(activeHoles, params)], { type: "image/svg+xml" });
+    const blob = new Blob([generateSVGString(activeHoles, { ...params, holeColor, bgColor })], { type: "image/svg+xml" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "perforation_pattern.svg"; a.click();
-  }, [activeHoles, params]);
+  }, [activeHoles, params, holeColor, bgColor]);
 
   const exportPNG = useCallback(() => {
     const oc = document.createElement("canvas");
     oc.width = sheetW * 8; oc.height = sheetH * 8;
     const ctx = oc.getContext("2d");
     const s = Math.min(oc.width / sheetW, oc.height / sheetH);
-    ctx.fillStyle = dark ? "#48484f" : "#d4d4da"; ctx.fillRect(0, 0, oc.width, oc.height);
+    ctx.fillStyle = bgColor; ctx.fillRect(0, 0, oc.width, oc.height);
     ctx.save(); ctx.scale(s, s);
     activeHoles.forEach(h => {
       ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
-      ctx.fillStyle = h.isClosed ? "rgba(200,30,30,0.5)" : (dark ? "#0f0f11" : "#1a1a1e");
+      ctx.fillStyle = h.isClosed ? "rgba(200,30,30,0.5)" : holeColor;
       ctx.fill();
       if (taperActive && h.exitW > 0 && h.exitH > 0 && !h.isClosed) {
         ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
@@ -1930,14 +1937,14 @@ export default function PerforationGenerator() {
         ctx.fillStyle = dark ? "rgba(80,85,95,0.6)" : "rgba(160,165,175,0.5)";
         ctx.fillRect(h.x - h.w, h.y - h.h, h.w * 2, h.h * 2);
         ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius);
-        ctx.fillStyle = (dark ? "#0f0f11" : "#1a1a1e");
+        ctx.fillStyle = holeColor;
         ctx.fill();
         ctx.restore();
       }
     });
     ctx.restore();
     oc.toBlob(blob => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "perforation_pattern.png"; a.click(); });
-  }, [activeHoles, sheetW, sheetH, holeShape, dark, taperActive]);
+  }, [activeHoles, sheetW, sheetH, holeShape, dark, taperActive, holeColor, bgColor]);
 
   // Theme
   const sidebarBorder = dark ? "#27272a" : "#e0e0e5";
@@ -1988,10 +1995,66 @@ export default function PerforationGenerator() {
     }}>{label}</button>
   );
 
+  // Top-bar dropdown helper (label + native <select> styled as a dropdown)
+  const topLabelStyle = { fontSize: 8, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: textSecondary, fontFamily: "'JetBrains Mono', monospace" };
+  const topSelectStyle = { height: 30, fontSize: 11, background: controlBg, color: textPrimary, border: `1px solid ${sidebarBorder}`, borderRadius: 5, padding: "0 24px 0 9px", outline: "none", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer", appearance: "none", WebkitAppearance: "none", MozAppearance: "none" };
+  const topDropdown = (label, value, onChange, options, minWidth) => (
+    <label key={label} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <span style={topLabelStyle}>{label}</span>
+      <div style={{ position: "relative", display: "inline-flex" }}>
+        <select value={value} onChange={onChange} style={{ ...topSelectStyle, minWidth: minWidth || 110 }}>{options}</select>
+        <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", fontSize: 8, color: textSecondary }}>▾</span>
+      </div>
+    </label>
+  );
+  const topStat = (label, value, color) => (
+    <div key={label} style={{ display: "flex", flexDirection: "column", gap: 2, whiteSpace: "nowrap" }}>
+      <span style={topLabelStyle}>{label}</span>
+      <span style={{ fontSize: 11, fontWeight: 500, color: color || textPrimary, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.1 }}>{value}</span>
+    </div>
+  );
+  const topDivider = <div style={{ width: 1, alignSelf: "stretch", background: sectionBorder, margin: "8px 0" }} />;
+
   return (
-    <div style={{ display: "flex", width: "100vw", height: "100vh", background: dark ? "#111113" : "#f2f2f5", color: textPrimary, fontFamily: "'JetBrains Mono', -apple-system, sans-serif", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", width: "100vw", height: "100vh", background: dark ? "#111113" : "#f2f2f5", color: textPrimary, fontFamily: "'JetBrains Mono', -apple-system, sans-serif", overflow: "hidden" }}>
       <link rel="preconnect" href="https://fonts.googleapis.com" />
       <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet" />
+
+      {/* Top bar */}
+      <div style={{ display: "flex", alignItems: "center", gap: 14, height: 56, flexShrink: 0, padding: "0 16px", background: dark ? "#161619" : "#ffffff", borderBottom: `1px solid ${sidebarBorder}`, boxSizing: "border-box", overflowX: "auto", overflowY: "hidden" }}>
+        {/* Current OAR */}
+        <div style={{ display: "flex", alignItems: "baseline", gap: 5, whiteSpace: "nowrap" }}>
+          <span style={{ fontSize: 22, fontWeight: 700, color: accentColor, lineHeight: 1 }}>{displayOAR.toFixed(1)}</span>
+          <span style={{ fontSize: 10, color: textSecondary }}>% OAR</span>
+          {taperActive && oarDelta < 0 && <span style={{ fontSize: 9, color: dark ? "#f87171" : "#dc2626" }}>({oarDelta.toFixed(1)}%p taper)</span>}
+        </div>
+        {topDivider}
+        {/* Stats */}
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          {topStat("Total Holes", holeCount.toLocaleString())}
+          {topStat("Active Holes", hasRemovedHoles ? activeHoleCount.toLocaleString() : holeCount.toLocaleString(), hasRemovedHoles ? warnColor : textPrimary)}
+          {topStat(variation.enabled ? "Avg Hole Area" : "Hole Area", `${singleHoleArea.toFixed(2)} mm²`)}
+          {topStat("Open Area", `${totalHoleArea.toFixed(1)} mm²`)}
+          {topStat("Panel Area", `${grossArea.toFixed(0)} mm²`)}
+          {topStat("Perf. Area", `${perforatedArea.toFixed(0)} mm²`)}
+          {minLigament !== null && topStat("Min Ligament", `${minLigament.toFixed(2)} mm`, minLigament <= 0 ? warnColor : accentColor)}
+          {taperActive && topStat("Surface OAR", `${nominalOAR.toFixed(1)}%`, dark ? "#999" : "#666")}
+          {taperActive && topStat("Effective OAR", `${effectiveOAR.toFixed(1)}%`, accentColor)}
+        </div>
+        {topDivider}
+        {/* Preset / Type / Shape dropdowns */}
+        {topDropdown("Preset (DIN 24041)", selectedPreset, e => applyPreset(parseInt(e.target.value)), DIN_PRESETS.map((p, i) => <option key={i} value={i}>{p.name}</option>, ), 190)}
+        {topDropdown("Type", patternType, e => { setPatternType(e.target.value); setSelectedPreset(0); }, PATTERN_TYPES.map(pt => <option key={pt} value={pt}>{pt}</option>), 130)}
+        {topDropdown("Hole Shape", holeShape, e => handleShapeChange(e.target.value), HOLE_SHAPES.map(s => <option key={s} value={s}>{s}</option>), 120)}
+        {topDivider}
+        {/* Colors */}
+        <HexColorField label="Hole Color" value={holeColor} onChange={setHoleColor} labelStyle={topLabelStyle} sidebarBorder={sidebarBorder} controlBg={controlBg} textPrimary={textPrimary} />
+        <HexColorField label="Background" value={bgColor} onChange={setBgColor} labelStyle={topLabelStyle} sidebarBorder={sidebarBorder} controlBg={controlBg} textPrimary={textPrimary} />
+
+      </div>
+
+      {/* Body: canvas + sidebar */}
+      <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}>
 
       {/* Canvas */}
       <div ref={containerRef} style={{ flex: 1, position: "relative", overflow: "hidden" }}>
@@ -2001,14 +2064,9 @@ export default function PerforationGenerator() {
         />
         {/* Top-left: key stats + warnings */}
         <div style={{ position: "absolute", top: 12, left: 12, display: "flex", flexDirection: "column", gap: 6, pointerEvents: "none" }}>
-          {/* OAR + Holes summary */}
+          {/* Holes summary */}
           <div style={{ background: dark ? "rgba(0,0,0,0.65)" : "rgba(255,255,255,0.8)", backdropFilter: "blur(10px)", padding: "8px 12px", borderRadius: 6, fontFamily: "'JetBrains Mono', monospace", border: `1px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)"}` }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-              <span style={{ fontSize: 20, fontWeight: 700, color: accentColor, lineHeight: 1 }}>{displayOAR.toFixed(1)}</span>
-              <span style={{ fontSize: 10, color: textSecondary }}>% OAR</span>
-              {taperActive && <span style={{ fontSize: 9, color: dark ? "#f87171" : "#dc2626", marginLeft: 2 }}>{oarDelta < 0 ? `(${oarDelta.toFixed(1)}%p taper)` : ""}</span>}
-            </div>
-            <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
+            <div style={{ display: "flex", gap: 12 }}>
               <span style={{ fontSize: 10, color: textSecondary }}>Holes <span style={{ color: textPrimary, fontWeight: 500 }}>{activeHoleCount.toLocaleString()}</span>{hasRemovedHoles ? <span style={{ color: warnColor }}> / {holeCount.toLocaleString()}</span> : ""}</span>
               <span style={{ fontSize: 10, color: textSecondary }}>{zoom.toFixed(1)}x</span>
             </div>
@@ -2036,7 +2094,7 @@ export default function PerforationGenerator() {
       </div>
 
       {/* Sidebar */}
-      <div style={{ width: 440, minWidth: 440, height: "100vh", overflowY: "auto", overflowX: "hidden", background: dark ? "#18181b" : "#ffffff", borderLeft: `1px solid ${sidebarBorder}`, padding: "0 20px", boxSizing: "border-box", scrollbarWidth: "thin", scrollbarColor: dark ? "#333 transparent" : "#ccc transparent" }}>
+      <div style={{ width: 440, minWidth: 440, height: "100%", overflowY: "auto", overflowX: "hidden", background: dark ? "#18181b" : "#ffffff", borderLeft: `1px solid ${sidebarBorder}`, padding: "0 20px", boxSizing: "border-box", scrollbarWidth: "thin", scrollbarColor: dark ? "#333 transparent" : "#ccc transparent" }}>
 
         {/* Header */}
         <div style={{ padding: "14px 0 8px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${sectionBorder}` }}>
@@ -2049,97 +2107,22 @@ export default function PerforationGenerator() {
           </button>
         </div>
 
-        {/* Gauge + Stats */}
-        <div style={{ ...sectionStyle, textAlign: "center" }}>
-          <Gauge value={clamp(displayOAR, 0, 100)} nominalValue={taperActive ? clamp(nominalOAR, 0, 100) : null} dark={dark} />
-
-          {taperActive && (
-            <div style={{ margin: "8px 0 4px", padding: "6px 8px", borderRadius: 5, background: dark ? "rgba(96,165,250,0.06)" : "rgba(37,99,235,0.04)", border: `1px solid ${dark ? "rgba(96,165,250,0.12)" : "rgba(37,99,235,0.1)"}`, textAlign: "left" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                <span style={{ fontSize: 9, color: textSecondary }}>Surface OAR</span>
-                <span style={{ fontSize: 11, fontWeight: 500, color: dark ? "#999" : "#666" }}>{nominalOAR.toFixed(1)}%</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                <span style={{ fontSize: 9, color: textSecondary }}>Effective OAR (through-thickness)</span>
-                <span style={{ fontSize: 11, fontWeight: 600, color: accentColor }}>{effectiveOAR.toFixed(1)}%</span>
-              </div>
-              <div style={{ fontSize: 9, color: oarDelta < 0 ? (dark ? "#f87171" : "#dc2626") : textSecondary, textAlign: "center", padding: "2px 0 0", borderTop: `1px solid ${dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"}` }}>
-                {oarDelta < 0 ? `${oarDelta.toFixed(1)}%p due to taper` : "No taper loss"}
-              </div>
-              {dExit > 0 && !holeClosed && <div style={{ fontSize: 9, color: textSecondary, textAlign: "center", marginTop: 3 }}>{variation.enabled ? `exit range = ${minExit.toFixed(2)}–${maxExit.toFixed(2)} mm` : `d_exit = ${dExit.toFixed(2)} mm`}</div>}
-            </div>
-          )}
-          {taperActive && hasClosedHoles && (
-            <div style={{ margin: "6px 0", padding: "6px 8px", borderRadius: 5, background: dark ? "rgba(239,68,68,0.12)" : "rgba(239,68,68,0.08)", border: `1px solid ${dark ? "rgba(239,68,68,0.25)" : "rgba(239,68,68,0.2)"}`, fontSize: 10, color: warnColor, textAlign: "left", lineHeight: 1.4 }}>
-              Taper closes {closedHoleCount} varied hole{closedHoleCount === 1 ? "" : "s"} at this thickness. Raise the minimum scale, reduce angle, or increase the base size.
-            </div>
-          )}
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px", marginTop: 8 }}>
-            {[
-              ["Total Holes", holeCount.toLocaleString()],
-              ["Active Holes", hasRemovedHoles ? activeHoleCount.toLocaleString() : holeCount.toLocaleString()],
-              [variation.enabled ? "Avg Hole Area" : "Hole Area", `${singleHoleArea.toFixed(2)} mm²`],
-              ["Open Area", `${totalHoleArea.toFixed(1)} mm²`],
-              ["Panel Area", `${grossArea.toFixed(0)} mm²`],
-              ["Perf. Area", `${perforatedArea.toFixed(0)} mm²`],
-            ].map(([l, v]) => (
-              <div key={l} style={{ textAlign: "left" }}>
-                <div style={{ fontSize: 9, color: textSecondary }}>{l}</div>
-                <div style={{ fontSize: 11, fontWeight: 500 }}>{v}</div>
-              </div>
-            ))}
-          </div>
-          {minLigament !== null && (
-            <div style={{ marginTop: 8, padding: "5px 8px", borderRadius: 4, background: minLigament <= 0 ? (dark ? "rgba(239,68,68,0.15)" : "rgba(239,68,68,0.1)") : (dark ? "rgba(96,165,250,0.1)" : "rgba(37,99,235,0.08)"), display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: 9, color: textSecondary }}>Min Ligament</span>
-              <span style={{ fontSize: 11, fontWeight: 500, color: minLigament <= 0 ? warnColor : accentColor }}>{minLigament.toFixed(2)} mm</span>
-            </div>
-          )}
-        </div>
-
-        {/* Pattern */}
+        {/* Dimensions */}
         <div style={sectionStyle}>
-          <div style={sectionTitle}>Pattern</div>
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 10, color: textSecondary, marginBottom: 6 }}>Preset (DIN 24041)</div>
-            <select value={selectedPreset} onChange={e => applyPreset(parseInt(e.target.value))}
-              style={{ width: "100%", height: 30, fontSize: 11, background: controlBg, color: textPrimary, border: `1px solid ${sidebarBorder}`, borderRadius: 4, padding: "0 8px", outline: "none", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer" }}>
-              {DIN_PRESETS.map((p, i) => <option key={i} value={i}>{p.name}</option>)}
-            </select>
+          <div style={sectionTitle}>Dimensions</div>
+          <div style={{ fontSize: 9, color: textSecondary, marginBottom: 14, lineHeight: 1.5 }}>
+            <span style={{ color: textPrimary, fontWeight: 500 }}>{patternType}</span> · <span style={{ color: textPrimary, fontWeight: 500 }}>{holeShape}</span> — change via the top bar.
           </div>
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 10, color: textSecondary, marginBottom: 6 }}>Type</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-              {PATTERN_TYPES.map(pt => (
-                <button key={pt} onClick={() => { setPatternType(pt); setSelectedPreset(0); }}
-                  style={{ padding: "5px 10px", fontSize: 10, borderRadius: 4, border: `1px solid ${patternType === pt ? accentColor : sidebarBorder}`, background: patternType === pt ? (dark ? "rgba(96,165,250,0.15)" : "rgba(37,99,235,0.08)") : "transparent", color: patternType === pt ? accentColor : textSecondary, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", transition: "all 0.15s" }}>
-                  {pt}
-                </button>
-              ))}
+          {holeShape === "Triangle" && !isRadial && (
+            <div style={{ fontSize: 9, color: textSecondary, marginBottom: 14, lineHeight: 1.5 }}>
+              ▲▽ Triangles fill in alternating up/down rows — a seamless fit at 0 gap. All grid types share this tiling; Radial places them on rings instead.
             </div>
-          </div>
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 10, color: textSecondary, marginBottom: 6 }}>Hole Shape</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-              {HOLE_SHAPES.map(s => (
-                <button key={s} onClick={() => handleShapeChange(s)}
-                  style={{ padding: "5px 10px", fontSize: 10, borderRadius: 4, border: `1px solid ${holeShape === s ? accentColor : sidebarBorder}`, background: holeShape === s ? (dark ? "rgba(96,165,250,0.15)" : "rgba(37,99,235,0.08)") : "transparent", color: holeShape === s ? accentColor : textSecondary, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", transition: "all 0.15s" }}>
-                  {s}
-                </button>
-              ))}
+          )}
+          {isDiamondLattice && (
+            <div style={{ fontSize: 9, color: textSecondary, marginBottom: 14, lineHeight: 1.5 }}>
+              ◆ Staggered 60° interlocks diamonds into a rhombus lattice — a seamless fit at 0 gap.
             </div>
-            {holeShape === "Triangle" && !isRadial && (
-              <div style={{ fontSize: 9, color: textSecondary, marginTop: 8, lineHeight: 1.5 }}>
-                ▲▽ Triangles fill in alternating up/down rows — a seamless fit at 0 gap. All grid types share this tiling; Radial places them on rings instead.
-              </div>
-            )}
-            {isDiamondLattice && (
-              <div style={{ fontSize: 9, color: textSecondary, marginTop: 8, lineHeight: 1.5 }}>
-                ◆ Staggered 60° interlocks diamonds into a rhombus lattice — a seamless fit at 0 gap.
-              </div>
-            )}
-          </div>
+          )}
           {holeShape === "Diamond" && (
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 10, color: textSecondary, marginBottom: 6 }}>Diamond Orientation</div>
@@ -2174,6 +2157,101 @@ export default function PerforationGenerator() {
           )}
           {holeShape === "Hexagon" && <SliderRow label="Hole Corner R" value={holeRadius} min={0} max={Math.sqrt(3) * diameter / 4} step={0.1} onChange={setHoleRadius} unit="mm" dark={dark} />}
           {patternType === "Custom Angle" && holeShape !== "Triangle" && <SliderRow label="Stagger Angle" value={customAngle} min={0} max={90} step={1} onChange={setCustomAngle} unit="°" dark={dark} />}
+
+          {isRadial ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <span style={{ fontSize: 10, color: textSecondary, flex: 1 }}>Gap Link</span>
+                <button onClick={() => { setRadialLinked(v => !v); if (!radialLinked) setCircumEdgeGap(radialEdgeGap); }}
+                  style={{ background: "none", border: "none", cursor: "pointer", padding: 2, borderRadius: 4, display: "flex", alignItems: "center", opacity: 0.8 }}
+                  title={radialLinked ? "Unlink gap" : "Link gap"}>
+                  <LinkIcon linked={radialLinked} dark={dark} />
+                </button>
+              </div>
+              <SliderRow label="Radial Edge Gap" value={radialEdgeGap} min={0} max={50} step={0.1} onChange={handleRadialEdgeGap} unit="mm" dark={dark} />
+              <PitchInfo label="ring spacing" value={ringSpacing} dark={dark} />
+              {!radialLinked && <>
+                <SliderRow label="Circum. Edge Gap" value={circumEdgeGap} min={0} max={50} step={0.1} onChange={handleCircumEdgeGap} unit="mm" dark={dark} />
+                <PitchInfo label="circum. spacing" value={circumSpacing} dark={dark} />
+              </>}
+              {radialLinked && <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>Circum. Edge Gap: {radialEdgeGap.toFixed(2)} mm (linked)</div>}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 10, color: textSecondary, marginBottom: 6 }}>Fill Mode</div>
+                <div style={{ display: "flex", gap: 5 }}>
+                  {["Full", "Circle"].map(m => (
+                    <SegBtn key={m} label={m} active={radialMode === m} onClick={() => setRadialMode(m)} />
+                  ))}
+                </div>
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: textSecondary, cursor: "pointer", marginTop: 4 }}>
+                <input type="checkbox" checked={centerHole} onChange={e => setCenterHole(e.target.checked)} style={{ accentColor }} />
+                Center hole
+              </label>
+            </>
+          ) : uniformGapMode ? (
+            <>
+              <SliderRow label="Edge Gap (all sides)" value={edgeGapX} min={0} max={50} step={0.1} onChange={handleEdgeGapX} unit="mm" dark={dark} />
+              <PitchInfo label={isTriTiling ? "column pitch" : "spacing"} value={uniformColPitch} dark={dark} />
+              <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>
+                Uniform ligament on all {isHexHoneycomb ? 6 : isDiamondLattice ? 4 : 3} edges
+                <span style={{ marginLeft: 6, fontSize: 9, color: dark ? "#555" : "#aaa" }}>
+                  row pitch {uniformRowPitch.toFixed(2)}
+                </span>
+              </div>
+            </>
+          ) : showGapY ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <span style={{ fontSize: 10, color: textSecondary, flex: 1 }}>Gap Link (X = Y)</span>
+                <button onClick={() => { setGapLinked(v => !v); if (!gapLinked) setEdgeGapY(edgeGapX); }}
+                  style={{ background: "none", border: "none", cursor: "pointer", padding: 2, borderRadius: 4, display: "flex", alignItems: "center", opacity: 0.8 }}
+                  title={gapLinked ? "Unlink gap" : "Link gap"}>
+                  <LinkIcon linked={gapLinked} dark={dark} />
+                </button>
+              </div>
+              <SliderRow label={gapLinked ? "Edge Gap (X = Y)" : "X Edge Gap"} value={edgeGapX} min={0} max={50} step={0.1} onChange={handleEdgeGapX} unit="mm" dark={dark} />
+              <PitchInfo label={gapLinked ? "pitch" : "X pitch"} value={pitchX} dark={dark} />
+              {!gapLinked && <>
+                <SliderRow label="Y Edge Gap" value={edgeGapY} min={0} max={50} step={0.1} onChange={handleEdgeGapY} unit="mm" dark={dark} />
+                <PitchInfo label="Y pitch" value={pitchY} dark={dark} />
+              </>}
+            </>
+          ) : (
+            <>
+              <SliderRow label="X Edge Gap" value={edgeGapX} min={0} max={50} step={0.1} onChange={handleEdgeGapX} unit="mm" dark={dark} />
+              <PitchInfo label="X pitch" value={effPitchX} dark={dark} />
+              <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>
+                Y Edge Gap: {(effPitchY - effH).toFixed(2)} mm (auto)
+                <span style={{ marginLeft: 6, fontSize: 9, color: dark ? "#555" : "#aaa" }}>
+                  pitch {effPitchY.toFixed(2)}
+                </span>
+              </div>
+            </>
+          )}
+          <SliderRow label="Panel Width" value={sheetW} min={10} max={1000} step={1} onChange={setSheetW} unit="mm" dark={dark} />
+          <SliderRow label="Panel Height" value={sheetH} min={10} max={1000} step={1} onChange={setSheetH} unit="mm" dark={dark} />
+          {/* Margin section */}
+          <div style={{ marginTop: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+              <span style={{ fontSize: 10, color: textSecondary, flex: 1 }}>Margin {marginLinked ? "(Uniform)" : "(Per-side)"}</span>
+              <button onClick={() => { setMarginLinked(v => !v); if (!marginLinked) { const m = marginTop; setMarginBottom(m); setMarginLeft(m); setMarginRight(m); } }}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 2, borderRadius: 4, display: "flex", alignItems: "center", opacity: 0.8 }}
+                title={marginLinked ? "Set per-side margins" : "Use uniform margin"}>
+                <LinkIcon linked={marginLinked} dark={dark} />
+              </button>
+            </div>
+            {marginLinked ? (
+              <SliderRow label="Margin" value={marginTop} min={0} max={50} step={0.5} onChange={handleMarginUniform} unit="mm" dark={dark} />
+            ) : (
+              <>
+                <SliderRow label="Margin Top" value={marginTop} min={0} max={50} step={0.5} onChange={setMarginTop} unit="mm" dark={dark} />
+                <SliderRow label="Margin Bottom" value={marginBottom} min={0} max={50} step={0.5} onChange={setMarginBottom} unit="mm" dark={dark} />
+                <SliderRow label="Margin Left" value={marginLeft} min={0} max={50} step={0.5} onChange={setMarginLeft} unit="mm" dark={dark} />
+                <SliderRow label="Margin Right" value={marginRight} min={0} max={50} step={0.5} onChange={setMarginRight} unit="mm" dark={dark} />
+              </>
+            )}
+          </div>
+          <SliderRow label="Corner Radius" value={cornerRadius} min={0} max={Math.min(perfW / 2, perfH / 2)} step={0.5} onChange={setCornerRadius} unit="mm" dark={dark} />
         </div>
 
         {/* Size Variation */}
@@ -2272,105 +2350,6 @@ export default function PerforationGenerator() {
           </>}
         </div>
 
-        {/* Dimensions */}
-        <div style={sectionStyle}>
-          <div style={sectionTitle}>Dimensions</div>
-          {isRadial ? (
-            <>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                <span style={{ fontSize: 10, color: textSecondary, flex: 1 }}>Gap Link</span>
-                <button onClick={() => { setRadialLinked(v => !v); if (!radialLinked) setCircumEdgeGap(radialEdgeGap); }}
-                  style={{ background: "none", border: "none", cursor: "pointer", padding: 2, borderRadius: 4, display: "flex", alignItems: "center", opacity: 0.8 }}
-                  title={radialLinked ? "Unlink gap" : "Link gap"}>
-                  <LinkIcon linked={radialLinked} dark={dark} />
-                </button>
-              </div>
-              <SliderRow label="Radial Edge Gap" value={radialEdgeGap} min={0} max={50} step={0.1} onChange={handleRadialEdgeGap} unit="mm" dark={dark} />
-              <PitchInfo label="ring spacing" value={ringSpacing} dark={dark} />
-              {!radialLinked && <>
-                <SliderRow label="Circum. Edge Gap" value={circumEdgeGap} min={0} max={50} step={0.1} onChange={handleCircumEdgeGap} unit="mm" dark={dark} />
-                <PitchInfo label="circum. spacing" value={circumSpacing} dark={dark} />
-              </>}
-              {radialLinked && <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>Circum. Edge Gap: {radialEdgeGap.toFixed(2)} mm (linked)</div>}
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 10, color: textSecondary, marginBottom: 6 }}>Fill Mode</div>
-                <div style={{ display: "flex", gap: 5 }}>
-                  {["Full", "Circle"].map(m => (
-                    <SegBtn key={m} label={m} active={radialMode === m} onClick={() => setRadialMode(m)} />
-                  ))}
-                </div>
-              </div>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: textSecondary, cursor: "pointer", marginTop: 4 }}>
-                <input type="checkbox" checked={centerHole} onChange={e => setCenterHole(e.target.checked)} style={{ accentColor }} />
-                Center hole
-              </label>
-            </>
-          ) : uniformGapMode ? (
-            <>
-              <SliderRow label="Edge Gap (all sides)" value={edgeGapX} min={0} max={50} step={0.1} onChange={handleEdgeGapX} unit="mm" dark={dark} />
-              <PitchInfo label={isTriTiling ? "column pitch" : "spacing"} value={uniformColPitch} dark={dark} />
-              <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>
-                Uniform ligament on all {isHexHoneycomb ? 6 : isDiamondLattice ? 4 : 3} edges
-                <span style={{ marginLeft: 6, fontSize: 9, color: dark ? "#555" : "#aaa" }}>
-                  row pitch {uniformRowPitch.toFixed(2)}
-                </span>
-              </div>
-            </>
-          ) : showGapY ? (
-            <>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                <span style={{ fontSize: 10, color: textSecondary, flex: 1 }}>Gap Link (X = Y)</span>
-                <button onClick={() => { setGapLinked(v => !v); if (!gapLinked) setEdgeGapY(edgeGapX); }}
-                  style={{ background: "none", border: "none", cursor: "pointer", padding: 2, borderRadius: 4, display: "flex", alignItems: "center", opacity: 0.8 }}
-                  title={gapLinked ? "Unlink gap" : "Link gap"}>
-                  <LinkIcon linked={gapLinked} dark={dark} />
-                </button>
-              </div>
-              <SliderRow label={gapLinked ? "Edge Gap (X = Y)" : "X Edge Gap"} value={edgeGapX} min={0} max={50} step={0.1} onChange={handleEdgeGapX} unit="mm" dark={dark} />
-              <PitchInfo label={gapLinked ? "pitch" : "X pitch"} value={pitchX} dark={dark} />
-              {!gapLinked && <>
-                <SliderRow label="Y Edge Gap" value={edgeGapY} min={0} max={50} step={0.1} onChange={handleEdgeGapY} unit="mm" dark={dark} />
-                <PitchInfo label="Y pitch" value={pitchY} dark={dark} />
-              </>}
-            </>
-          ) : (
-            <>
-              <SliderRow label="X Edge Gap" value={edgeGapX} min={0} max={50} step={0.1} onChange={handleEdgeGapX} unit="mm" dark={dark} />
-              <PitchInfo label="X pitch" value={effPitchX} dark={dark} />
-              <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>
-                Y Edge Gap: {(effPitchY - effH).toFixed(2)} mm (auto)
-                <span style={{ marginLeft: 6, fontSize: 9, color: dark ? "#555" : "#aaa" }}>
-                  pitch {effPitchY.toFixed(2)}
-                </span>
-              </div>
-            </>
-          )}
-          <SliderRow label="Panel Width" value={sheetW} min={10} max={1000} step={1} onChange={setSheetW} unit="mm" dark={dark} />
-          <SliderRow label="Panel Height" value={sheetH} min={10} max={1000} step={1} onChange={setSheetH} unit="mm" dark={dark} />
-          {/* Margin section */}
-          <div style={{ marginTop: 4 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-              <span style={{ fontSize: 10, color: textSecondary, flex: 1 }}>Margin {marginLinked ? "(Uniform)" : "(Per-side)"}</span>
-              <button onClick={() => { setMarginLinked(v => !v); if (!marginLinked) { const m = marginTop; setMarginBottom(m); setMarginLeft(m); setMarginRight(m); } }}
-                style={{ background: "none", border: "none", cursor: "pointer", padding: 2, borderRadius: 4, display: "flex", alignItems: "center", opacity: 0.8 }}
-                title={marginLinked ? "Set per-side margins" : "Use uniform margin"}>
-                <LinkIcon linked={marginLinked} dark={dark} />
-              </button>
-            </div>
-            {marginLinked ? (
-              <SliderRow label="Margin" value={marginTop} min={0} max={50} step={0.5} onChange={handleMarginUniform} unit="mm" dark={dark} />
-            ) : (
-              <>
-                <SliderRow label="Margin Top" value={marginTop} min={0} max={50} step={0.5} onChange={setMarginTop} unit="mm" dark={dark} />
-                <SliderRow label="Margin Bottom" value={marginBottom} min={0} max={50} step={0.5} onChange={setMarginBottom} unit="mm" dark={dark} />
-                <SliderRow label="Margin Left" value={marginLeft} min={0} max={50} step={0.5} onChange={setMarginLeft} unit="mm" dark={dark} />
-                <SliderRow label="Margin Right" value={marginRight} min={0} max={50} step={0.5} onChange={setMarginRight} unit="mm" dark={dark} />
-              </>
-            )}
-          </div>
-          <SliderRow label="Corner Radius" value={cornerRadius} min={0} max={Math.min(perfW / 2, perfH / 2)} step={0.5} onChange={setCornerRadius} unit="mm" dark={dark} />
-        </div>
-
         {/* Taper */}
         <div style={sectionStyle}>
           <div style={{ ...sectionTitle, display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: showTaper ? undefined : 0 }}>
@@ -2446,6 +2425,7 @@ export default function PerforationGenerator() {
             ))}
           </div>
         </div>
+      </div>
       </div>
 
       <style>{`
