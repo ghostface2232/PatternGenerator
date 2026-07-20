@@ -15,6 +15,11 @@ import {
   randomizeVariationLayer,
   variationScaleAt,
 } from "./variation-engine.js";
+import {
+  diamondFlatAngle,
+  generateRadialHoles,
+  getRadialShapeExtents,
+} from "./radial-engine.js";
 
 const PATTERN_TYPES = ["Straight", "Staggered 60°", "Staggered 45°", "Radial", "Custom Angle"];
 const HOLE_SHAPES = ["Circle", "Rectangle", "Pill", "Hexagon", "Diamond", "Triangle"];
@@ -262,12 +267,6 @@ function basePolyVerts(shape, w, h) {
   return [[0, -(h - r)], [w / 2, r], [-w / 2, r]];
 }
 
-// Rotation that lays a point-up rhombus onto one of its edges (flat side up).
-// For a square diamond this is exactly -45°.
-function diamondFlatAngle(w, h) {
-  return -Math.atan2(h, w);
-}
-
 // Interior angle + shortest adjacent edge at vertex i (for corner rounding).
 function polyCorner(verts, i) {
   const n = verts.length;
@@ -430,11 +429,65 @@ function convexPolyGap(A, B) {
   return dmin;
 }
 
+function rectHoleVerts(hole, w, h) {
+  const hw = w / 2, hh = h / 2;
+  const verts = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+  const angle = hole.angle || 0, c = Math.cos(angle), s = Math.sin(angle);
+  return verts.map(([x, y]) => [hole.x + x * c - y * s, hole.y + x * s + y * c]);
+}
+
+function roundedRectGap(h1, h2) {
+  const r1 = Math.min(h1.holeRadius || 0, h1.w / 2, h1.h / 2);
+  const r2 = Math.min(h2.holeRadius || 0, h2.w / 2, h2.h / 2);
+  const core1 = rectHoleVerts(h1, Math.max(1e-6, h1.w - 2 * r1), Math.max(1e-6, h1.h - 2 * r1));
+  const core2 = rectHoleVerts(h2, Math.max(1e-6, h2.w - 2 * r2), Math.max(1e-6, h2.h - 2 * r2));
+  return convexPolyGap(core1, core2) - r1 - r2;
+}
+
+function pillAxis(hole) {
+  const w = hole.w, h = hole.h;
+  const horizontal = w >= h;
+  const radius = Math.min(w, h) / 2;
+  const halfSegment = Math.max(w, h) / 2 - radius;
+  const angle = (hole.angle || 0) + (horizontal ? 0 : Math.PI / 2);
+  const dx = Math.cos(angle) * halfSegment, dy = Math.sin(angle) * halfSegment;
+  return { a: [hole.x - dx, hole.y - dy], b: [hole.x + dx, hole.y + dy], radius };
+}
+
+function orient2d(a, b, c) {
+  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+}
+
+function segmentsIntersect(a, b, c, d) {
+  const abC = orient2d(a, b, c), abD = orient2d(a, b, d);
+  const cdA = orient2d(c, d, a), cdB = orient2d(c, d, b);
+  if (abC * abD < 0 && cdA * cdB < 0) return true;
+  const onSegment = (p, q, r) => Math.abs(orient2d(p, q, r)) < 1e-9
+    && r[0] >= Math.min(p[0], q[0]) - 1e-9 && r[0] <= Math.max(p[0], q[0]) + 1e-9
+    && r[1] >= Math.min(p[1], q[1]) - 1e-9 && r[1] <= Math.max(p[1], q[1]) + 1e-9;
+  return onSegment(a, b, c) || onSegment(a, b, d) || onSegment(c, d, a) || onSegment(c, d, b);
+}
+
+function segmentGap(a, b, c, d) {
+  if (segmentsIntersect(a, b, c, d)) return 0;
+  return Math.min(
+    distPointSeg(a[0], a[1], c[0], c[1], d[0], d[1]),
+    distPointSeg(b[0], b[1], c[0], c[1], d[0], d[1]),
+    distPointSeg(c[0], c[1], a[0], a[1], b[0], b[1]),
+    distPointSeg(d[0], d[1], a[0], a[1], b[0], b[1])
+  );
+}
+
+function pillGap(h1, h2) {
+  const p1 = pillAxis(h1), p2 = pillAxis(h2);
+  return segmentGap(p1.a, p1.b, p2.a, p2.b) - p1.radius - p2.radius;
+}
+
 function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
   const hw = w / 2, hh = h / 2;
   // For rotated shapes, use transform (Diamond "Flat up" and point-down
   // Triangles are canonical polygons carrying a rotation angle).
-  const needsRotation = angle && (shape === "Rectangle" || shape === "Pill" || shape === "Diamond" || shape === "Triangle");
+  const needsRotation = angle && (shape === "Rectangle" || shape === "Pill" || shape === "Hexagon" || shape === "Diamond" || shape === "Triangle");
   if (needsRotation) {
     ctx.translate(x, y);
     ctx.rotate(angle);
@@ -495,7 +548,7 @@ function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
 function holeSVGElement(x, y, shape, w, h, fill, extra, angle, holeRadius) {
   const hw = w / 2, hh = h / 2;
   const attrs = extra || '';
-  const rotAttr = angle && (shape === "Rectangle" || shape === "Pill" || shape === "Diamond" || shape === "Triangle") ? ` transform="rotate(${(angle * 180 / Math.PI).toFixed(2)} ${x.toFixed(3)} ${y.toFixed(3)})"` : '';
+  const rotAttr = angle && (shape === "Rectangle" || shape === "Pill" || shape === "Hexagon" || shape === "Diamond" || shape === "Triangle") ? ` transform="rotate(${(angle * 180 / Math.PI).toFixed(2)} ${x.toFixed(3)} ${y.toFixed(3)})"` : '';
   if (shape === "Diamond" || shape === "Triangle") {
     const d = roundedPolySVGPath(x, y, basePolyVerts(shape, w, h), holeRadius);
     return `    <path d="${d}" ${fill} ${attrs}${rotAttr}/>\n`;
@@ -526,10 +579,10 @@ function holeSVGElement(x, y, shape, w, h, fill, extra, angle, holeRadius) {
         d += ` L ${f(ni[0])} ${f(ni[1])}`;
       }
       d += ' Z';
-      return `    <path d="${d}" ${fill} ${attrs}/>\n`;
+      return `    <path d="${d}" ${fill} ${attrs}${rotAttr}/>\n`;
     }
     const pts = verts.map(v => `${v[0].toFixed(3)},${v[1].toFixed(3)}`).join(" ");
-    return `    <polygon points="${pts}" ${fill} ${attrs}/>\n`;
+    return `    <polygon points="${pts}" ${fill} ${attrs}${rotAttr}/>\n`;
   }
   if (shape === "Pill") {
     if (w >= h) {
@@ -567,6 +620,39 @@ function roundedRectArea(w, h, cr) {
   const r = Math.min(cr, maxR);
   // Rectangle area minus 4 square corners plus 4 quarter-circle corners
   return w * h - 4 * r * r + Math.PI * r * r;
+}
+
+function tracePerfBoundary(ctx, params) {
+  const {
+    sheetW, sheetH,
+    marginLeft = 0, marginRight = 0, marginTop = 0, marginBottom = 0,
+    cornerRadius = 0, patternType, radialMode,
+  } = params;
+  const x = marginLeft, y = marginTop;
+  const w = Math.max(0, sheetW - marginLeft - marginRight);
+  const h = Math.max(0, sheetH - marginTop - marginBottom);
+  ctx.beginPath();
+  if (patternType === "Radial" && radialMode === "Circle") {
+    ctx.arc(x + w / 2, y + h / 2, Math.min(w, h) / 2, 0, Math.PI * 2);
+  } else {
+    ctx.roundRect(x, y, w, h, Math.min(cornerRadius, w / 2, h / 2));
+  }
+}
+
+function perfBoundarySVG(params) {
+  const {
+    sheetW, sheetH,
+    marginLeft = 0, marginRight = 0, marginTop = 0, marginBottom = 0,
+    cornerRadius = 0, patternType, radialMode,
+  } = params;
+  const x = marginLeft, y = marginTop;
+  const w = Math.max(0, sheetW - marginLeft - marginRight);
+  const h = Math.max(0, sheetH - marginTop - marginBottom);
+  if (patternType === "Radial" && radialMode === "Circle") {
+    return `<circle cx="${(x + w / 2).toFixed(3)}" cy="${(y + h / 2).toFixed(3)}" r="${(Math.min(w, h) / 2).toFixed(3)}" />`;
+  }
+  const r = Math.min(cornerRadius, w / 2, h / 2);
+  return `<rect x="${x.toFixed(3)}" y="${y.toFixed(3)}" width="${w.toFixed(3)}" height="${h.toFixed(3)}" rx="${r.toFixed(3)}" ry="${r.toFixed(3)}" />`;
 }
 
 function isPointInsideHole(px, py, hole, shape, useExit = false) {
@@ -674,7 +760,7 @@ function estimateVisibleHoleArea(hole, shape, bounds, useExit = false) {
 }
 
 function generateHoles(params) {
-  const { diameter, holeShape, holeW, holeH, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole, diamondOrient } = params;
+  const { diameter, holeShape, holeW, holeH, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, radialEdgeGap, circumEdgeGap, radialMode, centerHole, diamondOrient } = params;
   const hw = (holeW || diameter) / 2, hh = (holeH || diameter) / 2;
   const r = Math.max(hw, hh);
   const holes = [];
@@ -689,41 +775,18 @@ function generateHoles(params) {
     : pts;
 
   if (patternType === "Radial") {
-    const cx = sheetW / 2, cy = sheetH / 2;
-    const perfW = xMax - xMin, perfH = yMax - yMin;
-    // Max radius for ring generation
-    const maxRadiusFull = Math.hypot(perfW, perfH) / 2 + ringSpacing;
-    const maxRadiusCircle = Math.min(perfW, perfH) / 2;
-    const maxR = (radialMode === "Circle") ? maxRadiusCircle : maxRadiusFull;
-    const numRingsAuto = Math.max(0, Math.floor(maxR / ringSpacing));
-
-    if (centerHole) holes.push({ x: cx, y: cy, angle: flatTheta });
-    for (let ring = 1; ring <= numRingsAuto; ring++) {
-      const ringR = ring * ringSpacing;
-      const count = Math.max(1, Math.floor((2 * Math.PI * ringR) / circumSpacing));
-      for (let i = 0; i < count; i++) {
-        const angle = (2 * Math.PI * i) / count;
-        // Triangles point their apex outward along the ring, alternating in/out.
-        const holeAngle = holeShape === "Triangle"
-          ? angle + Math.PI / 2 + (i % 2) * Math.PI
-          : angle + flatTheta;
-        const hx = cx + ringR * Math.cos(angle), hy = cy + ringR * Math.sin(angle);
-        if (radialMode === "Circle") {
-          // Only include if the hole center is within the inscribed circle
-          if (Math.hypot(hx - cx, hy - cy) <= maxRadiusCircle) {
-            holes.push({ x: hx, y: hy, angle: holeAngle });
-          }
-        } else {
-          // Full mode: include if inside the (rounded) rect boundary
-          if (cornerRadius > 0) {
-            if (isInsideRoundedRect(hx, hy, xMin, yMin, xMax, yMax, cornerRadius)) holes.push({ x: hx, y: hy, angle: holeAngle });
-          } else if (hx >= xMin - r && hx <= xMax + r && hy >= yMin - r && hy <= yMax + r) {
-            holes.push({ x: hx, y: hy, angle: holeAngle });
-          }
-        }
-      }
-    }
-    return holes;
+    return generateRadialHoles({
+      shape: holeShape,
+      w: hw * 2,
+      h: hh * 2,
+      bounds: { xMin, xMax, yMin, yMax },
+      radialGap: radialEdgeGap,
+      circumGap: circumEdgeGap,
+      fillMode: radialMode,
+      centerHole,
+      cornerRadius,
+      diamondOrient,
+    });
   }
 
   // ─── Triangle: dedicated alternating ▲▽ row tiling ───────────────────
@@ -882,12 +945,8 @@ function checkShapeOverlap(h1, h2, shape) {
       holePolyVerts(shape, h2.x, h2.y, w2, h2h, h2.angle)
     ) < -0.001;
   }
-  if (shape === "Rectangle" || shape === "Pill") {
-    // Conservative AABB check; radial rotation is intentionally treated safely.
-    const gapX = Math.abs(h1.x - h2.x) - (w1 + w2) / 2;
-    const gapY = Math.abs(h1.y - h2.y) - (h1h + h2h) / 2;
-    return gapX < -0.001 && gapY < -0.001;
-  }
+  if (shape === "Rectangle") return roundedRectGap(h1, h2) < -0.001;
+  if (shape === "Pill") return pillGap(h1, h2) < -0.001;
   const r1 = Math.max(w1, h1h) / 2, r2 = Math.max(w2, h2h) / 2;
   const dx = h2.x - h1.x, dy = h2.y - h1.y;
   const dist = Math.hypot(dx, dy);
@@ -896,7 +955,8 @@ function checkShapeOverlap(h1, h2, shape) {
     // otherwise tightly-spaced honeycombs read as overlapping when they only share edges.
     if (dist < 1e-9) return true;
     const dir = Math.atan2(dy, dx);
-    return dist < hexEdgeReach(r1, dir) + hexEdgeReach(r2, dir) - 0.001;
+    return dist < hexEdgeReach(r1, dir - (h1.angle || 0))
+      + hexEdgeReach(r2, dir + Math.PI - (h2.angle || 0)) - 0.001;
   }
   // Circle: distance-based extent.
   return dist < r1 + r2 - 0.001;
@@ -910,22 +970,17 @@ function calcShapeGap(h1, h2, shape) {
       holePolyVerts(shape, h2.x, h2.y, w2, h2h, h2.angle)
     );
   }
-  if (shape === "Rectangle" || shape === "Pill") {
-    const gapX = Math.abs(h1.x - h2.x) - (w1 + w2) / 2;
-    const gapY = Math.abs(h1.y - h2.y) - (h1h + h2h) / 2;
-    // If both axes overlap → negative (overlap); otherwise the gap is the max of the two axis gaps
-    if (gapX < 0 && gapY < 0) return Math.max(gapX, gapY); // overlap amount
-    if (gapX < 0) return gapY; // only Y gap matters
-    if (gapY < 0) return gapX; // only X gap matters
-    return Math.hypot(Math.max(0, gapX), Math.max(0, gapY)); // corner gap
-  }
+  if (shape === "Rectangle") return roundedRectGap(h1, h2);
+  if (shape === "Pill") return pillGap(h1, h2);
   const r1 = Math.max(w1, h1h) / 2, r2 = Math.max(w2, h2h) / 2;
   const dx = h2.x - h1.x, dy = h2.y - h1.y;
   const dist = Math.hypot(dx, dy);
   if (shape === "Hexagon") {
     if (dist < 1e-9) return -(r1 + r2);
     const dir = Math.atan2(dy, dx);
-    return dist - hexEdgeReach(r1, dir) - hexEdgeReach(r2, dir);
+    return dist
+      - hexEdgeReach(r1, dir - (h1.angle || 0))
+      - hexEdgeReach(r2, dir + Math.PI - (h2.angle || 0));
   }
   return dist - r1 - r2;
 }
@@ -1001,6 +1056,8 @@ function generateSVGString(holes, params) {
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${sheetW}mm" height="${sheetH}mm" viewBox="0 0 ${sheetW} ${sheetH}">\n`;
   svg += `  <rect width="${sheetW}" height="${sheetH}" fill="${bgColor}" />\n`;
+  svg += `  <defs><clipPath id="perf-boundary">${perfBoundarySVG(params)}</clipPath></defs>\n`;
+  svg += `  <g clip-path="url(#perf-boundary)">\n`;
 
   if (taperActive) {
     svg += `  <g id="entry-side">\n`;
@@ -1019,7 +1076,7 @@ function generateSVGString(holes, params) {
   } else {
     holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, holeFill, '', pt.angle, pt.holeRadius); });
   }
-  return svg + `</svg>`;
+  return svg + `  </g>\n</svg>`;
 }
 
 // ─── Slider Row (improved: empty input doesn't snap) ─────────────────
@@ -1437,8 +1494,9 @@ export default function PerforationGenerator() {
   const triCellK = (triIn + edgeGapX / 2) / triIn;
   const diaIn = (effW * effH) / (2 * Math.hypot(effW, effH));
   const diaCellK = (diaIn + edgeGapX / 2) / diaIn;
-  const ringSpacing = diameter + radialEdgeGap;
-  const circumSpacing = diameter + circumEdgeGap;
+  const radialExtents = getRadialShapeExtents(holeShape, effW, effH, diamondOrient);
+  const ringSpacing = radialExtents.radial + radialEdgeGap;
+  const circumSpacing = radialExtents.tangential + circumEdgeGap;
 
   // Shape change: sync dimensions
   const handleShapeChange = useCallback((s) => {
@@ -1572,9 +1630,9 @@ export default function PerforationGenerator() {
   const params = useMemo(() => ({
     diameter, holeShape, holeW: effW, holeH: effH, holeRadius, diamondOrient, patternType, pitchX, pitchY, sheetW, sheetH,
     marginTop, marginBottom, marginLeft, marginRight, cornerRadius,
-    customAngle, ringSpacing, circumSpacing, radialMode, centerHole,
+    customAngle, radialEdgeGap, circumEdgeGap, ringSpacing, circumSpacing, radialMode, centerHole,
     thickness: showTaper ? thickness : 0, taperAngle: showTaper ? taperAngle : 0, taperDirection
-  }), [diameter, holeShape, effW, effH, holeRadius, diamondOrient, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, ringSpacing, circumSpacing, radialMode, centerHole, showTaper, thickness, taperAngle, taperDirection]);
+  }), [diameter, holeShape, effW, effH, holeRadius, diamondOrient, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, radialEdgeGap, circumEdgeGap, ringSpacing, circumSpacing, radialMode, centerHole, showTaper, thickness, taperAngle, taperDirection]);
 
   const baseHoles = useMemo(() => generateHoles(params), [params]);
   // Reset removed holes when pattern params change
@@ -1772,10 +1830,9 @@ export default function PerforationGenerator() {
 
     const showTaperRings = taperActive && !perfMode;
 
-    // Clip holes to sheet boundary
+    // Clip holes to the actual perforation boundary so preview, OAR and exports agree.
     ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, sheetW, sheetH);
+    tracePerfBoundary(ctx, params);
     ctx.clip();
 
     if (perfMode) {
@@ -2102,6 +2159,8 @@ export default function PerforationGenerator() {
     const s = Math.min(oc.width / sheetW, oc.height / sheetH);
     ctx.fillStyle = bgColor; ctx.fillRect(0, 0, oc.width, oc.height);
     ctx.save(); ctx.scale(s, s);
+    tracePerfBoundary(ctx, params);
+    ctx.clip();
     activeHoles.forEach(h => {
       ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
       ctx.fillStyle = h.isClosed ? "rgba(200,30,30,0.5)" : holeColor;
@@ -2119,7 +2178,7 @@ export default function PerforationGenerator() {
     });
     ctx.restore();
     oc.toBlob(blob => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "perforation_pattern.png"; a.click(); });
-  }, [activeHoles, sheetW, sheetH, holeShape, dark, taperActive, holeColor, bgColor]);
+  }, [activeHoles, sheetW, sheetH, holeShape, dark, taperActive, holeColor, bgColor, params]);
 
   // Theme
   const sidebarBorder = dark ? "#27272a" : "#e0e0e5";
@@ -2363,10 +2422,10 @@ export default function PerforationGenerator() {
                 </button>
               </div>
               <SliderRow label="Radial Edge Gap" value={radialEdgeGap} min={0} max={50} step={0.1} onChange={handleRadialEdgeGap} unit="mm" dark={dark} />
-              <PitchInfo label="ring spacing" value={ringSpacing} dark={dark} />
+              <PitchInfo label="nom. ring spacing" value={ringSpacing} dark={dark} />
               {!radialLinked && <>
                 <SliderRow label="Circum. Edge Gap" value={circumEdgeGap} min={0} max={50} step={0.1} onChange={handleCircumEdgeGap} unit="mm" dark={dark} />
-                <PitchInfo label="circum. spacing" value={circumSpacing} dark={dark} />
+                <PitchInfo label="min circum. spacing" value={circumSpacing} dark={dark} />
               </>}
               {radialLinked && <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>Circum. Edge Gap: {radialEdgeGap.toFixed(2)} mm (linked)</div>}
               <div style={{ marginBottom: 14 }}>
