@@ -1,5 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
+  Check, ChevronDown, Download, Eye, EyeOff, Link2, Link2Off, Lock, Maximize,
+  Moon, MoveHorizontal, MoveVertical, Plus, Redo2, Sparkles, SquarePen, Sun,
+  TriangleAlert, Undo2, X,
+} from "lucide-react";
+import {
   BLEND_MODES,
   DEFAULT_VARIATION,
   FIELD_SPACES,
@@ -1056,7 +1061,7 @@ function SliderRow({ label, value, min, max, step, onChange, unit, dark }) {
             onChange={e => setInputVal(e.target.value)}
             style={{
               width: 52, height: 24, fontSize: 11, textAlign: "right",
-              background: dark ? "#1e1e22" : "#fff", color: dark ? "#eee" : "#222",
+              background: dark ? "#131316" : "#fff", color: dark ? "#eee" : "#222",
               border: `1px solid ${dark ? "#333" : "#d0d0d0"}`,
               borderRadius: 4, padding: "0 4px", outline: "none",
               fontFamily: "'JetBrains Mono', monospace"
@@ -1095,19 +1100,167 @@ function Toggle({ value, onChange, dark }) {
   );
 }
 
-// Hex color field: swatch + text input. Partial text is held locally and only
-// pushed to the shared color once it is a complete #rrggbb value, so the
-// preview/export never sees an invalid fill.
-function HexColorField({ label, value, onChange, labelStyle, sidebarBorder, controlBg, textPrimary }) {
-  const [text, setText] = useState(value);
-  // Keep the text in sync when the color changes from outside (swatch, reset).
-  useEffect(() => { setText(value); }, [value]);
+// ─── Custom dropdown (replaces native <select>, styled to match the GUI) ──
+function Select({ value, options, onChange, dark, placeholder }) {
+  const [open, setOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState(null);
+  const btnRef = useRef(null);
+  const border = dark ? "#27272a" : "#e0e0e5";
+  const bg = dark ? "#131316" : "#ffffff";
+  const menuBg = dark ? "#1b1b1f" : "#ffffff";
+  const text = dark ? "#e4e4e7" : "#18181b";
+  const accent = dark ? "#60a5fa" : "#2563eb";
+  const current = options.find(o => String(o.value) === String(value));
+
+  const openMenu = () => {
+    const r = btnRef.current.getBoundingClientRect();
+    const menuH = Math.min(options.length * 28 + 8, 264);
+    const below = r.bottom + 4 + menuH <= window.innerHeight - 8;
+    setMenuPos({ left: r.left, width: r.width, top: below ? r.bottom + 4 : Math.max(8, r.top - 4 - menuH) });
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    const onKey = e => { if (e.key === "Escape") close(); };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("wheel", close, { passive: true });
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("wheel", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+    <div style={{ position: "relative", flex: 1, minWidth: 0 }} onPointerDown={e => e.stopPropagation()}>
+      <button ref={btnRef} onClick={() => (open ? setOpen(false) : openMenu())}
+        style={{ width: "100%", height: 30, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, padding: "0 8px 0 9px", fontSize: 11, background: bg, color: current ? text : "#71717a", border: `1px solid ${open ? accent : border}`, borderRadius: 5, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{current ? current.label : (placeholder || "Select…")}</span>
+        <ChevronDown size={12} style={{ flexShrink: 0, color: "#71717a", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+      </button>
+      {open && menuPos && (
+        <div style={{ position: "fixed", top: menuPos.top, left: menuPos.left, width: menuPos.width, maxHeight: 264, overflowY: "auto", zIndex: 100, background: menuBg, border: `1px solid ${border}`, borderRadius: 8, padding: 4, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.55)" : "0 12px 32px rgba(0,0,0,0.16)" }}>
+          {options.map(o => {
+            const selected = String(o.value) === String(value);
+            return (
+              <button key={String(o.value)} onClick={() => { onChange(o.value); setOpen(false); }} className="pg-menu-item"
+                style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", fontSize: 10.5, textAlign: "left", background: "transparent", color: selected ? accent : text, border: "none", borderRadius: 5, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.label}</span>
+                {selected && <Check size={11} style={{ flexShrink: 0 }} />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Color helpers (hex <-> HSV) ─────────────────────────────────────
+function hexToHsv(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  let h = 0;
+  if (d > 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  return [h, max === 0 ? 0 : d / max, max];
+}
+
+function hsvToHex(h, s, v) {
+  const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c;
+  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return "#" + [r, g, b].map(ch => Math.round((ch + m) * 255).toString(16).padStart(2, "0")).join("");
+}
+
+const PICKER_SWATCHES = ["#141418", "#000000", "#3f3f46", "#c8c8cd", "#ffffff", "#2563eb", "#ef4444", "#f59e0b", "#10b981"];
+
+// Color field: swatch + hex input opening a custom HSV picker popover, styled to
+// match the GUI (replaces the native <input type="color">). Partial hex text is
+// held locally and only committed once it is a complete #rrggbb value.
+function ColorField({ label, value, onChange, dark }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
+  const [text, setText] = useState(value);
+  const [hsv, setHsv] = useState(() => hexToHsv(value));
+  const hsvRef = useRef(hsv);
+  const dragging = useRef(false);
+  const swatchRef = useRef(null);
+  const border = dark ? "#27272a" : "#e0e0e5";
+  const controlBg = dark ? "#131316" : "#ffffff";
+  const textPrimary = dark ? "#e4e4e7" : "#18181b";
+  const labelStyle = { fontSize: 8, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: "#71717a", fontFamily: "'JetBrains Mono', monospace" };
+
+  useEffect(() => {
+    setText(value);
+    if (!dragging.current) { const next = hexToHsv(value); hsvRef.current = next; setHsv(next); }
+  }, [value]);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => { if (!dragging.current) setOpen(false); };
+    const onKey = e => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("wheel", close, { passive: true });
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("wheel", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const commit = (h, s, v) => {
+    const next = [h, s, v];
+    hsvRef.current = next;
+    setHsv(next);
+    onChange(hsvToHex(h, s, v));
+  };
+
+  // Shared press-drag helper for the SV pad and hue bar.
+  const dragWith = (e, apply) => {
+    dragging.current = true;
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    apply(e, el.getBoundingClientRect());
+    const move = ev => apply(ev, el.getBoundingClientRect());
+    const up = () => {
+      dragging.current = false;
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+  };
+
+  const openPicker = () => {
+    const r = swatchRef.current.getBoundingClientRect();
+    const w = 196, h = 172;
+    const left = Math.min(r.left, window.innerWidth - w - 8);
+    const top = r.bottom + 6 + h <= window.innerHeight - 8 ? r.bottom + 6 : Math.max(8, r.top - 6 - h);
+    setPos({ left, top });
+    setOpen(true);
+  };
+
+  const [hue, sat, val] = hsv;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }} onPointerDown={e => e.stopPropagation()}>
       <span style={labelStyle}>{label}</span>
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <input type="color" value={value} onChange={e => onChange(e.target.value)}
-          style={{ width: 28, height: 30, padding: 0, border: `1px solid ${sidebarBorder}`, borderRadius: 5, background: controlBg, cursor: "pointer" }} />
+        <button ref={swatchRef} onClick={() => (open ? setOpen(false) : openPicker())} title="Open color picker"
+          style={{ width: 28, height: 30, padding: 0, border: `1px solid ${open ? (dark ? "#60a5fa" : "#2563eb") : border}`, borderRadius: 6, background: value, cursor: "pointer", boxShadow: `inset 0 0 0 1px ${dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)"}` }} />
         <input type="text" value={text}
           onChange={e => {
             const v = e.target.value;
@@ -1116,9 +1269,39 @@ function HexColorField({ label, value, onChange, labelStyle, sidebarBorder, cont
             if (/^#[0-9a-fA-F]{6}$/.test(v)) onChange(v);  // commit only complete colors
           }}
           onBlur={() => setText(value)}                     // drop an incomplete edit
-          style={{ width: 68, height: 30, fontSize: 10, background: controlBg, color: textPrimary, border: `1px solid ${sidebarBorder}`, borderRadius: 5, padding: "0 6px", outline: "none", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }} />
+          style={{ width: 68, height: 30, fontSize: 10, background: controlBg, color: textPrimary, border: `1px solid ${border}`, borderRadius: 5, padding: "0 6px", outline: "none", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase" }} />
       </div>
-    </label>
+      {open && pos && (
+        <div style={{ position: "fixed", top: pos.top, left: pos.left, width: 196, zIndex: 120, padding: 10, background: dark ? "#1b1b1f" : "#ffffff", border: `1px solid ${border}`, borderRadius: 10, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.55)" : "0 12px 32px rgba(0,0,0,0.18)", display: "flex", flexDirection: "column", gap: 8, cursor: "default" }}>
+          {/* Saturation / value pad */}
+          <div onPointerDown={e => dragWith(e, (ev, rect) => {
+              const s = clamp((ev.clientX - rect.left) / rect.width, 0, 1);
+              const v = clamp(1 - (ev.clientY - rect.top) / rect.height, 0, 1);
+              commit(hsvRef.current[0], s, v);
+            })}
+            style={{ position: "relative", height: 110, borderRadius: 6, cursor: "crosshair", touchAction: "none",
+              background: `linear-gradient(to top, #000, rgba(0,0,0,0)), linear-gradient(to right, #fff, hsl(${hue}, 100%, 50%))` }}>
+            <div style={{ position: "absolute", left: `${sat * 100}%`, top: `${(1 - val) * 100}%`, width: 12, height: 12, marginLeft: -6, marginTop: -6, borderRadius: 6, border: "2px solid #fff", boxShadow: "0 0 0 1px rgba(0,0,0,0.4)", background: value, pointerEvents: "none" }} />
+          </div>
+          {/* Hue bar */}
+          <div onPointerDown={e => dragWith(e, (ev, rect) => {
+              const h = clamp((ev.clientX - rect.left) / rect.width, 0, 1) * 359.9;
+              commit(h, hsvRef.current[1], hsvRef.current[2]);
+            })}
+            style={{ position: "relative", height: 10, borderRadius: 5, cursor: "ew-resize", touchAction: "none",
+              background: "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)" }}>
+            <div style={{ position: "absolute", left: `${(hue / 360) * 100}%`, top: "50%", width: 12, height: 12, marginLeft: -6, marginTop: -6, borderRadius: 6, border: "2px solid #fff", boxShadow: "0 0 0 1px rgba(0,0,0,0.4)", background: `hsl(${hue}, 100%, 50%)`, pointerEvents: "none" }} />
+          </div>
+          {/* Preset swatches */}
+          <div style={{ display: "flex", gap: 4 }}>
+            {PICKER_SWATCHES.map(c => (
+              <button key={c} onClick={() => onChange(c)} title={c.toUpperCase()}
+                style={{ flex: 1, height: 16, padding: 0, borderRadius: 4, cursor: "pointer", background: c, border: `1px solid ${value.toLowerCase() === c ? (dark ? "#93c5fd" : "#2563eb") : (dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)")}` }} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1143,8 +1326,8 @@ function ProfileIcon({ type, active, dark }) {
 // ─── Pitch Info Display (secondary info under edge gap slider) ────────
 function PitchInfo({ label, value, dark }) {
   return (
-    <div style={{ fontSize: 9, color: dark ? "#555" : "#aaa", marginTop: -6, marginBottom: 8, paddingLeft: 2, fontFamily: "'JetBrains Mono', monospace" }}>
-      ↔ {label}: {value.toFixed(2)} mm
+    <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: dark ? "#555" : "#aaa", marginTop: -6, marginBottom: 8, paddingLeft: 2, fontFamily: "'JetBrains Mono', monospace" }}>
+      <MoveHorizontal size={9} style={{ flexShrink: 0 }} /> {label}: {value.toFixed(2)} mm
     </div>
   );
 }
@@ -1152,24 +1335,15 @@ function PitchInfo({ label, value, dark }) {
 // ─── Link Icon (for pitch sync) ──────────────────────────────────────
 function LinkIcon({ linked, dark }) {
   const c = linked ? (dark ? "#60a5fa" : "#2563eb") : (dark ? "#555" : "#aaa");
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ display: "block" }}>
-      {linked ? <>
-        <path d="M6.5 9.5L9.5 6.5" stroke={c} strokeWidth="1.3" strokeLinecap="round" />
-        <path d="M9 5l1.5-1.5a2.12 2.12 0 0 1 3 3L12 8" stroke={c} strokeWidth="1.3" strokeLinecap="round" />
-        <path d="M7 11L5.5 12.5a2.12 2.12 0 0 1-3-3L4 8" stroke={c} strokeWidth="1.3" strokeLinecap="round" />
-      </> : <>
-        <path d="M9 5l1.5-1.5a2.12 2.12 0 0 1 3 3L12 8" stroke={c} strokeWidth="1.3" strokeLinecap="round" />
-        <path d="M7 11L5.5 12.5a2.12 2.12 0 0 1-3-3L4 8" stroke={c} strokeWidth="1.3" strokeLinecap="round" />
-        <path d="M5 3l6 10" stroke={c} strokeWidth="1" strokeLinecap="round" opacity="0.5" />
-      </>}
-    </svg>
-  );
+  return linked
+    ? <Link2 size={13} color={c} style={{ display: "block" }} />
+    : <Link2Off size={13} color={c} style={{ display: "block" }} />;
 }
 
 // ─── Main App ────────────────────────────────────────────────────────
 export default function PerforationGenerator() {
   const [dark, setDark] = useState(true);
+  const [showHud, setShowHud] = useState(true); // one switch for every on-canvas overlay (margins, removed-hole marks, stats, gizmos)
   const [diameter, setDiameter] = useState(5);
   const [holeShape, setHoleShape] = useState("Circle");
   const [holeW, setHoleW] = useState(5);   // for Rectangle & Pill (mm)
@@ -1550,7 +1724,7 @@ export default function PerforationGenerator() {
       const mw = sheetW - marginLeft - marginRight, mh = sheetH - marginTop - marginBottom;
       const cr = Math.min(cornerRadius, mw / 2, mh / 2);
       const isCircleMode = isRadialPattern && radialMode === "Circle";
-      const showBoundary = hasAnyMargin || cornerRadius > 0 || isCircleMode;
+      const showBoundary = showHud && (hasAnyMargin || cornerRadius > 0 || isCircleMode);
       if (showBoundary) {
         ctx.strokeStyle = dark ? "rgba(100,160,250,0.15)" : "rgba(37,99,235,0.1)";
         ctx.lineWidth = 0.3; ctx.setLineDash([2, 2]);
@@ -1580,7 +1754,7 @@ export default function PerforationGenerator() {
       }
     }
 
-    if (variation.enabled && variationEditMode) {
+    if (variation.enabled && variationEditMode && showHud) {
       const cols = 34, rows = Math.max(18, Math.round(cols * perfH / Math.max(1, perfW)));
       const cellW = perfW / cols, cellH = perfH / rows;
       ctx.save();
@@ -1624,7 +1798,7 @@ export default function PerforationGenerator() {
         const r = Math.max(h.w, h.h) / 2;
         if (h.culled && !isRemoved) {
           // Culled by the size floor: gone from the real pattern. Show a faint ghost only while editing.
-          if (variation.enabled && variationEditMode) {
+          if (variation.enabled && variationEditMode && showHud) {
             ctx.beginPath(); ctx.arc(h.x, h.y, Math.max(0.15, r), 0, Math.PI * 2);
             ctx.strokeStyle = dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.12)";
             ctx.lineWidth = 0.2; ctx.setLineDash([0.6, 0.6]); ctx.stroke(); ctx.setLineDash([]);
@@ -1632,6 +1806,7 @@ export default function PerforationGenerator() {
           return;
         }
         if (isRemoved) {
+          if (!showHud) return; // HUD hidden: removed holes vanish entirely
           // Draw removed hole as faint outline
           ctx.beginPath(); traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
           ctx.strokeStyle = dark ? "rgba(255,100,100,0.25)" : "rgba(200,50,50,0.2)";
@@ -1691,7 +1866,7 @@ export default function PerforationGenerator() {
     ctx.strokeStyle = dark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.15)";
     ctx.lineWidth = 0.5; ctx.strokeRect(0, 0, sheetW, sheetH);
 
-    if (variation.enabled && variationEditMode && selectedVariationLayer) {
+    if (variation.enabled && variationEditMode && selectedVariationLayer && showHud) {
       const px = 1 / baseScale;                       // one screen pixel in sheet units
       const g = computeGizmo(selectedVariationLayer, { marginLeft, marginTop, perfW, perfH }, 12 * px);
       const accent = dark ? "#93c5fd" : "#2563eb";
@@ -1749,7 +1924,7 @@ export default function PerforationGenerator() {
       ctx.font = "11px 'JetBrains Mono', monospace"; ctx.textAlign = "left";
       ctx.fillText(`⚡ Performance mode (${holeCount.toLocaleString()} holes)`, 12, ch - 12);
     }
-  }, [holes, overlaps, params, dark, pan, zoom, perfMode, holeCount, holeShape, pitchX, pitchY, patternType, marginTop, marginBottom, marginLeft, marginRight, hasAnyMargin, cornerRadius, radialMode, isRadialPattern, sheetW, sheetH, taperActive, thickness, taperAngle, taperDirection, removedHoles, variation, variationEditMode, selectedVariationLayer, perfW, perfH, holeColor, bgColor]);
+  }, [holes, overlaps, params, dark, pan, zoom, perfMode, holeCount, holeShape, pitchX, pitchY, patternType, marginTop, marginBottom, marginLeft, marginRight, hasAnyMargin, cornerRadius, radialMode, isRadialPattern, sheetW, sheetH, taperActive, thickness, taperAngle, taperDirection, removedHoles, variation, variationEditMode, selectedVariationLayer, perfW, perfH, holeColor, bgColor, showHud]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1809,7 +1984,7 @@ export default function PerforationGenerator() {
     if (e.button !== 0) return;
     pointerDownPos.current = { x: e.clientX, y: e.clientY };
     const view = gizmoRef.current;
-    if (variation.enabled && variationEditMode && !spacePressed.current && selectedVariationLayer && view) {
+    if (variation.enabled && variationEditMode && showHud && !spacePressed.current && selectedVariationLayer && view) {
       const sheet = clientToSheet(e.clientX, e.clientY);
       if (sheet) {
         const geom = { marginLeft, marginTop, perfW, perfH };
@@ -1837,7 +2012,7 @@ export default function PerforationGenerator() {
     panStart.current = { x: e.clientX, y: e.clientY };
     panOrigin.current = { ...pan };
     e.currentTarget.setPointerCapture(e.pointerId);
-  }, [pan, variation.enabled, variationEditMode, selectedVariationLayer, marginLeft, marginTop, perfW, perfH, clientToSheet, setShapeHud]);
+  }, [pan, variation.enabled, variationEditMode, showHud, selectedVariationLayer, marginLeft, marginTop, perfW, perfH, clientToSheet, setShapeHud]);
   const handlePointerMove = useCallback((e) => {
     if (variationDrag.current) {
       const sheet = clientToSheet(e.clientX, e.clientY);
@@ -1950,12 +2125,19 @@ export default function PerforationGenerator() {
   const sidebarBorder = dark ? "#27272a" : "#e0e0e5";
   const textPrimary = dark ? "#e4e4e7" : "#18181b";
   const textSecondary = dark ? "#71717a" : "#71717a";
-  const sectionBorder = dark ? "#222225" : "#ececf0";
-  const controlBg = dark ? "#1e1e22" : "#fafafa";
+  const sectionBorder = dark ? "#232327" : "#e8e8ee";
+  const controlBg = dark ? "#131316" : "#ffffff";
   const btnBg = dark ? "#27272a" : "#e8e8ec";
   const accentColor = dark ? "#60a5fa" : "#2563eb";
   const warnColor = "#ef4444";
-  const sectionStyle = { padding: "14px 0", borderBottom: `1px solid ${sectionBorder}` };
+  const panelBg = dark ? "#161619" : "#ffffff";
+  const cardBg = dark ? "#1d1d21" : "#f6f6f8";
+  // Floating surfaces: layered transparent shadows instead of hard borders
+  const floatShadow = dark
+    ? "0 0 0 1px rgba(255,255,255,0.06), 0 2px 6px rgba(0,0,0,0.35), 0 16px 32px rgba(0,0,0,0.28)"
+    : "0 0 0 1px rgba(0,0,0,0.05), 0 2px 6px rgba(0,0,0,0.05), 0 12px 28px rgba(0,0,0,0.09)";
+  // Sidebar sections render as cards: radius 8 + shell padding 8 keeps them concentric with the 16px shell
+  const sectionStyle = { padding: 14, marginBottom: 8, background: cardBg, border: `1px solid ${sectionBorder}`, borderRadius: 8 };
   const sectionTitle = { fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1.2, color: textSecondary, marginBottom: 14, fontFamily: "'JetBrains Mono', monospace" };
 
   const isRadial = patternType === "Radial";
@@ -1991,21 +2173,17 @@ export default function PerforationGenerator() {
       border: `1px solid ${active ? accentColor : sidebarBorder}`,
       background: active ? (dark ? "rgba(96,165,250,0.15)" : "rgba(37,99,235,0.08)") : "transparent",
       color: active ? accentColor : textSecondary,
-      cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", transition: "all 0.15s"
+      cursor: "pointer", fontFamily: "'JetBrains Mono', monospace"
     }}>{label}</button>
   );
 
-  // Top-bar dropdown helper (label + native <select> styled as a dropdown)
+  // Dropdown helper (label + custom Select), used in the sidebar's Pattern card
   const topLabelStyle = { fontSize: 8, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: textSecondary, fontFamily: "'JetBrains Mono', monospace" };
-  const topSelectStyle = { height: 30, fontSize: 11, background: controlBg, color: textPrimary, border: `1px solid ${sidebarBorder}`, borderRadius: 5, padding: "0 24px 0 9px", outline: "none", fontFamily: "'JetBrains Mono', monospace", cursor: "pointer", appearance: "none", WebkitAppearance: "none", MozAppearance: "none" };
-  const topDropdown = (label, value, onChange, options, minWidth) => (
-    <label key={label} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+  const dropdown = (label, value, onChange, options) => (
+    <div key={label} style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
       <span style={topLabelStyle}>{label}</span>
-      <div style={{ position: "relative", display: "inline-flex" }}>
-        <select value={value} onChange={onChange} style={{ ...topSelectStyle, minWidth: minWidth || 110 }}>{options}</select>
-        <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", fontSize: 8, color: textSecondary }}>▾</span>
-      </div>
-    </label>
+      <Select value={value} onChange={onChange} options={options} dark={dark} />
+    </div>
   );
   const topStat = (label, value, color) => (
     <div key={label} style={{ display: "flex", flexDirection: "column", gap: 2, whiteSpace: "nowrap" }}>
@@ -2013,73 +2191,94 @@ export default function PerforationGenerator() {
       <span style={{ fontSize: 11, fontWeight: 500, color: color || textPrimary, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.1 }}>{value}</span>
     </div>
   );
-  const topDivider = <div style={{ width: 1, alignSelf: "stretch", background: sectionBorder, margin: "8px 0" }} />;
+  // Small label/value row for the canvas HUD card
+  const hudRow = (label, value, color) => (
+    <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 14, fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>
+      <span style={{ color: textSecondary }}>{label}</span>
+      <span style={{ color: color || textPrimary, fontWeight: 500 }}>{value}</span>
+    </div>
+  );
+  const topDivider = <div style={{ width: 1, alignSelf: "stretch", background: sectionBorder, margin: "10px 0" }} />;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", width: "100vw", height: "100vh", background: dark ? "#111113" : "#f2f2f5", color: textPrimary, fontFamily: "'JetBrains Mono', -apple-system, sans-serif", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100vw", height: "100vh", padding: 10, background: dark ? "#0b0b0d" : "#dfdfe5", color: textPrimary, fontFamily: "'JetBrains Mono', -apple-system, sans-serif", overflow: "hidden", WebkitFontSmoothing: "antialiased", fontVariantNumeric: "tabular-nums" }}>
       <link rel="preconnect" href="https://fonts.googleapis.com" />
       <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet" />
 
-      {/* Top bar */}
-      <div style={{ display: "flex", alignItems: "center", gap: 14, height: 56, flexShrink: 0, padding: "0 16px", background: dark ? "#161619" : "#ffffff", borderBottom: `1px solid ${sidebarBorder}`, boxSizing: "border-box", overflowX: "auto", overflowY: "hidden" }}>
+      {/* Floating top bar — OAR info only */}
+      <div style={{ display: "flex", alignItems: "center", gap: 16, height: 54, flexShrink: 0, padding: "0 18px", background: panelBg, borderRadius: 12, boxShadow: floatShadow }}>
+        <div style={{ whiteSpace: "nowrap" }}>
+          <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: -0.3 }}>Perf Pattern</div>
+          <div style={{ fontSize: 8, color: textSecondary, marginTop: 1, letterSpacing: 0.5 }}>PERFORATION GENERATOR</div>
+        </div>
+        {topDivider}
         {/* Current OAR */}
-        <div style={{ display: "flex", alignItems: "baseline", gap: 5, whiteSpace: "nowrap" }}>
-          <span style={{ fontSize: 22, fontWeight: 700, color: accentColor, lineHeight: 1 }}>{displayOAR.toFixed(1)}</span>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 6, whiteSpace: "nowrap" }}>
+          <span style={{ fontSize: 24, fontWeight: 700, color: accentColor, lineHeight: 1 }}>{displayOAR.toFixed(1)}</span>
           <span style={{ fontSize: 10, color: textSecondary }}>% OAR</span>
           {taperActive && oarDelta < 0 && <span style={{ fontSize: 9, color: dark ? "#f87171" : "#dc2626" }}>({oarDelta.toFixed(1)}%p taper)</span>}
         </div>
-        {topDivider}
-        {/* Stats */}
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          {topStat("Total Holes", holeCount.toLocaleString())}
-          {topStat("Active Holes", hasRemovedHoles ? activeHoleCount.toLocaleString() : holeCount.toLocaleString(), hasRemovedHoles ? warnColor : textPrimary)}
-          {topStat(variation.enabled ? "Avg Hole Area" : "Hole Area", `${singleHoleArea.toFixed(2)} mm²`)}
-          {topStat("Open Area", `${totalHoleArea.toFixed(1)} mm²`)}
-          {topStat("Panel Area", `${grossArea.toFixed(0)} mm²`)}
-          {topStat("Perf. Area", `${perforatedArea.toFixed(0)} mm²`)}
-          {minLigament !== null && topStat("Min Ligament", `${minLigament.toFixed(2)} mm`, minLigament <= 0 ? warnColor : accentColor)}
-          {taperActive && topStat("Surface OAR", `${nominalOAR.toFixed(1)}%`, dark ? "#999" : "#666")}
-          {taperActive && topStat("Effective OAR", `${effectiveOAR.toFixed(1)}%`, accentColor)}
-        </div>
-        {topDivider}
-        {/* Preset / Type / Shape dropdowns */}
-        {topDropdown("Preset (DIN 24041)", selectedPreset, e => applyPreset(parseInt(e.target.value)), DIN_PRESETS.map((p, i) => <option key={i} value={i}>{p.name}</option>, ), 190)}
-        {topDropdown("Type", patternType, e => { setPatternType(e.target.value); setSelectedPreset(0); }, PATTERN_TYPES.map(pt => <option key={pt} value={pt}>{pt}</option>), 130)}
-        {topDropdown("Hole Shape", holeShape, e => handleShapeChange(e.target.value), HOLE_SHAPES.map(s => <option key={s} value={s}>{s}</option>), 120)}
-        {topDivider}
-        {/* Colors */}
-        <HexColorField label="Hole Color" value={holeColor} onChange={setHoleColor} labelStyle={topLabelStyle} sidebarBorder={sidebarBorder} controlBg={controlBg} textPrimary={textPrimary} />
-        <HexColorField label="Background" value={bgColor} onChange={setBgColor} labelStyle={topLabelStyle} sidebarBorder={sidebarBorder} controlBg={controlBg} textPrimary={textPrimary} />
-
+        {taperActive && <>
+          {topDivider}
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            {topStat("Surface OAR", `${nominalOAR.toFixed(1)}%`, dark ? "#999" : "#666")}
+            {topStat("Effective OAR", `${effectiveOAR.toFixed(1)}%`, accentColor)}
+          </div>
+        </>}
+        <div style={{ flex: 1 }} />
+        {/* View controls: HUD toggle + reset, next to the theme toggle */}
+        <button onClick={() => setShowHud(v => !v)}
+          title="Show/hide all canvas overlays (margins, removed-hole marks, stats, gizmos)"
+          style={{ height: 30, padding: "0 10px", borderRadius: 7, border: `1px solid ${showHud ? sidebarBorder : accentColor}`, background: controlBg, cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, color: showHud ? textPrimary : accentColor, flexShrink: 0, fontFamily: "'JetBrains Mono', monospace" }}>
+          {showHud ? <Eye size={12} /> : <EyeOff size={12} />} HUD
+        </button>
+        <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
+          title="Reset zoom & pan"
+          style={{ height: 30, padding: "0 10px", borderRadius: 7, border: `1px solid ${sidebarBorder}`, background: controlBg, cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, color: textPrimary, flexShrink: 0, fontFamily: "'JetBrains Mono', monospace" }}>
+          <Maximize size={12} /> Reset View
+        </button>
+        <button onClick={() => setDark(d => !d)} title="Toggle theme"
+          style={{ width: 30, height: 30, borderRadius: 7, border: `1px solid ${sidebarBorder}`, background: controlBg, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: textPrimary, flexShrink: 0 }}>
+          {dark ? <Sun size={14} /> : <Moon size={14} />}
+        </button>
       </div>
 
-      {/* Body: canvas + sidebar */}
-      <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}>
+      {/* Body: floating sidebar (left) + floating canvas (right, via flex order) */}
+      <div style={{ display: "flex", flex: 1, minHeight: 0, gap: 10 }}>
 
       {/* Canvas */}
-      <div ref={containerRef} style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+      <div ref={containerRef} style={{ flex: 1, position: "relative", overflow: "hidden", order: 2, borderRadius: 16, boxShadow: floatShadow, background: dark ? "#0f0f11" : "#e8e8ec" }}>
         <canvas ref={canvasRef}
           style={{ width: "100%", height: "100%", cursor: variation.enabled && variationEditMode ? "crosshair" : isPanning ? "grabbing" : holeRemovalMode ? "crosshair" : "grab", touchAction: "none" }}
           onWheel={handleWheel} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp}
         />
-        {/* Top-left: key stats + warnings */}
+        {/* Top-left HUD: key stats + warnings */}
+        {showHud && (
         <div style={{ position: "absolute", top: 12, left: 12, display: "flex", flexDirection: "column", gap: 6, pointerEvents: "none" }}>
-          {/* Holes summary */}
-          <div style={{ background: dark ? "rgba(0,0,0,0.65)" : "rgba(255,255,255,0.8)", backdropFilter: "blur(10px)", padding: "8px 12px", borderRadius: 6, fontFamily: "'JetBrains Mono', monospace", border: `1px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)"}` }}>
-            <div style={{ display: "flex", gap: 12 }}>
+          {/* Stats card */}
+          <div style={{ background: dark ? "rgba(0,0,0,0.65)" : "rgba(255,255,255,0.8)", backdropFilter: "blur(10px)", padding: "8px 12px", borderRadius: 8, fontFamily: "'JetBrains Mono', monospace", border: `1px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)"}` }}>
+            <div style={{ display: "flex", gap: 12, marginBottom: 6 }}>
               <span style={{ fontSize: 10, color: textSecondary }}>Holes <span style={{ color: textPrimary, fontWeight: 500 }}>{activeHoleCount.toLocaleString()}</span>{hasRemovedHoles ? <span style={{ color: warnColor }}> / {holeCount.toLocaleString()}</span> : ""}</span>
               <span style={{ fontSize: 10, color: textSecondary }}>{zoom.toFixed(1)}x</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              {hudRow(variation.enabled ? "Avg Hole Area" : "Hole Area", `${singleHoleArea.toFixed(2)} mm²`)}
+              {hudRow("Open Area", `${totalHoleArea.toFixed(1)} mm²`)}
+              {hudRow("Panel Area", `${grossArea.toFixed(0)} mm²`)}
+              {hudRow("Perf. Area", `${perforatedArea.toFixed(0)} mm²`)}
+              {minLigament !== null && hudRow("Min Ligament", `${minLigament.toFixed(2)} mm`, minLigament <= 0 ? warnColor : accentColor)}
             </div>
           </div>
           {/* Warning badges */}
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {hasOverlap && <span style={{ fontSize: 10, color: "#fff", background: warnColor, padding: "3px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace" }}>⚠ Holes overlap</span>}
-            {taperActive && hasClosedHoles && <span style={{ fontSize: 10, color: "#fff", background: warnColor, padding: "3px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace" }}>⚠ {closedHoleCount}/{activeHoleCount} holes closed</span>}
+            {hasOverlap && <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: "#fff", background: warnColor, padding: "3px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace" }}><TriangleAlert size={10} /> Holes overlap</span>}
+            {taperActive && hasClosedHoles && <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: "#fff", background: warnColor, padding: "3px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace" }}><TriangleAlert size={10} /> {closedHoleCount}/{activeHoleCount} holes closed</span>}
             {holeRemovalMode && <span style={{ fontSize: 10, color: "#fff", background: dark ? "#7c3aed" : "#6d28d9", padding: "3px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace" }}>HOLE REMOVAL MODE{removedHoles.size > 0 ? ` (${removedHoles.size} removed)` : ""}</span>}
             {variation.enabled && variationEditMode && <span style={{ fontSize: 10, color: "#fff", background: dark ? "#2563eb" : "#1d4ed8", padding: "3px 8px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace" }}>EDIT VARIATION · SPACE TO PAN</span>}
           </div>
         </div>
-        {variationHud && (
+        )}
+        {showHud && variationHud && (
           <div style={{ position: "absolute", right: 18, bottom: 18, width: 190, padding: "10px 12px", borderRadius: 7, background: dark ? "rgba(10,10,14,0.82)" : "rgba(255,255,255,0.88)", border: `1px solid ${dark ? "rgba(147,197,253,0.25)" : "rgba(37,99,235,0.2)"}`, backdropFilter: "blur(12px)", pointerEvents: "none", boxShadow: "0 8px 28px rgba(0,0,0,0.18)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: textSecondary, marginBottom: 5 }}><span>{variationHud.positionLabel}</span><span style={{ color: accentColor }}>{variationHud.positionValue.toFixed(2)}</span></div>
             <div style={{ height: 2, borderRadius: 2, background: dark ? "#292933" : "#ddd", marginBottom: 8 }}><div style={{ width: `${variationHud.positionValue * 100}%`, height: "100%", background: accentColor }} /></div>
@@ -2087,32 +2286,27 @@ export default function PerforationGenerator() {
             <div style={{ height: 2, borderRadius: 2, background: dark ? "#292933" : "#ddd" }}><div style={{ width: `${clamp(variationHud.exponent / 5, 0, 1) * 100}%`, height: "100%", background: accentColor }} /></div>
           </div>
         )}
-        <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
-          style={{ position: "absolute", bottom: 12, left: 12, fontSize: 10, color: textSecondary, background: dark ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.7)", padding: "4px 10px", borderRadius: 4, border: "none", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", backdropFilter: "blur(8px)" }}>
-          Reset View
-        </button>
       </div>
 
-      {/* Sidebar */}
-      <div style={{ width: 440, minWidth: 440, height: "100%", overflowY: "auto", overflowX: "hidden", background: dark ? "#18181b" : "#ffffff", borderLeft: `1px solid ${sidebarBorder}`, padding: "0 20px", boxSizing: "border-box", scrollbarWidth: "thin", scrollbarColor: dark ? "#333 transparent" : "#ccc transparent" }}>
+      {/* Floating sidebar (left): uniform 8px padding on the shell; the inner scroller
+          bleeds 5px into the right padding so the scrollbar overlays it — content stays
+          inset 8px on every side. */}
+      <div style={{ width: 440, minWidth: 440, height: "100%", order: 1, background: panelBg, borderRadius: 16, boxShadow: floatShadow, padding: 8, boxSizing: "border-box", overflow: "hidden" }}>
+      <div style={{ height: "100%", overflowY: "auto", overflowX: "hidden", marginRight: -5, paddingRight: 5, scrollbarWidth: "thin", scrollbarColor: dark ? "#333 transparent" : "#ccc transparent" }}>
 
-        {/* Header */}
-        <div style={{ padding: "14px 0 8px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${sectionBorder}` }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: -0.3 }}>Perf Pattern</div>
-            <div style={{ fontSize: 9, color: textSecondary, marginTop: 2, letterSpacing: 0.5 }}>CIRCULAR PERFORATION GENERATOR</div>
+        {/* Pattern & hole options */}
+        <div style={sectionStyle}>
+          <div style={sectionTitle}>Pattern & Hole</div>
+          {dropdown("Preset (DIN 24041)", selectedPreset, v => applyPreset(parseInt(v)), DIN_PRESETS.map((p, i) => ({ value: i, label: p.name })))}
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            {dropdown("Type", patternType, v => { setPatternType(v); setSelectedPreset(0); }, PATTERN_TYPES.map(pt => ({ value: pt, label: pt })))}
+            {dropdown("Hole Shape", holeShape, v => handleShapeChange(v), HOLE_SHAPES.map(s => ({ value: s, label: s })))}
           </div>
-          <button onClick={() => setDark(d => !d)} style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${sidebarBorder}`, background: controlBg, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", color: textPrimary }}>
-            {dark ? "☀" : "☽"}
-          </button>
         </div>
 
         {/* Dimensions */}
         <div style={sectionStyle}>
           <div style={sectionTitle}>Dimensions</div>
-          <div style={{ fontSize: 9, color: textSecondary, marginBottom: 14, lineHeight: 1.5 }}>
-            <span style={{ color: textPrimary, fontWeight: 500 }}>{patternType}</span> · <span style={{ color: textPrimary, fontWeight: 500 }}>{holeShape}</span> — change via the top bar.
-          </div>
           {holeShape === "Triangle" && !isRadial && (
             <div style={{ fontSize: 9, color: textSecondary, marginBottom: 14, lineHeight: 1.5 }}>
               ▲▽ Triangles fill in alternating up/down rows — a seamless fit at 0 gap. All grid types share this tiling; Radial places them on rings instead.
@@ -2143,8 +2337,8 @@ export default function PerforationGenerator() {
                 </label>
               )}
               {holeShape === "Triangle" && triEquilateral ? (
-                <div style={{ fontSize: 9, color: dark ? "#555" : "#aaa", marginTop: -4, marginBottom: 10, paddingLeft: 2, fontFamily: "'JetBrains Mono', monospace" }}>
-                  ↕ Height (H): {effH.toFixed(2)} mm
+                <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: dark ? "#555" : "#aaa", marginTop: -4, marginBottom: 10, paddingLeft: 2, fontFamily: "'JetBrains Mono', monospace" }}>
+                  <MoveVertical size={9} style={{ flexShrink: 0 }} /> Height (H): {effH.toFixed(2)} mm
                 </div>
               ) : (
                 <SliderRow label={holeShape === "Diamond" ? "Height (diagonal)" : "Height (H)"} value={holeH} min={0.5} max={30} step={0.1} onChange={v => { setHoleH(v); setSelectedPreset(0); }} unit="mm" dark={dark} />
@@ -2265,34 +2459,31 @@ export default function PerforationGenerator() {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 5, marginBottom: 8 }}>
-            <select value="" onChange={e => applyVariationPreset(e.target.value)}
-              style={{ minWidth: 0, height: 30, fontSize: 10, background: controlBg, color: textPrimary, border: `1px solid ${sidebarBorder}`, borderRadius: 4, padding: "0 8px", outline: "none", fontFamily: "'JetBrains Mono', monospace" }}>
-              <option value="">Load a field preset…</option>
-              {Object.keys(VARIATION_PRESETS).map(name => <option key={name} value={name}>{name}</option>)}
-            </select>
-            <button onClick={undoVariation} disabled={!canUndoVariation} title="Undo variation" style={{ width: 30, border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: canUndoVariation ? textPrimary : textSecondary, cursor: canUndoVariation ? "pointer" : "default", opacity: canUndoVariation ? 1 : 0.45 }}>↶</button>
-            <button onClick={redoVariation} disabled={!canRedoVariation} title="Redo variation" style={{ width: 30, border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: canRedoVariation ? textPrimary : textSecondary, cursor: canRedoVariation ? "pointer" : "default", opacity: canRedoVariation ? 1 : 0.45 }}>↷</button>
+            <Select value="" placeholder="Load a field preset…" onChange={name => applyVariationPreset(name)} dark={dark}
+              options={Object.keys(VARIATION_PRESETS).map(name => ({ value: name, label: name }))} />
+            <button onClick={undoVariation} disabled={!canUndoVariation} title="Undo variation" style={{ width: 30, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: canUndoVariation ? textPrimary : textSecondary, cursor: canUndoVariation ? "pointer" : "default", opacity: canUndoVariation ? 1 : 0.45 }}><Undo2 size={13} /></button>
+            <button onClick={redoVariation} disabled={!canRedoVariation} title="Redo variation" style={{ width: 30, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: canRedoVariation ? textPrimary : textSecondary, cursor: canRedoVariation ? "pointer" : "default", opacity: canRedoVariation ? 1 : 0.45 }}><Redo2 size={13} /></button>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 12 }}>
-            <button onClick={randomizeVariation} style={{ height: 31, border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: textPrimary, fontSize: 10, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>✦ Randomize</button>
+            <button onClick={randomizeVariation} style={{ height: 31, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: textPrimary, fontSize: 10, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}><Sparkles size={11} /> Randomize</button>
             <button onClick={() => {
               const next = !variationEditMode;
               setVariationEditMode(next);
               if (next) { setHoleRemovalMode(false); if (!variation.enabled) commitVariation(current => ({ ...current, enabled: true })); }
-            }} style={{ height: 31, border: `1px solid ${variationEditMode ? accentColor : sidebarBorder}`, borderRadius: 4, background: variationEditMode ? (dark ? "rgba(96,165,250,0.14)" : "rgba(37,99,235,0.08)") : controlBg, color: variationEditMode ? accentColor : textPrimary, fontSize: 10, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>{variationEditMode ? "✓ Editing Canvas" : "⌁ Edit on Canvas"}</button>
+            }} style={{ height: 31, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, border: `1px solid ${variationEditMode ? accentColor : sidebarBorder}`, borderRadius: 4, background: variationEditMode ? (dark ? "rgba(96,165,250,0.14)" : "rgba(37,99,235,0.08)") : controlBg, color: variationEditMode ? accentColor : textPrimary, fontSize: 10, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>{variationEditMode ? <><Check size={11} /> Editing Canvas</> : <><SquarePen size={11} /> Edit on Canvas</>}</button>
           </div>
 
           {variation.enabled && selectedVariationLayer && <>
             <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 12 }}>
               {variation.layers.map((layer, index) => (
                 <button key={layer.id} onClick={() => updateVariationLive(current => ({ ...current, selectedLayerId: layer.id }))}
-                  style={{ flex: 1, height: 28, border: `1px solid ${variation.selectedLayerId === layer.id ? accentColor : sidebarBorder}`, borderRadius: 4, background: variation.selectedLayerId === layer.id ? (dark ? "rgba(96,165,250,0.12)" : "rgba(37,99,235,0.07)") : "transparent", color: variation.selectedLayerId === layer.id ? accentColor : textSecondary, fontSize: 9, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", opacity: layer.enabled ? 1 : 0.45 }}>
-                  {layer.locked ? "◆" : "◇"} Layer {index + 1}
+                  style={{ flex: 1, height: 28, display: "flex", alignItems: "center", justifyContent: "center", gap: 4, border: `1px solid ${variation.selectedLayerId === layer.id ? accentColor : sidebarBorder}`, borderRadius: 4, background: variation.selectedLayerId === layer.id ? (dark ? "rgba(96,165,250,0.12)" : "rgba(37,99,235,0.07)") : "transparent", color: variation.selectedLayerId === layer.id ? accentColor : textSecondary, fontSize: 9, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", opacity: layer.enabled ? 1 : 0.45 }}>
+                  {layer.locked && <Lock size={8} style={{ flexShrink: 0 }} />} Layer {index + 1}
                 </button>
               ))}
-              <button onClick={addVariationLayer} disabled={variation.layers.length >= 3} title="Add layer" style={{ width: 28, height: 28, border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: textPrimary, cursor: variation.layers.length >= 3 ? "default" : "pointer", opacity: variation.layers.length >= 3 ? 0.4 : 1 }}>+</button>
-              {variation.layers.length > 1 && <button onClick={removeSelectedVariationLayer} title="Remove selected layer" style={{ width: 28, height: 28, border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: warnColor, cursor: "pointer" }}>×</button>}
+              <button onClick={addVariationLayer} disabled={variation.layers.length >= 3} title="Add layer" style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: textPrimary, cursor: variation.layers.length >= 3 ? "default" : "pointer", opacity: variation.layers.length >= 3 ? 0.4 : 1 }}><Plus size={13} /></button>
+              {variation.layers.length > 1 && <button onClick={removeSelectedVariationLayer} title="Remove selected layer" style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${sidebarBorder}`, borderRadius: 4, background: controlBg, color: warnColor, cursor: "pointer" }}><X size={13} /></button>}
             </div>
 
             <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.8, color: textSecondary, marginBottom: 6 }}>Field Space</div>
@@ -2315,8 +2506,9 @@ export default function PerforationGenerator() {
             {selectedVariationLayer.profile === "Steps" && <SliderRow label="Step Count" value={selectedVariationLayer.steps} min={2} max={16} step={1} onChange={steps => updateSelectedVariationLayer({ steps })} dark={dark} />}
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <SliderRow label="Min Scale" value={variation.minScale * 100} min={1} max={200} step={1} onChange={value => updateVariationLive(current => ({ ...current, minScale: Math.min(value / 100, current.maxScale) }))} unit="%" dark={dark} />
-              <SliderRow label="Max Scale" value={variation.maxScale * 100} min={5} max={250} step={1} onChange={value => updateVariationLive(current => ({ ...current, maxScale: Math.max(value / 100, current.minScale) }))} unit="%" dark={dark} />
+              {/* Whole-percent steps: round on both display and commit so slider drags never surface float artifacts */}
+              <SliderRow label="Min Scale" value={Math.round(variation.minScale * 100)} min={1} max={200} step={1} onChange={value => updateVariationLive(current => ({ ...current, minScale: Math.min(Math.round(value) / 100, current.maxScale) }))} unit="%" dark={dark} />
+              <SliderRow label="Max Scale" value={Math.round(variation.maxScale * 100)} min={5} max={250} step={1} onChange={value => updateVariationLive(current => ({ ...current, maxScale: Math.max(Math.round(value) / 100, current.minScale) }))} unit="%" dark={dark} />
             </div>
             <div style={{ marginTop: -5, marginBottom: 10, padding: "6px 8px", borderRadius: 4, background: dark ? "rgba(96,165,250,0.06)" : "rgba(37,99,235,0.04)", fontSize: 9, color: textSecondary, display: "flex", justifyContent: "space-between" }}>
               <span>Actual extent</span><span style={{ color: accentColor }}>{(Math.min(effW, effH) * variation.minScale).toFixed(2)}–{(Math.max(effW, effH) * variation.maxScale).toFixed(2)} mm</span>
@@ -2327,7 +2519,7 @@ export default function PerforationGenerator() {
               <span>Holes removed by size floor</span><span style={{ color: warnColor }}>{culledHoleCount.toLocaleString()}</span>
             </div>}
 
-            <button onClick={() => setVariationAdvanced(value => !value)} style={{ width: "100%", height: 28, display: "flex", alignItems: "center", justifyContent: "space-between", border: "none", borderTop: `1px solid ${sectionBorder}`, background: "transparent", color: textSecondary, fontSize: 9, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}><span>ADVANCED MODIFIERS</span><span>{variationAdvanced ? "−" : "+"}</span></button>
+            <button onClick={() => setVariationAdvanced(value => !value)} style={{ width: "100%", height: 28, display: "flex", alignItems: "center", justifyContent: "space-between", border: "none", borderTop: `1px solid ${sectionBorder}`, background: "transparent", color: textSecondary, fontSize: 9, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}><span>ADVANCED MODIFIERS</span><ChevronDown size={12} style={{ transform: variationAdvanced ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} /></button>
             {variationAdvanced && <div style={{ paddingTop: 9 }}>
               <div style={{ fontSize: 9, color: textSecondary, marginBottom: 11, lineHeight: 1.5 }}>Direction, origin, reach, position &amp; curve live on the canvas handles. These are the extra modifiers.</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
@@ -2336,7 +2528,7 @@ export default function PerforationGenerator() {
               <SliderRow label="Jitter" value={selectedVariationLayer.jitter} min={0} max={0.5} step={0.01} onChange={jitter => updateSelectedVariationLayer({ jitter })} dark={dark} />
               <SliderRow label="Quantize Sizes" value={variation.quantize} min={0} max={12} step={1} onChange={quantize => updateVariationLive(current => ({ ...current, quantize }))} unit={variation.quantize >= 2 ? "levels" : "off"} dark={dark} />
               <SliderRow label="Layer Opacity" value={selectedVariationLayer.opacity * 100} min={0} max={100} step={1} onChange={opacity => updateSelectedVariationLayer({ opacity: opacity / 100 })} unit="%" dark={dark} />
-              {variation.layers.length > 1 && <div style={{ marginBottom: 10 }}><div style={{ fontSize: 10, color: textSecondary, marginBottom: 5 }}>Blend Mode</div><select value={selectedVariationLayer.blendMode} onChange={e => updateSelectedVariationLayer({ blendMode: e.target.value }, true)} style={{ width: "100%", height: 30, fontSize: 10, background: controlBg, color: textPrimary, border: `1px solid ${sidebarBorder}`, borderRadius: 4, padding: "0 8px", fontFamily: "'JetBrains Mono', monospace" }}>{BLEND_MODES.map(mode => <option key={mode}>{mode}</option>)}</select></div>}
+              {variation.layers.length > 1 && <div style={{ marginBottom: 10 }}><div style={{ fontSize: 10, color: textSecondary, marginBottom: 5 }}>Blend Mode</div><Select value={selectedVariationLayer.blendMode} onChange={mode => updateSelectedVariationLayer({ blendMode: mode }, true)} dark={dark} options={BLEND_MODES.map(mode => ({ value: mode, label: mode }))} /></div>}
               {selectedVariationLayer.profile === "Noise" && <SliderRow label="Noise Seed" value={selectedVariationLayer.seed} min={0} max={99999} step={1} onChange={seed => updateSelectedVariationLayer({ seed })} dark={dark} />}
             </div>}
             {variationEditMode && <div style={{ padding: "7px 9px", borderRadius: 5, border: `1px solid ${dark ? "rgba(96,165,250,0.18)" : "rgba(37,99,235,0.14)"}`, background: dark ? "rgba(96,165,250,0.06)" : "rgba(37,99,235,0.04)", color: textSecondary, fontSize: 9, lineHeight: 1.6 }}>
@@ -2408,30 +2600,43 @@ export default function PerforationGenerator() {
         </div>
 
 
+        {/* Colors */}
+        <div style={sectionStyle}>
+          <div style={sectionTitle}>Colors</div>
+          <div style={{ display: "flex", gap: 16 }}>
+            <ColorField label="Hole Color" value={holeColor} onChange={setHoleColor} dark={dark} />
+            <ColorField label="Background" value={bgColor} onChange={setBgColor} dark={dark} />
+          </div>
+        </div>
+
         {/* Export */}
-        <div style={{ ...sectionStyle, borderBottom: "none", paddingBottom: 20 }}>
+        <div style={{ ...sectionStyle, marginBottom: 0 }}>
           <div style={sectionTitle}>Export</div>
           <div style={{ display: "flex", gap: 6 }}>
             {[["SVG", exportSVG], ["PNG 2x", exportPNG]].map(([label, fn]) => (
               <button key={label} onClick={fn} style={{
                 flex: 1, padding: "7px 0", fontSize: 11, fontWeight: 500,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
                 background: btnBg, color: textPrimary, border: "none", borderRadius: 5,
-                cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", transition: "background 0.15s"
+                cursor: "pointer", fontFamily: "'JetBrains Mono', monospace"
               }}
                 onMouseEnter={e => e.currentTarget.style.background = dark ? "#333338" : "#d4d4da"}
                 onMouseLeave={e => e.currentTarget.style.background = btnBg}>
-                ↓ {label}
+                <Download size={11} /> {label}
               </button>
             ))}
           </div>
         </div>
       </div>
       </div>
+      </div>
 
       <style>{`
         input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: ${accentColor}; cursor: pointer; border: 2px solid ${dark ? "#18181b" : "#fff"}; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
         input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: ${accentColor}; cursor: pointer; border: 2px solid ${dark ? "#18181b" : "#fff"}; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
-        select option { background: ${dark ? "#1e1e22" : "#fff"}; color: ${textPrimary}; }
+        button { transition: background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s, transform 0.1s; }
+        button:active { transform: scale(0.96); }
+        .pg-menu-item:hover { background: ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"} !important; }
         ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: ${dark ? "#333" : "#ccc"}; border-radius: 3px; }
         * { box-sizing: border-box; }
       `}</style>
