@@ -7,7 +7,7 @@ Built with React + Vite. Installable as an offline-capable PWA.
 ## Features
 
 - **Hole shapes** — Circle, Rectangle (rounded corners), Pill, Hexagon, Diamond (point-up or flat-up), Triangle (alternating ▲▽ rows), most with corner-radius control
-- **Pattern types** — Straight, Staggered 60°, Staggered 45°, Radial (rings), Custom Angle
+- **Pattern types** — Straight, Staggered 60°, Staggered 45°, Radial (concentric, Sunflower, 6k Rosette), Custom Angle
 - **Seamless tilings** — Hexagon honeycomb, interlocking Diamond lattice, and the Triangle tiling treat the edge gap as a uniform ligament on every side; at 0 gap they tile the plane exactly (100% open area)
 - **DIN 24041 presets** — common Rv/Rg perforation standards
 - **Size variation** — multi-layer scalar fields (linear / radial / angular / spiral × ramp / peak / wave / noise / steps) modulate hole size across the panel, edited directly on the canvas with Photoshop-style gizmo handles; includes presets, randomize, undo/redo
@@ -37,6 +37,8 @@ The app registers a service worker (`public/sw.js`) for offline use. Bump `CACHE
 index.html                     entry point + service-worker registration
 src/main.jsx                   React bootstrap
 src/perforation-generator.jsx  the entire app: geometry, pattern generation, canvas, UI
+src/radial-engine.js           pure radial-pattern geometry (unit-tested)
+src/radial-engine.test.js      tests for radial layouts and spacing
 src/variation-engine.js        pure size-variation field math (unit-tested)
 src/variation-engine.test.js   tests for the variation engine
 public/                        PWA assets (manifest, service worker, icons)

@@ -19,12 +19,14 @@ import {
   diamondFlatAngle,
   generateRadialHoles,
   getRadialShapeExtents,
+  getRadialShapeOuterRadius,
 } from "./radial-engine.js";
 
 const PATTERN_TYPES = ["Straight", "Staggered 60°", "Staggered 45°", "Radial", "Custom Angle"];
 const HOLE_SHAPES = ["Circle", "Rectangle", "Pill", "Hexagon", "Diamond", "Triangle"];
 const CUSTOM_SIZE_SHAPES = ["Rectangle", "Pill", "Diamond", "Triangle"];
 const DIAMOND_ORIENTATIONS = ["Point up", "Flat up"];
+const RADIAL_LAYOUTS = ["Concentric", "Sunflower", "6k Rosette"];
 const DIN_PRESETS = [
   { name: "Custom", d: 5, pitchX: 8, pitchY: 8, pattern: "Straight" },
   { name: "Rv 2-4 (60° staggered)", d: 2, pitchX: 4, pitchY: 3.46, pattern: "Staggered 60°" },
@@ -760,7 +762,7 @@ function estimateVisibleHoleArea(hole, shape, bounds, useExit = false) {
 }
 
 function generateHoles(params) {
-  const { diameter, holeShape, holeW, holeH, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, radialEdgeGap, circumEdgeGap, radialMode, centerHole, diamondOrient } = params;
+  const { diameter, holeShape, holeW, holeH, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, radialEdgeGap, circumEdgeGap, radialMode, radialLayout, centerHole, diamondOrient } = params;
   const hw = (holeW || diameter) / 2, hh = (holeH || diameter) / 2;
   const r = Math.max(hw, hh);
   const holes = [];
@@ -783,6 +785,7 @@ function generateHoles(params) {
       radialGap: radialEdgeGap,
       circumGap: circumEdgeGap,
       fillMode: radialMode,
+      layout: radialLayout,
       centerHole,
       cornerRadius,
       diamondOrient,
@@ -1424,6 +1427,7 @@ export default function PerforationGenerator() {
   const [circumEdgeGap, setCircumEdgeGap] = useState(5);
   const [radialLinked, setRadialLinked] = useState(true);
   const [radialMode, setRadialMode] = useState("Full");  // "Full" | "Circle"
+  const [radialLayout, setRadialLayout] = useState("Concentric");
   const [centerHole, setCenterHole] = useState(false);
   const [cornerRadius, setCornerRadius] = useState(0);
   const [selectedPreset, setSelectedPreset] = useState(0);
@@ -1495,8 +1499,11 @@ export default function PerforationGenerator() {
   const diaIn = (effW * effH) / (2 * Math.hypot(effW, effH));
   const diaCellK = (diaIn + edgeGapX / 2) / diaIn;
   const radialExtents = getRadialShapeExtents(holeShape, effW, effH, diamondOrient);
+  const radialOuterRadius = getRadialShapeOuterRadius(holeShape, effW, effH);
   const ringSpacing = radialExtents.radial + radialEdgeGap;
   const circumSpacing = radialExtents.tangential + circumEdgeGap;
+  const sunflowerGap = Math.max(radialEdgeGap, circumEdgeGap);
+  const sunflowerSpacing = radialOuterRadius * 2 + sunflowerGap;
 
   // Shape change: sync dimensions
   const handleShapeChange = useCallback((s) => {
@@ -1526,6 +1533,11 @@ export default function PerforationGenerator() {
   }, [radialLinked]);
 
   const handleCircumEdgeGap = useCallback((v) => {
+    setCircumEdgeGap(v);
+  }, []);
+
+  const handleSunflowerGap = useCallback((v) => {
+    setRadialEdgeGap(v);
     setCircumEdgeGap(v);
   }, []);
 
@@ -1630,9 +1642,9 @@ export default function PerforationGenerator() {
   const params = useMemo(() => ({
     diameter, holeShape, holeW: effW, holeH: effH, holeRadius, diamondOrient, patternType, pitchX, pitchY, sheetW, sheetH,
     marginTop, marginBottom, marginLeft, marginRight, cornerRadius,
-    customAngle, radialEdgeGap, circumEdgeGap, ringSpacing, circumSpacing, radialMode, centerHole,
+    customAngle, radialEdgeGap, circumEdgeGap, ringSpacing, circumSpacing, radialMode, radialLayout, centerHole,
     thickness: showTaper ? thickness : 0, taperAngle: showTaper ? taperAngle : 0, taperDirection
-  }), [diameter, holeShape, effW, effH, holeRadius, diamondOrient, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, radialEdgeGap, circumEdgeGap, ringSpacing, circumSpacing, radialMode, centerHole, showTaper, thickness, taperAngle, taperDirection]);
+  }), [diameter, holeShape, effW, effH, holeRadius, diamondOrient, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, radialEdgeGap, circumEdgeGap, ringSpacing, circumSpacing, radialMode, radialLayout, centerHole, showTaper, thickness, taperAngle, taperDirection]);
 
   const baseHoles = useMemo(() => generateHoles(params), [params]);
   // Reset removed holes when pattern params change
@@ -2413,21 +2425,35 @@ export default function PerforationGenerator() {
 
           {isRadial ? (
             <>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                <span style={{ fontSize: 10, color: textSecondary, flex: 1 }}>Gap Link</span>
-                <button onClick={() => { setRadialLinked(v => !v); if (!radialLinked) setCircumEdgeGap(radialEdgeGap); }}
-                  style={{ background: "none", border: "none", cursor: "pointer", padding: 2, borderRadius: 4, display: "flex", alignItems: "center", opacity: 0.8 }}
-                  title={radialLinked ? "Unlink gap" : "Link gap"}>
-                  <LinkIcon linked={radialLinked} dark={dark} />
-                </button>
+              <div style={{ marginBottom: 12 }}>
+                {dropdown("Radial Pattern", radialLayout, v => { setRadialLayout(v); setSelectedPreset(0); }, RADIAL_LAYOUTS.map(layout => ({ value: layout, label: layout })))}
               </div>
-              <SliderRow label="Radial Edge Gap" value={radialEdgeGap} min={0} max={50} step={0.1} onChange={handleRadialEdgeGap} unit="mm" dark={dark} />
-              <PitchInfo label="nom. ring spacing" value={ringSpacing} dark={dark} />
-              {!radialLinked && <>
-                <SliderRow label="Circum. Edge Gap" value={circumEdgeGap} min={0} max={50} step={0.1} onChange={handleCircumEdgeGap} unit="mm" dark={dark} />
-                <PitchInfo label="min circum. spacing" value={circumSpacing} dark={dark} />
-              </>}
-              {radialLinked && <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>Circum. Edge Gap: {radialEdgeGap.toFixed(2)} mm (linked)</div>}
+              {radialLayout === "Sunflower" ? (
+                <>
+                  <SliderRow label="Edge Gap" value={sunflowerGap} min={0} max={50} step={0.1} onChange={handleSunflowerGap} unit="mm" dark={dark} />
+                  <PitchInfo label="min center spacing" value={sunflowerSpacing} dark={dark} />
+                  <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>Golden angle · Fermat spiral</div>
+                </>
+              ) : (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, color: textSecondary, flex: 1 }}>Gap Link</span>
+                    <button onClick={() => { setRadialLinked(v => !v); if (!radialLinked) setCircumEdgeGap(radialEdgeGap); }}
+                      style={{ background: "none", border: "none", cursor: "pointer", padding: 2, borderRadius: 4, display: "flex", alignItems: "center", opacity: 0.8 }}
+                      title={radialLinked ? "Unlink gap" : "Link gap"}>
+                      <LinkIcon linked={radialLinked} dark={dark} />
+                    </button>
+                  </div>
+                  <SliderRow label="Radial Edge Gap" value={radialEdgeGap} min={0} max={50} step={0.1} onChange={handleRadialEdgeGap} unit="mm" dark={dark} />
+                  <PitchInfo label="nom. ring spacing" value={ringSpacing} dark={dark} />
+                  {!radialLinked && <>
+                    <SliderRow label="Circum. Edge Gap" value={circumEdgeGap} min={0} max={50} step={0.1} onChange={handleCircumEdgeGap} unit="mm" dark={dark} />
+                    <PitchInfo label="min circum. spacing" value={circumSpacing} dark={dark} />
+                  </>}
+                  {radialLinked && <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>Circum. Edge Gap: {radialEdgeGap.toFixed(2)} mm (linked)</div>}
+                  {radialLayout === "6k Rosette" && <div style={{ fontSize: 10, color: textSecondary, marginBottom: 8, padding: "2px 0" }}>Ring k · 6k holes · sixfold symmetry</div>}
+                </>
+              )}
               <div style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 10, color: textSecondary, marginBottom: 6 }}>Fill Mode</div>
                 <div style={{ display: "flex", gap: 5 }}>

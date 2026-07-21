@@ -1,5 +1,10 @@
 const TAU = Math.PI * 2;
 const EPS = 1e-9;
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+// For n >= 1, consecutive golden-angle Fermat points have a normalized
+// nearest-neighbour distance slightly above 1.6. Using the lower bound keeps
+// the requested edge gap intact after the spiral is scaled to the hole size.
+const SUNFLOWER_SAFE_SEPARATION = 1.6;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
@@ -52,6 +57,14 @@ export function getRadialShapeExtents(shape, w, h, diamondOrient = "Point up") {
   }
   if (shape === "Rectangle" || shape === "Pill") return { radial: w, tangential: h };
   return { radial: w, tangential: w };
+}
+
+export function getRadialShapeOuterRadius(shape, w, h) {
+  if (shape === "Circle") return w / 2;
+  if (shape === "Rectangle") return Math.hypot(w, h) / 2;
+  if (shape === "Pill") return Math.max(w, h) / 2;
+  const vertices = shapeVertices(shape, w, h);
+  return Math.max(...vertices.map(([x, y]) => Math.hypot(x, y)));
 }
 
 export function maxRingPointCount(radius, minimumChord) {
@@ -187,6 +200,7 @@ export function generateRadialHoles(options) {
     centerHole = false,
     cornerRadius = 0,
     diamondOrient = "Point up",
+    layout = "Concentric",
   } = options;
   const { xMin, xMax, yMin, yMax } = bounds;
   if (!(xMax > xMin) || !(yMax > yMin)) return [];
@@ -204,11 +218,74 @@ export function generateRadialHoles(options) {
   const config = { shape, w, h, diamondOrient };
   const holes = [];
 
+  const appendIfInside = hole => {
+    let inside;
+    if (fillMode === "Circle") {
+      inside = Math.hypot(hole.x - cx, hole.y - cy) <= circleRadius + EPS;
+    } else if (cornerRadius > 0) {
+      inside = isInsideRoundedRect(hole.x, hole.y, bounds, cornerRadius);
+    } else {
+      inside = hole.x >= xMin - boundaryPad && hole.x <= xMax + boundaryPad
+        && hole.y >= yMin - boundaryPad && hole.y <= yMax + boundaryPad;
+    }
+    if (inside) holes.push({ x: hole.x, y: hole.y, angle: hole.angle });
+  };
+
   let previous = null;
   if (centerHole) {
     const centerAngle = shape === "Diamond" && diamondOrient === "Flat up" ? diamondFlatAngle(w, h) : 0;
     holes.push({ x: cx, y: cy, angle: centerAngle });
     previous = { radius: 0, count: 1, phase: 0, centerAngle };
+  }
+
+  if (layout === "Sunflower") {
+    const outerRadius = getRadialShapeOuterRadius(shape, w, h);
+    const requestedGap = Math.max(0, radialGap, circumGap);
+    const minimumCenterDistance = outerRadius * 2 + requestedGap;
+    // A centre hole makes n=0 -> n=1 the limiting pair. Without it, the
+    // tighter n=1 -> n=4 Fermat pair determines the scale.
+    const spiralScale = minimumCenterDistance
+      / (centerHole ? 1 : SUNFLOWER_SAFE_SEPARATION);
+    for (let n = 1; ; n++) {
+      const radius = spiralScale * Math.sqrt(n);
+      if (radius > maxRadius + EPS) break;
+      const polarAngle = n * GOLDEN_ANGLE - Math.PI / 2;
+      const hole = {
+        x: cx + radius * Math.cos(polarAngle),
+        y: cy + radius * Math.sin(polarAngle),
+        angle: actualHoleAngle(shape, polarAngle, n, w, h, diamondOrient),
+      };
+      appendIfInside(hole);
+    }
+    return holes;
+  }
+
+  if (layout === "6k Rosette") {
+    for (let k = 1; ; k++) {
+      const count = 6 * k;
+      let adjustedRadius = Math.max(k * ringSpacing, previous ? previous.radius + ringSpacing : ringSpacing);
+      if (adjustedRadius > maxRadius + EPS) break;
+
+      const chordSlope = 2 * Math.sin(Math.PI / count);
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const gap = minimumCircumferentialGap(adjustedRadius, count, config);
+        if (gap >= circumGap - 1e-7) break;
+        adjustedRadius += (circumGap - gap) / chordSlope + EPS;
+      }
+
+      let optimized = optimizedPhase(adjustedRadius, count, previous, cx, cy, config);
+      for (let attempt = 0; previous && optimized.gap < radialGap - 1e-7 && attempt < 4; attempt++) {
+        adjustedRadius += radialGap - optimized.gap + 1e-4;
+        optimized = optimizedPhase(adjustedRadius, count, previous, cx, cy, config);
+      }
+      if (adjustedRadius > maxRadius + EPS) break;
+
+      for (let i = 0; i < count; i++) {
+        appendIfInside(ringHole(adjustedRadius, count, optimized.phase, i, cx, cy, config));
+      }
+      previous = { radius: adjustedRadius, count, phase: optimized.phase };
+    }
+    return holes;
   }
 
   for (let ringRadius = ringSpacing; ringRadius <= maxRadius + EPS; ringRadius += ringSpacing) {
@@ -225,16 +302,7 @@ export function generateRadialHoles(options) {
 
     for (let i = 0; i < count; i++) {
       const hole = ringHole(adjustedRadius, count, optimized.phase, i, cx, cy, config);
-      let inside;
-      if (fillMode === "Circle") {
-        inside = Math.hypot(hole.x - cx, hole.y - cy) <= circleRadius + EPS;
-      } else if (cornerRadius > 0) {
-        inside = isInsideRoundedRect(hole.x, hole.y, bounds, cornerRadius);
-      } else {
-        inside = hole.x >= xMin - boundaryPad && hole.x <= xMax + boundaryPad
-          && hole.y >= yMin - boundaryPad && hole.y <= yMax + boundaryPad;
-      }
-      if (inside) holes.push({ x: hole.x, y: hole.y, angle: hole.angle });
+      appendIfInside(hole);
     }
     previous = { radius: adjustedRadius, count, phase: optimized.phase };
     if (adjustedRadius > ringRadius + EPS) ringRadius = adjustedRadius;
