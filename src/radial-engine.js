@@ -6,8 +6,6 @@ const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 // the requested edge gap intact after the spiral is scaled to the hole size.
 const SUNFLOWER_SAFE_SEPARATION = 1.6;
 
-const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-
 export function diamondFlatAngle(w, h) {
   return -Math.atan2(h, w);
 }
@@ -65,13 +63,6 @@ export function getRadialShapeOuterRadius(shape, w, h) {
   if (shape === "Pill") return Math.max(w, h) / 2;
   const vertices = shapeVertices(shape, w, h);
   return Math.max(...vertices.map(([x, y]) => Math.hypot(x, y)));
-}
-
-export function maxRingPointCount(radius, minimumChord) {
-  if (!(radius > 0) || !(minimumChord > 0)) return 0;
-  if (minimumChord > radius * 2 + EPS) return 1;
-  const ratio = clamp(minimumChord / (radius * 2), 0, 1);
-  return Math.max(2, Math.floor(Math.PI / Math.asin(ratio) + EPS));
 }
 
 function actualHoleAngle(shape, polarAngle, index, w, h, diamondOrient) {
@@ -136,12 +127,6 @@ function minimumCircumferentialGap(radius, count, config) {
   return minimum;
 }
 
-function ringPointCount(radius, circumSpacing, circumGap, config) {
-  let count = Math.max(1, maxRingPointCount(radius, circumSpacing));
-  while (count > 1 && minimumCircumferentialGap(radius, count, config) < circumGap - 1e-7) count--;
-  return count;
-}
-
 function closestPreviousIndices(angle, previous) {
   if (previous.count === 1) return [0];
   const step = TAU / previous.count;
@@ -201,15 +186,23 @@ export function generateRadialHoles(options) {
     cornerRadius = 0,
     diamondOrient = "Point up",
     layout = "Concentric",
+    ringSpacing: legacyRingSpacing,
+    circumSpacing: legacyCircumSpacing,
+    center,
   } = options;
   const { xMin, xMax, yMin, yMax } = bounds;
   if (!(xMax > xMin) || !(yMax > yMin)) return [];
 
-  const cx = (xMin + xMax) / 2, cy = (yMin + yMax) / 2;
+  const cx = center?.x ?? (xMin + xMax) / 2;
+  const cy = center?.y ?? (yMin + yMax) / 2;
   const perfW = xMax - xMin, perfH = yMax - yMin;
   const extents = getRadialShapeExtents(shape, w, h, diamondOrient);
-  const ringSpacing = Math.max(EPS, extents.radial + Math.max(0, radialGap));
-  const circumSpacing = Math.max(EPS, extents.tangential + Math.max(0, circumGap));
+  const ringSpacing = Math.max(EPS, layout === "Concentric" && legacyRingSpacing > 0
+    ? legacyRingSpacing
+    : extents.radial + Math.max(0, radialGap));
+  const circumSpacing = Math.max(EPS, layout === "Concentric" && legacyCircumSpacing > 0
+    ? legacyCircumSpacing
+    : extents.tangential + Math.max(0, circumGap));
   const circleRadius = Math.min(perfW, perfH) / 2;
   const boundaryPad = Math.max(w, h) / 2;
   const maxRadius = fillMode === "Circle"
@@ -236,6 +229,28 @@ export function generateRadialHoles(options) {
     const centerAngle = shape === "Diamond" && diamondOrient === "Flat up" ? diamondFlatAngle(w, h) : 0;
     holes.push({ x: cx, y: cy, angle: centerAngle });
     previous = { radius: 0, count: 1, phase: 0, centerAngle };
+  }
+
+  if (layout === "Concentric") {
+    // Preserve the original Radial layout: ring populations use the simple
+    // circumference approximation and every ring starts on the positive x
+    // axis. This intentionally keeps the visual rhythm of the pre-engine
+    // implementation instead of optimizing phases and projected gaps.
+    const legacyMaxRadius = fillMode === "Circle"
+      ? circleRadius
+      : Math.hypot(perfW, perfH) / 2 + ringSpacing;
+    const ringCount = Math.max(0, Math.floor(legacyMaxRadius / ringSpacing));
+    for (let ring = 1; ring <= ringCount; ring++) {
+      const radius = ring * ringSpacing;
+      const count = Math.max(1, Math.floor(TAU * radius / circumSpacing));
+      for (let i = 0; i < count; i++) {
+        const hole = ringHole(radius, count, 0, i, cx, cy, config);
+        // Hexagon rotation was ignored by the original renderer.
+        if (shape === "Hexagon") hole.angle = 0;
+        appendIfInside(hole);
+      }
+    }
+    return holes;
   }
 
   if (layout === "Sunflower") {
@@ -288,24 +303,5 @@ export function generateRadialHoles(options) {
     return holes;
   }
 
-  for (let ringRadius = ringSpacing; ringRadius <= maxRadius + EPS; ringRadius += ringSpacing) {
-    let count = ringPointCount(ringRadius, circumSpacing, Math.max(0, circumGap), config);
-    let optimized = optimizedPhase(ringRadius, count, previous, cx, cy, config);
-    let adjustedRadius = ringRadius;
-
-    for (let attempt = 0; previous && optimized.gap < radialGap - 1e-7 && attempt < 4; attempt++) {
-      adjustedRadius += radialGap - optimized.gap + 1e-6;
-      count = ringPointCount(adjustedRadius, circumSpacing, Math.max(0, circumGap), config);
-      optimized = optimizedPhase(adjustedRadius, count, previous, cx, cy, config);
-    }
-    if (adjustedRadius > maxRadius + EPS) break;
-
-    for (let i = 0; i < count; i++) {
-      const hole = ringHole(adjustedRadius, count, optimized.phase, i, cx, cy, config);
-      appendIfInside(hole);
-    }
-    previous = { radius: adjustedRadius, count, phase: optimized.phase };
-    if (adjustedRadius > ringRadius + EPS) ringRadius = adjustedRadius;
-  }
   return holes;
 }

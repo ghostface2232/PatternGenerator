@@ -762,7 +762,7 @@ function estimateVisibleHoleArea(hole, shape, bounds, useExit = false) {
 }
 
 function generateHoles(params) {
-  const { diameter, holeShape, holeW, holeH, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, radialEdgeGap, circumEdgeGap, radialMode, radialLayout, centerHole, diamondOrient } = params;
+  const { diameter, holeShape, holeW, holeH, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, radialEdgeGap, circumEdgeGap, ringSpacing, circumSpacing, radialMode, radialLayout, centerHole, diamondOrient } = params;
   const hw = (holeW || diameter) / 2, hh = (holeH || diameter) / 2;
   const r = Math.max(hw, hh);
   const holes = [];
@@ -786,6 +786,9 @@ function generateHoles(params) {
       circumGap: circumEdgeGap,
       fillMode: radialMode,
       layout: radialLayout,
+      ringSpacing,
+      circumSpacing,
+      center: radialLayout === "Concentric" ? { x: sheetW / 2, y: sheetH / 2 } : undefined,
       centerHole,
       cornerRadius,
       diamondOrient,
@@ -1500,8 +1503,12 @@ export default function PerforationGenerator() {
   const diaCellK = (diaIn + edgeGapX / 2) / diaIn;
   const radialExtents = getRadialShapeExtents(holeShape, effW, effH, diamondOrient);
   const radialOuterRadius = getRadialShapeOuterRadius(holeShape, effW, effH);
-  const ringSpacing = radialExtents.radial + radialEdgeGap;
-  const circumSpacing = radialExtents.tangential + circumEdgeGap;
+  const ringSpacing = radialLayout === "Concentric"
+    ? diameter + radialEdgeGap
+    : radialExtents.radial + radialEdgeGap;
+  const circumSpacing = radialLayout === "Concentric"
+    ? diameter + circumEdgeGap
+    : radialExtents.tangential + circumEdgeGap;
   const sunflowerGap = Math.max(radialEdgeGap, circumEdgeGap);
   const sunflowerSpacing = radialOuterRadius * 2 + sunflowerGap;
 

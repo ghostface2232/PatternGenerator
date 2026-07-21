@@ -4,17 +4,10 @@ import {
   generateRadialHoles,
   getRadialShapeExtents,
   getRadialShapeOuterRadius,
-  maxRingPointCount,
   projectedShapeGap,
 } from "./radial-engine.js";
 
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-
-test("ring counts use the real chord instead of the circumference approximation", () => {
-  assert.equal(maxRingPointCount(5.5, 10), 2);
-  assert.equal(maxRingPointCount(10, 10), 6);
-  assert.ok(2 * 10 * Math.sin(Math.PI / maxRingPointCount(10, 10)) >= 10 - 1e-9);
-});
 
 test("radial shape extents follow the oriented hole axes", () => {
   assert.deepEqual(getRadialShapeExtents("Rectangle", 12, 5), { radial: 12, tangential: 5 });
@@ -31,7 +24,7 @@ test("radial outer radii enclose rotated and asymmetric shapes", () => {
   assert.ok(getRadialShapeOuterRadius("Triangle", 10, 8.66) > 5);
 });
 
-test("radial layout is centered in asymmetric perforation bounds", () => {
+test("legacy concentric layout accepts the original sheet center", () => {
   const holes = generateRadialHoles({
     shape: "Circle",
     w: 5,
@@ -41,11 +34,12 @@ test("radial layout is centered in asymmetric perforation bounds", () => {
     circumGap: 5,
     fillMode: "Circle",
     centerHole: true,
+    center: { x: 100, y: 80 },
   });
-  assert.deepEqual({ x: holes[0].x, y: holes[0].y }, { x: 120, y: 80 });
+  assert.deepEqual({ x: holes[0].x, y: holes[0].y }, { x: 100, y: 80 });
 });
 
-test("linked circular gaps preserve the requested minimum center spacing", () => {
+test("legacy concentric ring populations use the circumference approximation", () => {
   const holes = generateRadialHoles({
     shape: "Circle",
     w: 5,
@@ -54,15 +48,16 @@ test("linked circular gaps preserve the requested minimum center spacing", () =>
     radialGap: 5,
     circumGap: 5,
     fillMode: "Circle",
+    ringSpacing: 10,
+    circumSpacing: 10,
   });
-  let minimum = Infinity;
-  for (let i = 0; i < holes.length; i++) {
-    for (let j = i + 1; j < holes.length; j++) minimum = Math.min(minimum, distance(holes[i], holes[j]));
-  }
-  assert.ok(minimum >= 10 - 1e-6, `minimum center spacing was ${minimum}`);
+  const firstRing = holes.filter(hole => Math.abs(distance(hole, { x: 100, y: 100 }) - 10) < 1e-7);
+  const secondRing = holes.filter(hole => Math.abs(distance(hole, { x: 100, y: 100 }) - 20) < 1e-7);
+  assert.equal(firstRing.length, Math.floor(2 * Math.PI));
+  assert.equal(secondRing.length, Math.floor(4 * Math.PI));
 });
 
-test("successive rings do not share one persistent zero-degree seam", () => {
+test("legacy concentric rings retain their shared zero-degree seam", () => {
   const holes = generateRadialHoles({
     shape: "Circle",
     w: 5,
@@ -73,10 +68,10 @@ test("successive rings do not share one persistent zero-degree seam", () => {
     fillMode: "Circle",
   });
   const onPositiveAxis = holes.filter(hole => Math.abs(hole.y - 100) < 1e-7 && hole.x > 100);
-  assert.ok(onPositiveAxis.length < 4, `${onPositiveAxis.length} rings still aligned on the seam`);
+  assert.equal(onPositiveAxis.length, 10);
 });
 
-test("sparse one-point rings rotate instead of stacking on one spoke", () => {
+test("legacy sparse one-point rings remain on the same spoke", () => {
   const holes = generateRadialHoles({
     shape: "Circle",
     w: 5,
@@ -89,10 +84,10 @@ test("sparse one-point rings rotate instead of stacking on one spoke", () => {
   assert.ok(holes.length >= 2);
   const a = Math.atan2(holes[0].y - 50, holes[0].x - 50);
   const b = Math.atan2(holes[1].y - 50, holes[1].x - 50);
-  assert.ok(Math.abs(a - b) > Math.PI / 2);
+  assert.ok(Math.abs(a - b) < 1e-9);
 });
 
-test("custom rectangles use their real width for radial spacing", () => {
+test("legacy concentric spacing stays diameter-based for custom rectangles", () => {
   const holes = generateRadialHoles({
     shape: "Rectangle",
     w: 12,
@@ -101,13 +96,15 @@ test("custom rectangles use their real width for radial spacing", () => {
     radialGap: 3,
     circumGap: 3,
     fillMode: "Circle",
+    ringSpacing: 8,
+    circumSpacing: 8,
   });
   const radii = [...new Set(holes.map(hole => Math.hypot(hole.x - 120, hole.y - 120).toFixed(5)))].map(Number).sort((a, b) => a - b);
-  assert.ok(radii[0] >= 15 - 1e-6);
-  assert.ok(radii[1] - radii[0] >= 15 - 1e-6);
+  assert.equal(radii[0], 8);
+  assert.equal(radii[1] - radii[0], 8);
 });
 
-test("all supported radial shapes preserve their projected edge gaps", () => {
+test("legacy concentric ring populations are independent of hole shape", () => {
   const cases = [
     ["Circle", 5, 5],
     ["Rectangle", 12, 5],
@@ -116,22 +113,19 @@ test("all supported radial shapes preserve their projected edge gaps", () => {
     ["Diamond", 10, 6],
     ["Triangle", 10, 8.66],
   ];
+  let expectedCount = null;
   for (const [shape, w, h] of cases) {
-    const config = { shape, w, h, diamondOrient: "Point up" };
     const holes = generateRadialHoles({
-      ...config,
+      shape, w, h, diamondOrient: "Point up",
       bounds: { xMin: 0, xMax: 120, yMin: 0, yMax: 120 },
       radialGap: 3,
       circumGap: 3,
       fillMode: "Circle",
+      ringSpacing: 8,
+      circumSpacing: 8,
     });
-    let minimum = Infinity;
-    for (let i = 0; i < holes.length; i++) {
-      for (let j = i + 1; j < holes.length; j++) {
-        minimum = Math.min(minimum, projectedShapeGap(holes[i], holes[j], config));
-      }
-    }
-    assert.ok(minimum >= 3 - 1e-3, `${shape} minimum projected gap was ${minimum}`);
+    expectedCount ??= holes.length;
+    assert.equal(holes.length, expectedCount, `${shape} changed the legacy ring population`);
   }
 });
 
