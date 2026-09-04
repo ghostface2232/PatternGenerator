@@ -153,6 +153,23 @@ test("a link toggle keeps removed holes; a pattern edit clears them and undo res
   await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeVisible();
 });
 
+test("reshaping a hole keeps removals: corner radius and taper never move one", async ({ page }) => {
+  await page.getByRole("button", { name: "Hole Shape", exact: true }).click();
+  await page.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await removeOneHole(page);
+  const remaining = await stat(page, "stat-holes").textContent();
+
+  await setSlider(page, "Hole Corner R", 1);
+  await expect(stat(page, "stat-holes")).toHaveText(remaining);
+  await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeVisible();
+
+  await page.getByRole("switch", { name: "Sheet Thickness & Hole Taper" }).click();
+  await setSlider(page, "Thickness (t)", 2);
+  await setSlider(page, "Taper Angle (θ)", 8);
+  await expect(stat(page, "stat-holes")).toHaveText(remaining);
+  await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeVisible();
+});
+
 test("a dropped file never navigates the tab away, and a document file opens", async ({ page }) => {
   const prevented = await page.evaluate(() => {
     const dt = new DataTransfer();

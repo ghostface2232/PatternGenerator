@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDocument, getIn, patchIn, setIn } from "./document.js";
-import { computePattern, patternSignature } from "./pipeline.js";
+import { buildParams, computePattern, deriveGeometry, patternSignature } from "./pipeline.js";
+import { generateHoles } from "../layouts/grid.js";
 import { generateSVGString } from "../export/svg.js";
 
 // These numbers mirror e2e/smoke.spec.js so a geometry regression is caught
@@ -101,7 +102,7 @@ test("setIn / patchIn are structural-sharing immutable updates", () => {
   assert.equal(setIn(d, "hole.diameter", 5), d); // same value → same object
 });
 
-test("patternSignature ignores link flags and colours but tracks pattern fields", () => {
+test("patternSignature ignores everything that does not move a hole", () => {
   const base = createDocument();
   const same = [
     { "layout.gapLinked": false },
@@ -111,7 +112,13 @@ test("patternSignature ignores link flags and colours but tracks pattern fields"
     { name: "Renamed" },
     { removedHoles: [1, 2, 3] },
     { presetIndex: 4 },
-    { "taper.thickness": 3 }, // taper disabled → not in the params
+    { "variation.enabled": true, "variation.minScale": 0.3 },
+    // Drawn differently, placed identically: the hole corner radius and the
+    // whole taper block are absent from the signature.
+    { "hole.cornerRadius": 1 },
+    { "taper.thickness": 3 },
+    { "taper.enabled": true, "taper.thickness": 3, "taper.angle": 5 },
+    { "taper.enabled": true, "taper.thickness": 3, "taper.angle": 5, "taper.direction": "Bottom larger" },
   ];
   for (const patch of same) {
     assert.equal(patternSignature(doc(patch)), patternSignature(base), JSON.stringify(patch));
@@ -124,11 +131,83 @@ test("patternSignature ignores link flags and colours but tracks pattern fields"
     { "sheet.w": 300 },
     { "boundary.margins.top": 5 },
     { "boundary.cornerRadius": 10 },
-    { "taper.enabled": true, "taper.thickness": 3, "taper.angle": 5 },
   ];
   for (const patch of different) {
     assert.notEqual(patternSignature(doc(patch)), patternSignature(base), JSON.stringify(patch));
   }
+});
+
+// The contract the removed-hole rule rests on: an edit that moves, adds or drops
+// a hole MUST change the signature. The reverse is allowed to be conservative
+// (a shape swap that happens to keep every centre still resets), but never this
+// direction — a miss would leave stale indices pointing at the wrong holes.
+test("every edit that changes hole placement changes the signature", () => {
+  const positions = d => JSON.stringify(generateHoles(buildParams(d, deriveGeometry(d))));
+  const bases = [
+    {},
+    { "hole.shape": "Rectangle", "hole.w": 6, "hole.h": 3 },
+    { "hole.shape": "Hexagon" },
+    { "hole.shape": "Triangle" },
+    { "hole.shape": "Diamond", "layout.type": "Staggered 60°" },
+    { "layout.type": "Straight" },
+    { "layout.type": "Staggered 45°" },
+    { "layout.type": "Custom Angle" },
+    { "layout.type": "Radial" },
+    { "layout.type": "Radial", "layout.radial.layout": "Sunflower" },
+    { "layout.type": "Radial", "layout.radial.layout": "6k Rosette", "layout.radial.mode": "Circle" },
+    { "boundary.margins.top": 8, "boundary.cornerRadius": 15 },
+  ];
+  const edits = [
+    { "hole.diameter": 7 },
+    { "hole.w": 9 },
+    { "hole.h": 2 },
+    { "hole.shape": "Pill" },
+    { "hole.shape": "Circle" },
+    { "hole.cornerRadius": 1 },
+    { "hole.diamondOrient": "Flat up" },
+    { "hole.triEquilateral": false },
+    { "layout.type": "Straight" },
+    { "layout.type": "Staggered 60°" },
+    { "layout.edgeGapX": 7 },
+    { "layout.edgeGapY": 7 },
+    { "layout.gapLinked": false },
+    { "layout.customAngle": 55 },
+    { "layout.radial.edgeGap": 9 },
+    { "layout.radial.circumGap": 9 },
+    { "layout.radial.linked": false },
+    { "layout.radial.mode": "Circle" },
+    { "layout.radial.layout": "Sunflower" },
+    { "layout.radial.centerHole": true },
+    { "sheet.w": 260 },
+    { "sheet.h": 260 },
+    { "boundary.margins.top": 12 },
+    { "boundary.margins.bottom": 12 },
+    { "boundary.margins.left": 12 },
+    { "boundary.margins.right": 12 },
+    { "boundary.marginLinked": false },
+    { "boundary.cornerRadius": 25 },
+    { "taper.enabled": true, "taper.thickness": 2, "taper.angle": 6 },
+    { "taper.direction": "Bottom larger" },
+    { "variation.enabled": true },
+    { presetIndex: 3 },
+    { name: "x" },
+    { "appearance.bgColor": "#123456" },
+  ];
+  let moved = 0;
+  for (const basePatch of bases) {
+    const base = doc(basePatch);
+    for (const edit of edits) {
+      const next = patchIn(base, edit);
+      if (positions(next) === positions(base)) continue;
+      moved++;
+      assert.notEqual(
+        patternSignature(next),
+        patternSignature(base),
+        `placement changed but signature did not: ${JSON.stringify(basePatch)} + ${JSON.stringify(edit)}`
+      );
+    }
+  }
+  assert.ok(moved > 100, `expected the sweep to move holes often, got ${moved}`);
 });
 
 test("triEquilateral only changes the signature when it changes the height", () => {

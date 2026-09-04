@@ -324,10 +324,40 @@ export function computePattern(doc) {
   return { geometry: g, params, baseHoles, holes, activeHoles, removedSet, overlaps, stats };
 }
 
-// Value signature of everything that shapes the generated hole list. Removed-hole
+// The params generateHoles actually reads — keep in step with its destructuring.
+// buildParams also carries the hole corner radius and the taper fields, which
+// change how a hole is drawn but never where it sits.
+const PLACEMENT_PARAMS = [
+  "diameter",
+  "holeShape",
+  "holeW",
+  "holeH",
+  "patternType",
+  "pitchX",
+  "pitchY",
+  "sheetW",
+  "sheetH",
+  "marginTop",
+  "marginBottom",
+  "marginLeft",
+  "marginRight",
+  "cornerRadius",
+  "customAngle",
+  "radialEdgeGap",
+  "circumEdgeGap",
+  "ringSpacing",
+  "circumSpacing",
+  "radialMode",
+  "radialLayout",
+  "centerHole",
+  "diamondOrient",
+];
+
+// Value signature of everything that decides where holes land. Removed-hole
 // indices only stay meaningful while this is unchanged, so edits that alter it
-// clear them (see ui/useDocument.js). Link flags and colours are absent by
-// construction: they never reach buildParams.
+// clear them (see ui/useDocument.js). Link flags, colours and the document name
+// are absent by construction: they never reach buildParams.
 export function patternSignature(doc) {
-  return JSON.stringify(buildParams(doc, deriveGeometry(doc)));
+  const params = buildParams(doc, deriveGeometry(doc));
+  return JSON.stringify(PLACEMENT_PARAMS.map(key => params[key]));
 }
