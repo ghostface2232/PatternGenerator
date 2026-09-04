@@ -196,6 +196,56 @@ test("a recent-list failure does not leave the tab rewriting on every hide", asy
   expect(name).toBe("Saved by another tab");
 });
 
+// Count localStorage writes from inside the page, to tell "wrote once" from
+// "wrote once and then again behind itself".
+async function countWrites(page) {
+  await page.addInitScript(() => {
+    window.__writes = [];
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      window.__writes.push(key);
+      return original.call(this, key, value);
+    };
+  });
+  await page.reload();
+  await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
+  return {
+    reset: () => page.evaluate(() => (window.__writes.length = 0)),
+    current: () => page.evaluate(() => window.__writes.filter(k => k === "perf-pattern:current").length),
+  };
+}
+
+test("an edit is written once, and a flush does not leave the debounce to write it again", async ({ page }) => {
+  const writes = await countWrites(page);
+  await writes.reset();
+  await page.evaluate(setSlider => eval(setSlider)("Hole Diameter", 8), SET_SLIDER);
+  await page.waitForTimeout(700);
+  expect(await writes.current()).toBe(1);
+
+  await writes.reset();
+  await page.evaluate(setSlider => {
+    eval(setSlider)("Hole Diameter", 9);
+    window.dispatchEvent(new Event("pagehide")); // flushes, with the debounce still armed
+  }, SET_SLIDER);
+  expect(await writes.current()).toBe(1);
+  await page.waitForTimeout(700);
+  expect(await writes.current()).toBe(1); // the armed debounce found nothing left to write
+});
+
+test("starting a new document saves the edits the outgoing one had not written yet", async ({ page }) => {
+  await page.getByLabel("Document name", { exact: true }).fill("Doc One");
+  await page.getByLabel("Document name", { exact: true }).press("Enter");
+  await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
+  // Edit and switch documents inside the 300 ms debounce window.
+  await page.evaluate(setSlider => eval(setSlider)("Panel Width", 321), SET_SLIDER);
+  await page.getByRole("button", { name: "New", exact: true }).click();
+  await expect(stat(page, "doc-name")).toHaveText("Untitled");
+  const recent = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("perf-pattern:recent")).map(e => [e.name, e.doc.sheet.w])
+  );
+  expect(recent).toContainEqual(["Doc One", 321]);
+});
+
 test("a failed write reports NOT SAVED instead of hanging on SAVING", async ({ page }) => {
   await page.addInitScript(() => {
     const original = Storage.prototype.setItem;
