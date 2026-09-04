@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createDocument, getIn, patchIn, setIn } from "./document.js";
 import { PLACEMENT_PARAMS, buildParams, computePattern, deriveGeometry, patternSignature } from "./pipeline.js";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { generateHoles } from "../layouts/grid.js";
 import { generateSVGString } from "../export/svg.js";
 
@@ -352,11 +353,47 @@ test("null, undefined and NaN encode differently in the signature", () => {
   assert.equal(new Set(signatures).size, 3, "null, undefined and NaN must encode differently");
   assert.notEqual(generateHoles(buildParams(withNull, deriveGeometry(withNull))).length, 0);
   assert.equal(generateHoles(buildParams(withUndefined, deriveGeometry(withUndefined))).length, 0);
-  // A value carrying the field separator cannot shift the fields around it.
+});
+
+test("the type tag, field position and quoting each carry their weight", () => {
+  // Three ways an encoding of the same values could collapse two documents into
+  // one signature. Each is paired with the placement it would wrongly preserve
+  // removals across, so none of them can be satisfied by encoding alone.
+  const base = createDocument();
+  // Hashed, not compared whole: a mismatch otherwise prints both hole lists.
+  const place = d => createHash("sha1").update(JSON.stringify(generateHoles(buildParams(d, deriveGeometry(d))))).digest("hex"); // prettier-ignore
+  const differ = (a, b, what) => {
+    assert.notEqual(place(a), place(b), `${what}: placement must differ for this to be worth signing`);
+    assert.notEqual(patternSignature(a), patternSignature(b), what);
+  };
+
+  // The typeof tag. grid.js adds margins to coordinates, so a numeric string
+  // concatenates where a number would add: every centre moves, the count does
+  // not, and String() alone writes both as 7.
+  differ(
+    patchIn(base, { "boundary.margins.left": 7 }),
+    patchIn(base, { "boundary.margins.left": "7" }),
+    "a numeric string must not sign as its number"
+  );
+
+  // Field position. An encoding that sorted or pooled the fields would sign a
+  // portrait sheet and a landscape one alike.
+  differ(
+    patchIn(base, { "sheet.w": 200, "sheet.h": 300 }),
+    patchIn(base, { "sheet.w": 300, "sheet.h": 200 }),
+    "two fields must not be interchangeable"
+  );
+
+  // Quoting. Joining type-tagged fields on a separator let a string param carry
+  // that separator and shift the fields around it. Radial, or the two fields
+  // below never reach the placement arithmetic and there is nothing to preserve.
   const NUL = String.fromCharCode(0);
-  const a = patchIn(base, { "layout.radial.mode": "Full", "layout.radial.layout": `Concentric${NUL}string:Sunflower` });
-  const b = patchIn(base, { "layout.radial.mode": `Full${NUL}string:Concentric`, "layout.radial.layout": "Sunflower" });
-  assert.notEqual(patternSignature(a), patternSignature(b));
+  const radial = patchIn(base, { "layout.type": "Radial" });
+  differ(
+    patchIn(radial, { "layout.radial.mode": "Full", "layout.radial.layout": `Concentric${NUL}string:Sunflower` }),
+    patchIn(radial, { "layout.radial.mode": `Full${NUL}string:Concentric`, "layout.radial.layout": "Sunflower" }),
+    "a value must not shift the fields around it"
+  );
 });
 
 test("PLACEMENT_PARAMS is exactly what generateHoles reads", () => {
