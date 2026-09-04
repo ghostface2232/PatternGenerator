@@ -104,3 +104,51 @@ test("undo and redo walk through edits, and a slider drag is one step", async ({
   await page.keyboard.press("Control+z");
   await expect(page.getByLabel("Hole Diameter", { exact: true })).toHaveValue("5");
 });
+
+// Click near the canvas centre until one hole is actually removed.
+async function removeOneHole(page) {
+  await page.getByRole("switch", { name: "Click to Remove" }).click();
+  const box = await page.locator("canvas").boundingBox();
+  const restore = page.getByRole("button", { name: "Restore All Holes" });
+  for (const [dx, dy] of [
+    [0, 0],
+    [11, 0],
+    [0, 11],
+    [22, 11],
+    [11, 22],
+  ]) {
+    await page.mouse.click(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy);
+    if (await restore.isVisible().catch(() => false)) break;
+  }
+  await expect(restore).toBeVisible();
+  await page.getByRole("switch", { name: "Click to Remove" }).click();
+}
+
+test("removed holes survive a reload", async ({ page }) => {
+  await removeOneHole(page);
+  const remaining = await stat(page, "stat-holes").textContent();
+  expect(Number(remaining)).toBeLessThan(739);
+  await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
+  await page.reload();
+  await expect(stat(page, "stat-holes")).toHaveText(remaining);
+  await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeVisible();
+});
+
+test("a link toggle keeps removed holes; a pattern edit clears them and undo restores both", async ({ page }) => {
+  await removeOneHole(page);
+  const remaining = await stat(page, "stat-holes").textContent();
+
+  // Toggling the margin link changes no hole position, so the removal stands.
+  await page.getByTitle("Set per-side margins").click();
+  await expect(stat(page, "stat-holes")).toHaveText(remaining);
+
+  // Changing the diameter regenerates the pattern, so stale indices are dropped.
+  await setSlider(page, "Hole Diameter", 4);
+  await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeHidden();
+
+  // That clearing rode along in the same undo step.
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect(page.getByLabel("Hole Diameter", { exact: true })).toHaveValue("5");
+  await expect(stat(page, "stat-holes")).toHaveText(remaining);
+  await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeVisible();
+});

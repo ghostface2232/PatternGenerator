@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { createDocument, patchIn, setIn } from "../core/document.js";
+import { patternSignature } from "../core/pipeline.js";
 import * as H from "../core/history.js";
 
 // The document reducer with global undo/redo. Every edit goes through:
@@ -28,8 +29,17 @@ function autoKey(action) {
   return null;
 }
 
+// Removed-hole indices address one particular generated hole list, so an edit
+// that changes the pattern drops them — in the same history step, so undo brings
+// both back together. Loading a document (replace/undo/redo) keeps its removals.
+function dropStaleRemovals(prev, next) {
+  if (next === prev || next.removedHoles.length === 0) return next;
+  return patternSignature(prev) === patternSignature(next) ? next : { ...next, removedHoles: [] };
+}
+
 function reducer(h, action) {
-  const apply = next => {
+  const apply = raw => {
+    const next = dropStaleRemovals(h.present, raw);
     if (action.record === false) return H.amend(h, next);
     return H.record(h, next, { key: autoKey(action) });
   };

@@ -93,6 +93,6 @@ Three shape/pattern combos replace the generic grid with an exact tiling where t
 - Patterns above **10,000 holes** (`PERF_MODE_HOLE_LIMIT`) switch to a reduced "performance mode" render, and overlap/ligament computation is skipped.
 - `holes` positions include centres slightly outside the perforation bounds (within one hole radius); edge clipping is handled visually and by `estimateVisibleHoleArea`, not by dropping holes.
 - OAR has two paths: theoretical (unit cell) for clean infinite patterns, counted (visible area sampling) whenever margins, corner radius, removal, variation, or radial mode make the theoretical value wrong.
-- `removedHoles` are indices into the generated list and are cleared whenever `patternSignature(doc)` changes (effect in `App.jsx`) — the value signature of `buildParams`, so link flags and colours leave them alone.
+- `removedHoles` are indices into the generated list, so `useDocument`'s reducer clears them in the same history step as any edit that changes `patternSignature(doc)` (the value signature of `buildParams`). Link flags, colours and the document name leave them alone, and loading a document (`replace`/undo/redo) keeps the removals it was saved with.
 - The service worker caches aggressively in production; `index.html` unregisters it in dev. Bump `CACHE_NAME` in `public/sw.js` when app-shell files change.
 - Verify geometry changes with `npm test` (pipeline baseline) and `npm run test:e2e` (real browser): gap 0 on the seamless tilings must read 100.0% OAR and Min Ligament must equal the configured edge gap.
