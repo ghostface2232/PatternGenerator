@@ -25,3 +25,41 @@ export const DIN_PRESETS = [
 // Patterns above this many holes switch to the reduced "performance mode" render,
 // and overlap / ligament computation is skipped.
 export const PERF_MODE_HOLE_LIMIT = 10000;
+
+// Size-variation layers a document may carry.
+export const MAX_VARIATION_LAYERS = 3;
+
+// Value ranges the UI can produce. Loading a file or share link clamps to these,
+// so an imported document can never describe a pattern the sliders could not.
+export const DOC_LIMITS = {
+  "sheet.w": [10, 1000],
+  "sheet.h": [10, 1000],
+  "boundary.margins": [0, 50],
+  "boundary.cornerRadius": [0, 500],
+  "hole.diameter": [0.5, 20],
+  "hole.w": [0.5, 30],
+  "hole.h": [0.5, 30],
+  "hole.cornerRadius": [0, 30],
+  "layout.edgeGap": [0, 50],
+  "layout.customAngle": [0, 90],
+  "layout.radial.gap": [0, 50],
+  "taper.thickness": [0, 10],
+  "taper.angle": [0, 15],
+  "variation.minScale": [0.01, 2],
+  "variation.maxScale": [0.05, 2.5],
+  "variation.quantize": [0, 12],
+  "variation.cullBelow": [0, 100],
+  "layer.opacity": [0, 1],
+  "layer.angle": [-360, 360],
+  "layer.center": [0, 1],
+  "layer.radius": [0.1, 2],
+  "layer.turns": [0.25, 8],
+  "layer.position": [0, 1],
+  "layer.phase": [0, 1],
+  "layer.frequency": [0.25, 10],
+  "layer.detail": [1, 6],
+  "layer.steps": [2, 16],
+  "layer.exponent": [0.12, 5],
+  "layer.jitter": [0, 0.5],
+  "layer.seed": [0, 99999],
+};

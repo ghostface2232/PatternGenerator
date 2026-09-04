@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CUSTOM_SIZE_SHAPES, DIN_PRESETS } from "../core/constants.js";
+import { CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_VARIATION_LAYERS } from "../core/constants.js";
 import { cloneVariation, createDocument } from "../core/document.js";
 import { buildParams, computeStats, decorateHoles, deriveGeometry, filterActive } from "../core/pipeline.js";
 import {
@@ -274,7 +274,7 @@ export default function App() {
       setVariationEditMode(true);
     };
     const addVariationLayer = () => {
-      if (history.ref.current.layers.length >= 3) return;
+      if (history.ref.current.layers.length >= MAX_VARIATION_LAYERS) return;
       history.commit(current => {
         const layer = createVariationLayer(current.layers.length + 1);
         return { ...current, enabled: true, layers: [...current.layers, layer], selectedLayerId: layer.id };

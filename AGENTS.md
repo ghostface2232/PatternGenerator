@@ -70,7 +70,8 @@ Edits go through the `api` from `useDocument`: `set(path, value, opts)`, `patch(
 ### Persistence (`core/persistence.js`)
 
 - Autosave: `App.jsx` writes the document to `localStorage` 300 ms after every change and upserts it into the recent list (10 entries, keyed by `doc.id`). `loadInitialDocument()` restores it on start.
-- Files: `.perf.json` via `serializeDocument` / `deserializeDocument`; opening runs `migrateDocument`, which upgrades older `schemaVersion`s through `MIGRATIONS` and fills missing fields from `createDocument()`. **When you change the document shape, bump `DOC_SCHEMA_VERSION` and add a migration step.**
+- Files: `.perf.json` via `serializeDocument` / `deserializeDocument`; opening runs `migrateDocument`, which upgrades older `schemaVersion`s through `MIGRATIONS` and then `validateDocument`. **When you change the document shape, bump `DOC_SCHEMA_VERSION`, add a migration step, and extend `validateDocument`.**
+- Validation: a document can arrive from a hand-edited file or a share link, so `validateDocument` rebuilds it field by field from `createDocument()` — type check, range clamp against `DOC_LIMITS` (the UI's own slider ranges), enum membership — and drops unknown keys. This is what stops a wrong type from crashing the render or an oversized sheet from generating millions of holes; keep new fields covered.
 - Share links: `encodeShareHash(doc)` → `#d=<lz-string>`; a link beats the autosaved document on load and is stripped from the URL afterwards. The `id` is dropped so a shared copy becomes its own document.
 - Keyboard: Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redo, Ctrl/Cmd+S download. Text fields keep the browser's own undo.
 

@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Lock, Plus, Redo2, Sparkles, SquarePen, Undo2, X } from "lucide-react";
 import { BLEND_MODES, FIELD_SPACES, SIZE_PROFILES, VARIATION_PRESETS } from "../../fields/variation-engine.js";
+import { MAX_VARIATION_LAYERS } from "../../core/constants.js";
 import { gizmoUsesPosition } from "../../fields/gizmo.js";
 import { useEditor } from "../EditorContext.jsx";
 import { ProfileIcon, Select, SliderRow, Toggle } from "../controls/index.js";
@@ -160,11 +161,11 @@ export function VariationPanel() {
             ))}
             <button
               onClick={actions.addVariationLayer}
-              disabled={variation.layers.length >= 3}
+              disabled={variation.layers.length >= MAX_VARIATION_LAYERS}
               title="Add layer"
               style={iconBtn({
-                cursor: variation.layers.length >= 3 ? "default" : "pointer",
-                opacity: variation.layers.length >= 3 ? 0.4 : 1,
+                cursor: variation.layers.length >= MAX_VARIATION_LAYERS ? "default" : "pointer",
+                opacity: variation.layers.length >= MAX_VARIATION_LAYERS ? 0.4 : 1,
               })}
             >
               <Plus size={13} />

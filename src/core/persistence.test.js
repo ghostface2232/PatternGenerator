@@ -13,6 +13,7 @@ import {
   saveCurrent,
   serializeDocument,
   touchRecent,
+  validateDocument,
 } from "./persistence.js";
 
 const memStorage = () => {
@@ -90,4 +91,84 @@ test("fileStem sanitises the document name", () => {
   assert.equal(fileStem({ name: "Speaker grille v2" }), "Speaker_grille_v2");
   assert.equal(fileStem({ name: "  /// " }), "pattern");
   assert.equal(fileStem({ name: "환기 패널.최종" }), "환기_패널.최종");
+});
+
+test("validation repairs wrong types instead of letting them reach the app", () => {
+  const doc = validateDocument({
+    name: { evil: 1 },
+    id: 42,
+    units: "inch",
+    sheet: { w: "abc", h: null },
+    hole: { shape: "Blob", diameter: "7", diamondOrient: 3, triEquilateral: "yes" },
+    layout: { type: 5, edgeGapX: NaN, radial: { mode: "Nope", centerHole: 1 } },
+    taper: { enabled: "true", direction: "Sideways" },
+    appearance: { holeColor: "red", bgColor: "#00FF00" },
+    variation: null,
+  });
+  assert.equal(doc.name, "Untitled");
+  assert.equal(typeof doc.id, "string");
+  assert.equal(doc.units, "mm");
+  assert.equal(doc.sheet.w, 200); // "abc" → default
+  assert.equal(doc.sheet.h, 200);
+  assert.equal(doc.hole.shape, "Circle");
+  assert.equal(doc.hole.diameter, 7); // numeric string is accepted
+  assert.equal(doc.hole.diamondOrient, "Point up");
+  assert.equal(doc.hole.triEquilateral, true);
+  assert.equal(doc.layout.type, "Staggered 60°");
+  assert.equal(doc.layout.edgeGapX, 3);
+  assert.equal(doc.layout.radial.mode, "Full");
+  assert.equal(doc.layout.radial.centerHole, false);
+  assert.equal(doc.taper.enabled, false);
+  assert.equal(doc.taper.direction, "Top larger");
+  assert.equal(doc.appearance.holeColor, "#141418");
+  assert.equal(doc.appearance.bgColor, "#00FF00");
+  assert.ok(Array.isArray(doc.variation.layers) && doc.variation.layers.length === 1);
+  // The repaired document still drives the pipeline.
+  assert.ok(computePattern(doc).activeHoles.length > 0);
+});
+
+test("validation clamps out-of-range numbers to what the UI can produce", () => {
+  const doc = validateDocument({
+    sheet: { w: 1e7, h: -50 },
+    hole: { diameter: 0.0001, cornerRadius: 1e9 },
+    layout: { edgeGapX: -5, customAngle: 400 },
+    boundary: { margins: { top: 900, left: -3 }, cornerRadius: 1e6 },
+    taper: { thickness: 500, angle: 90 },
+    variation: { minScale: 9, maxScale: 0.1, quantize: 99, layers: [{ exponent: 1e6, seed: -4, detail: 42 }] },
+  });
+  assert.equal(doc.sheet.w, 1000);
+  assert.equal(doc.sheet.h, 10);
+  assert.equal(doc.hole.diameter, 0.5);
+  assert.equal(doc.hole.cornerRadius, 30);
+  assert.equal(doc.layout.edgeGapX, 0);
+  assert.equal(doc.layout.customAngle, 90);
+  assert.equal(doc.boundary.margins.top, 50);
+  assert.equal(doc.boundary.margins.left, 0);
+  assert.equal(doc.boundary.cornerRadius, 500);
+  assert.equal(doc.taper.thickness, 10);
+  assert.equal(doc.taper.angle, 15);
+  assert.ok(doc.variation.minScale <= doc.variation.maxScale);
+  assert.equal(doc.variation.quantize, 12);
+  assert.equal(doc.variation.layers[0].exponent, 5);
+  assert.equal(doc.variation.layers[0].seed, 0);
+  assert.equal(doc.variation.layers[0].detail, 6);
+  // A pathological sheet can no longer generate an unbounded pattern.
+  assert.ok(computePattern(doc).holes.length < 5e6);
+});
+
+test("validation repairs the variation block and its layer selection", () => {
+  const bad = validateDocument({ variation: { layers: "nope", selectedLayerId: "ghost" } });
+  assert.equal(bad.variation.layers.length, 1);
+  assert.equal(bad.variation.selectedLayerId, bad.variation.layers[0].id);
+  const many = validateDocument({ variation: { layers: [{}, {}, {}, {}, {}] } });
+  assert.equal(many.variation.layers.length, 3); // MAX_VARIATION_LAYERS
+  const holes = validateDocument({ removedHoles: [3, 3, -1, 2.5, "4", null, 7] });
+  assert.deepEqual(holes.removedHoles, [3, 7]);
+});
+
+test("validation drops unknown keys", () => {
+  const doc = validateDocument({ ...createDocument(), rogue: 1, hole: { shape: "Pill", rogue: 2 } });
+  assert.equal("rogue" in doc, false);
+  assert.equal("rogue" in doc.hole, false);
+  assert.equal(doc.hole.shape, "Pill");
 });

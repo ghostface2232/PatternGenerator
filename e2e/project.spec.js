@@ -152,3 +152,13 @@ test("a link toggle keeps removed holes; a pattern edit clears them and undo res
   await expect(stat(page, "stat-holes")).toHaveText(remaining);
   await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeVisible();
 });
+
+test("a corrupt autosave or share link falls back instead of blanking the app", async ({ page }) => {
+  await page.evaluate(() =>
+    localStorage.setItem("perf-pattern:current", '{"sheet":{"w":1},"hole":null,"variation":null}')
+  );
+  await page.reload();
+  await expect(stat(page, "stat-holes")).toHaveText("739"); // unusable save → fresh document
+  await page.goto("/#d=not-a-real-payload");
+  await expect(stat(page, "stat-holes")).toBeVisible();
+});
