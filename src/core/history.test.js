@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { COALESCE_MS, amend, canRedo, canUndo, closeGroup, createHistory, record, redo, undo } from "./history.js";
+import { COALESCE_MS, canRedo, canUndo, closeGroup, createHistory, record, redo, undo } from "./history.js";
 
 test("record / undo / redo walk the stacks", () => {
   let h = createHistory("a");
@@ -52,13 +52,6 @@ test("a different key, a timeout, or closeGroup() starts a new step", () => {
   h = closeGroup(h);
   h = record(h, 4, { key: "b", now: h.lastTime + 1 });
   assert.equal(h.past.length, 4);
-});
-
-test("amend changes the present without a history step", () => {
-  let h = createHistory("a");
-  h = amend(h, "b");
-  assert.equal(h.present, "b");
-  assert.equal(canUndo(h), false);
 });
 
 test("the past is capped at the limit", () => {

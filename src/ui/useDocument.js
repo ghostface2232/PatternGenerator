@@ -11,7 +11,9 @@ import * as H from "../core/history.js";
 // opts:
 //   merge: "key"   coalesce with the previous step when it has the same key and
 //                  happened within COALESCE_MS (slider drags, typing, gizmo drags)
-//   record: false  change the present without a history step (transient state)
+// Every edit is recorded. There is deliberately no "change the present without a
+// history step" escape hatch: such an edit could drop removedHoles (see below)
+// with no undo step left to bring them back.
 // Plus api.undo(), api.redo(), api.closeGroup() (end a coalescing run), and
 // api.ref.current (the latest document, for pointer handlers).
 // Without an explicit merge key, numeric and string edits coalesce under their
@@ -38,11 +40,7 @@ function dropStaleRemovals(prev, next) {
 }
 
 function reducer(h, action) {
-  const apply = raw => {
-    const next = dropStaleRemovals(h.present, raw);
-    if (action.record === false) return H.amend(h, next);
-    return H.record(h, next, { key: autoKey(action) });
-  };
+  const apply = raw => H.record(h, dropStaleRemovals(h.present, raw), { key: autoKey(action) });
   switch (action.type) {
     case "set":
       return apply(setIn(h.present, action.path, action.value));

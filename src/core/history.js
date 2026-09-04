@@ -22,11 +22,6 @@ export function record(h, next, { key = null, now = Date.now(), limit = HISTORY_
   return { present: next, past: [...past, h.present], future: [], lastKey: key, lastTime: now };
 }
 
-// Change the present without touching the stacks (transient / cosmetic edits).
-export function amend(h, next) {
-  return next === h.present ? h : { ...h, present: next };
-}
-
 export function closeGroup(h) {
   return h.lastKey === null ? h : { ...h, lastKey: null, lastTime: 0 };
 }

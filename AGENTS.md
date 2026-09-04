@@ -65,7 +65,7 @@ Edits go through the `api` from `useDocument`: `set(path, value, opts)`, `patch(
 
 ### History (undo/redo)
 
-`core/history.js` is a pure past/present/future structure. Every recorded edit is one undo step, except that consecutive edits with the same coalescing key inside `COALESCE_MS` merge into one (a slider drag, typing, a gizmo drag). `useDocument` picks the key automatically: numeric/string `set`s use their path, all-numeric `patch`es use their joined paths, everything else stands alone. Pass `{ merge: "key" }` to control it, `{ record: false }` for transient changes that must not create a step (the removed-holes reset), and call `api.closeGroup()` when a drag ends. The variation panel and gizmo use the small `history` adapter in `App.jsx` (`commit` / `live` / `endDrag`), which maps onto the same API.
+`core/history.js` is a pure past/present/future structure. Every recorded edit is one undo step, except that consecutive edits with the same coalescing key inside `COALESCE_MS` merge into one (a slider drag, typing, a gizmo drag). `useDocument` picks the key automatically: numeric/string `set`s use their path, all-numeric `patch`es use their joined paths, everything else stands alone. Pass `{ merge: "key" }` to control it, and call `api.closeGroup()` when a drag ends. There is deliberately no way to change the document without recording a step: such an edit could drop `removedHoles` with no undo step left to restore them. The variation panel and gizmo use the small `history` adapter in `App.jsx` (`commit` / `live` / `endDrag`), which maps onto the same API.
 
 ### Persistence (`core/persistence.js`)
 
