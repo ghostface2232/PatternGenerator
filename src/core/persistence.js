@@ -108,14 +108,28 @@ function validateRemovedHoles(raw) {
   if (!Array.isArray(raw)) return [];
   const seen = new Set();
   for (const value of raw) {
-    if (Number.isInteger(value) && value >= 0) seen.add(value);
+    // Numeric strings are accepted here for the same reason as everywhere else:
+    // a hand-written file should not silently lose entries.
+    const index = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+    if (Number.isInteger(index) && index >= 0) seen.add(index);
     if (seen.size >= MAX_REMOVED_HOLES) break;
   }
   return [...seen];
 }
 
-// Rebuild a complete, in-range document from arbitrary parsed JSON.
+// Rebuild a complete, in-range document from arbitrary parsed JSON. Total by
+// construction: anything it cannot make sense of becomes the default document
+// rather than an exception thrown from inside a render.
 export function validateDocument(raw) {
+  try {
+    return buildValidDocument(raw);
+  } catch (err) {
+    console.warn("Unreadable document, falling back to the defaults:", err);
+    return createDocument();
+  }
+}
+
+function buildValidDocument(raw) {
   const d = createDocument();
   const r = obj(raw);
   const margins = obj(obj(r.boundary).margins);

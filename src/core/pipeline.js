@@ -220,7 +220,11 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
 
   // OAR: theoretical (unit cell) for clean infinite patterns, counted whenever
   // margins, corner radius, removal, variation or radial mode make it wrong.
-  const hasRemovedHoles = removedSet.size > 0;
+  // Only indices that address a hole in this list count. A document can arrive
+  // with removals recorded against a different pattern (a hand-edited file, a
+  // link from another version), and those must not read as removed holes.
+  const removedHoleCount = holeCount - activeHoleCount - culledHoleCount;
+  const hasRemovedHoles = removedHoleCount > 0;
   const useCountedOAR = variation.enabled || hasRemovedHoles || g.hasAnyMargin || boundary.cornerRadius > 0 || isRadial;
   const theoreticalHoleArea = calcHoleArea(shape, effW, effH, hole.cornerRadius);
   // Triangle tiling / diamond lattice: one hole per tiling cell (the hole
@@ -286,6 +290,7 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
     activeHoleCount,
     holeCount,
     culledHoleCount,
+    removedHoleCount,
     hasRemovedHoles,
     grossArea,
     perforatedArea,

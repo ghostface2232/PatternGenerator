@@ -254,3 +254,16 @@ test("exit statistics are empty rather than infinite when every hole is closed",
   assert.equal(closed.stats.maxExit, 0);
   assert.equal(closed.stats.dExit, 0);
 });
+
+test("removals recorded against a different pattern do not count as removed", () => {
+  const stale = computePattern(doc({ removedHoles: [999999, 1000000] }));
+  assert.equal(stale.stats.removedHoleCount, 0);
+  assert.equal(stale.stats.hasRemovedHoles, false);
+  assert.equal(stale.stats.useCountedOAR, false); // and do not force the counted path
+  assert.equal(stale.activeHoles.length, 739);
+
+  const real = computePattern(doc({ removedHoles: [0, 1, 999999] }));
+  assert.equal(real.stats.removedHoleCount, 2);
+  assert.equal(real.stats.hasRemovedHoles, true);
+  assert.equal(real.activeHoles.length, 737);
+});

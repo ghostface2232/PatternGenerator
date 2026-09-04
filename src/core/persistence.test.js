@@ -172,8 +172,8 @@ test("validation repairs the variation block and its layer selection", () => {
   assert.equal(bad.variation.selectedLayerId, bad.variation.layers[0].id);
   const many = validateDocument({ variation: { layers: [{}, {}, {}, {}, {}] } });
   assert.equal(many.variation.layers.length, 3); // MAX_VARIATION_LAYERS
-  const holes = validateDocument({ removedHoles: [3, 3, -1, 2.5, "4", null, 7] });
-  assert.deepEqual(holes.removedHoles, [3, 7]);
+  const holes = validateDocument({ removedHoles: [3, 3, -1, 2.5, "4", null, 7, "x"] });
+  assert.deepEqual(holes.removedHoles, [3, 4, 7]); // numeric strings count, like every other field
 });
 
 test("validation drops unknown keys", () => {
@@ -181,4 +181,29 @@ test("validation drops unknown keys", () => {
   assert.equal("rogue" in doc, false);
   assert.equal("rogue" in doc.hole, false);
   assert.equal(doc.hole.shape, "Pill");
+});
+
+test("validation is total: an input it cannot read becomes the default document", () => {
+  const hostile = {
+    get hole() {
+      throw new Error("boom");
+    },
+  };
+  const doc = validateDocument(hostile);
+  assert.equal(doc.hole.shape, createDocument().hole.shape);
+  assert.equal(doc.sheet.w, createDocument().sheet.w);
+  const inputs = [
+    ["null", null],
+    ["undefined", undefined],
+    ["number", 7],
+    ["string", "text"],
+    ["array", []],
+    ["null-prototype object", Object.create(null)],
+    ["array where an object belongs", { hole: [] }],
+    ["deeply nested junk", JSON.parse("[".repeat(200) + "]".repeat(200))],
+  ];
+  for (const [label, input] of inputs) {
+    assert.doesNotThrow(() => validateDocument(input), label);
+    assert.equal(validateDocument(input).schemaVersion, createDocument().schemaVersion, label);
+  }
 });
