@@ -9,6 +9,7 @@ import {
   deserializeDocument,
   encodeShareHash,
   fileStem,
+  STORAGE_KEY_CURRENT,
   loadCurrent,
   loadRecent,
   migrateDocument,
@@ -40,8 +41,15 @@ function storage() {
   }
 }
 
+// True when the document we start with is byte-for-byte what localStorage
+// already holds, so this tab has nothing to write until the user edits it.
+// Without it a freshly opened, untouched tab writes its copy ~850 ms after load
+// (mount plus the debounce) over whatever another tab saved in between.
+let startedClean = false;
+
 // Share link in the URL beats the autosaved document, which beats a fresh one.
 function loadInitialDocument() {
+  startedClean = false;
   try {
     const shared = decodeShareHash(window.location.hash);
     if (shared) {
@@ -52,7 +60,12 @@ function loadInitialDocument() {
     console.warn("Ignoring damaged share link:", err);
   }
   const store = storage();
-  return (store && loadCurrent(store)) || createDocument();
+  const stored = store && loadCurrent(store);
+  if (!stored) return createDocument();
+  // A document an older version wrote may normalise on load; then it is dirty
+  // and gets its one write, correctly.
+  startedClean = serializeDocument(stored, false) === store.getItem(STORAGE_KEY_CURRENT);
+  return stored;
 }
 
 export default function App() {
@@ -67,7 +80,7 @@ export default function App() {
   const [variationHud, setVariationHud] = useState(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
-  const [savedDoc, setSavedDoc] = useState(null); // the last document written to localStorage
+  const [savedDoc, setSavedDoc] = useState(() => (startedClean ? doc : null)); // last written to localStorage
   const [saveError, setSaveError] = useState(false);
   const [recent, setRecent] = useState(() => {
     const store = storage();
@@ -96,7 +109,8 @@ export default function App() {
   // ─── Autosave (localStorage) ──────────────────────────────────────
   // Removed-hole indices are dropped by the reducer when the pattern changes,
   // so a loaded document keeps the removals it was saved with.
-  const savedRef = useRef(null); // same as savedDoc, readable from event handlers
+  const savedRef = useRef(startedClean ? doc : null); // same as savedDoc, readable from event handlers
+  const recentRef = useRef(null); // last document upserted into the recent list
   // Write only what is genuinely unsaved. A tab that has not been touched since
   // it loaded must stay quiet: writing its copy would undo whatever another tab
   // saved in the meantime, and both share the one `current` key. The guard sits
@@ -104,23 +118,31 @@ export default function App() {
   // unload flush becomes a no-op instead of a second, later write.
   const saveNow = useCallback(next => {
     const store = storage();
-    if (!store || !next || next === savedRef.current) return;
-    try {
-      saveCurrent(store, next);
-    } catch (err) {
-      console.warn("Autosave failed:", err);
-      setSaveError(true);
-      return;
+    if (!store || !next) return;
+    if (next !== savedRef.current) {
+      try {
+        saveCurrent(store, next);
+      } catch (err) {
+        console.warn("Autosave failed:", err);
+        setSaveError(true);
+        return;
+      }
+      savedRef.current = next;
+      setSavedDoc(next);
     }
-    // The document is safe from here on; mark it saved before touching the
-    // recent list, which is a convenience and is far more likely to hit a quota.
-    savedRef.current = next;
-    setSavedDoc(next);
+    // Reached only once the document is known to be in storage, so a later save
+    // of an unchanged document still clears an error left by an earlier one.
     setSaveError(false);
-    try {
-      setRecent(touchRecent(store, next));
-    } catch (err) {
-      console.warn("Could not update the recent list:", err);
+    // The recent list is a convenience and, holding ten whole documents, is far
+    // more likely to hit a quota. It carries its own mark so that a failure is
+    // retried on the next save instead of being written off with the document.
+    if (next !== recentRef.current) {
+      try {
+        setRecent(touchRecent(store, next));
+        recentRef.current = next;
+      } catch (err) {
+        console.warn("Could not update the recent list:", err);
+      }
     }
   }, []);
   useEffect(() => {

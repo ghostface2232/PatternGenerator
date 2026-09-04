@@ -217,6 +217,8 @@ async function countWrites(page) {
 
 test("an edit is written once, and a flush does not leave the debounce to write it again", async ({ page }) => {
   const writes = await countWrites(page);
+  // A baseline: one edit, one write. This half passes with the flush removed
+  // entirely — it guards against double rendering, not against the flush.
   await writes.reset();
   await page.evaluate(setSlider => eval(setSlider)("Hole Diameter", 8), SET_SLIDER);
   await page.waitForTimeout(700);
@@ -236,14 +238,80 @@ test("starting a new document saves the edits the outgoing one had not written y
   await page.getByLabel("Document name", { exact: true }).fill("Doc One");
   await page.getByLabel("Document name", { exact: true }).press("Enter");
   await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
-  // Edit and switch documents inside the 300 ms debounce window.
-  await page.evaluate(setSlider => eval(setSlider)("Panel Width", 321), SET_SLIDER);
-  await page.getByRole("button", { name: "New", exact: true }).click();
-  await expect(stat(page, "doc-name")).toHaveText("Untitled");
-  const recent = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("perf-pattern:recent")).map(e => [e.name, e.doc.sheet.w])
-  );
+  // Edit and switch documents in one page task. Two Playwright round trips would
+  // leave only ~120 ms of margin against the 300 ms debounce, and on a slow run
+  // the debounce would write the edit for us and the test would prove nothing.
+  const recent = await page.evaluate(setSlider => {
+    eval(setSlider)("Panel Width", 321);
+    [...document.querySelectorAll("button")].find(b => b.textContent.trim() === "New").click();
+    return JSON.parse(localStorage.getItem("perf-pattern:recent")).map(e => [e.name, e.doc.sheet.w]);
+  }, SET_SLIDER);
   expect(recent).toContainEqual(["Doc One", 321]);
+  await expect(stat(page, "doc-name")).toHaveText("Untitled");
+});
+
+test("a recent-list failure is retried even though the document has not changed since", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__failRecent = true;
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === "perf-pattern:recent" && window.__failRecent) {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      return original.call(this, key, value);
+    };
+  });
+  await page.reload();
+  await page.getByLabel("Document name", { exact: true }).fill("Precious");
+  await page.getByLabel("Document name", { exact: true }).press("Enter");
+  await setSlider(page, "Hole Diameter", 6);
+  await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("perf-pattern:recent")))).not.toContainEqual(
+    expect.objectContaining({ name: "Precious" })
+  );
+
+  // The quota clears and the page goes away without another edit. The document
+  // is already stored, so a save that stops at that fact never retries the list.
+  await page.evaluate(() => {
+    window.__failRecent = false;
+    window.dispatchEvent(new Event("pagehide"));
+  });
+  const recent = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("perf-pattern:recent")).map(e => [e.name, e.doc.hole.diameter])
+  );
+  expect(recent).toContainEqual(["Precious", 6]);
+});
+
+test("a transient write failure clears once the document is stored again", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__failCurrent = true;
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === "perf-pattern:current" && window.__failCurrent) {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      return original.call(this, key, value);
+    };
+  });
+  await page.reload();
+  await setSlider(page, "Hole Diameter", 6);
+  await expect(stat(page, "save-status")).toHaveText("NOT SAVED");
+
+  // Backing the edit out returns the very document already in storage, so there
+  // is nothing new to write — but the status must stop claiming a failure.
+  await page.evaluate(() => (window.__failCurrent = false));
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect(page.getByLabel("Hole Diameter", { exact: true })).toHaveValue("5");
+  await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
+});
+
+test("a tab that opens on the document already in storage writes nothing at all", async ({ page }) => {
+  // Otherwise every newly opened tab writes its copy roughly a second after
+  // load, over whatever another tab saved in between.
+  await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
+  const writes = await countWrites(page); // reloads with the counter already installed
+  await page.waitForTimeout(900);
+  expect(await writes.current()).toBe(0);
 });
 
 test("a failed write reports NOT SAVED instead of hanging on SAVING", async ({ page }) => {
