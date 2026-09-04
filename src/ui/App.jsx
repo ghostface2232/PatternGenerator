@@ -97,30 +97,37 @@ export default function App() {
   // Removed-hole indices are dropped by the reducer when the pattern changes,
   // so a loaded document keeps the removals it was saved with.
   const savedRef = useRef(null); // same as savedDoc, readable from event handlers
+  // Write only what is genuinely unsaved. A tab that has not been touched since
+  // it loaded must stay quiet: writing its copy would undo whatever another tab
+  // saved in the meantime, and both share the one `current` key. The guard sits
+  // here rather than at the call sites so that a debounce still armed behind an
+  // unload flush becomes a no-op instead of a second, later write.
   const saveNow = useCallback(next => {
     const store = storage();
-    if (!store || !next) return;
+    if (!store || !next || next === savedRef.current) return;
     try {
       saveCurrent(store, next);
-      setRecent(touchRecent(store, next));
-      savedRef.current = next;
-      setSavedDoc(next);
-      setSaveError(false);
     } catch (err) {
       console.warn("Autosave failed:", err);
       setSaveError(true);
+      return;
+    }
+    // The document is safe from here on; mark it saved before touching the
+    // recent list, which is a convenience and is far more likely to hit a quota.
+    savedRef.current = next;
+    setSavedDoc(next);
+    setSaveError(false);
+    try {
+      setRecent(touchRecent(store, next));
+    } catch (err) {
+      console.warn("Could not update the recent list:", err);
     }
   }, []);
   useEffect(() => {
     const t = window.setTimeout(() => saveNow(doc), AUTOSAVE_MS);
     return () => window.clearTimeout(t);
   }, [doc, saveNow]);
-  // Write only what is genuinely unsaved. A tab that has not been touched since
-  // it loaded must stay quiet: writing its copy would undo whatever another tab
-  // saved in the meantime, and both share the one `current` key.
-  const flushPending = useCallback(() => {
-    if (api.ref.current !== savedRef.current) saveNow(api.ref.current);
-  }, [api, saveNow]);
+  const flushPending = useCallback(() => saveNow(api.ref.current), [api, saveNow]);
   // The debounce would otherwise lose the last edits when the page goes away.
   // visibilitychange fires on the way back in as well, so check which way it went.
   useEffect(() => {

@@ -11,6 +11,18 @@ async function setSlider(page, label, value) {
 
 const stat = (page, id) => page.getByTestId(id);
 
+// Drive a slider from inside the page: find the range input by the label on its
+// numeric field rather than by position, which a sidebar reorder would break.
+const SET_SLIDER = `(label, value) => {
+  const field = document.querySelector('input[aria-label="' + label + '"]');
+  let row = field;
+  while (row && !row.querySelector('input[type="range"]')) row = row.parentElement;
+  const slider = row.querySelector('input[type="range"]');
+  const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setValue.call(slider, String(value));
+  slider.dispatchEvent(new Event('input', { bubbles: true }));
+}`;
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await expect(stat(page, "stat-holes")).toBeVisible();
@@ -110,14 +122,11 @@ test("an unload flushes edits the debounce has not written yet", async ({ page }
   await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
   // Drive the slider and the unload in one task so the 300 ms debounce cannot
   // fire in between: whatever lands in storage got there through the flush.
-  const saved = await page.evaluate(() => {
-    const slider = document.querySelector('input[type="range"]'); // Hole Diameter
-    const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-    setValue.call(slider, "7");
-    slider.dispatchEvent(new Event("input", { bubbles: true }));
+  const saved = await page.evaluate(setSlider => {
+    eval(setSlider)("Hole Diameter", 7);
     window.dispatchEvent(new Event("pagehide"));
     return JSON.parse(localStorage.getItem("perf-pattern:current")).hole.diameter;
-  });
+  }, SET_SLIDER);
   expect(saved).toBe(7);
 });
 
@@ -136,11 +145,8 @@ test("an untouched tab never overwrites what another tab saved", async ({ page }
 
 test("a visibility change while the tab is still visible leaves the write to the debounce", async ({ page }) => {
   await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
-  const [afterVisible, afterHide] = await page.evaluate(() => {
-    const slider = document.querySelector('input[type="range"]'); // Hole Diameter
-    const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-    setValue.call(slider, "9");
-    slider.dispatchEvent(new Event("input", { bubbles: true })); // unsaved, debounce armed
+  const [afterVisible, afterHide] = await page.evaluate(setSlider => {
+    eval(setSlider)("Hole Diameter", 9); // unsaved, debounce armed
     const other = JSON.parse(localStorage.getItem("perf-pattern:current"));
     other.name = "Written elsewhere";
     localStorage.setItem("perf-pattern:current", JSON.stringify(other));
@@ -148,9 +154,46 @@ test("a visibility change while the tab is still visible leaves the write to the
     const stillThere = JSON.parse(localStorage.getItem("perf-pattern:current")).name;
     window.dispatchEvent(new Event("pagehide")); // now the page really is going away
     return [stillThere, JSON.parse(localStorage.getItem("perf-pattern:current")).hole.diameter];
-  });
+  }, SET_SLIDER);
   expect(afterVisible).toBe("Written elsewhere");
   expect(afterHide).toBe(9);
+});
+
+test("a flush disarms the debounce instead of writing again behind it", async ({ page }) => {
+  await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
+  await page.evaluate(setSlider => {
+    eval(setSlider)("Hole Diameter", 7);
+    window.dispatchEvent(new Event("pagehide")); // the flush writes it
+    const other = JSON.parse(localStorage.getItem("perf-pattern:current"));
+    other.name = "Saved by another tab";
+    localStorage.setItem("perf-pattern:current", JSON.stringify(other));
+  }, SET_SLIDER);
+  // The debounce armed by that edit is still pending. It must find nothing left
+  // to write; otherwise it lands here and overwrites the other tab's save.
+  await page.waitForTimeout(700);
+  const name = await page.evaluate(() => JSON.parse(localStorage.getItem("perf-pattern:current")).name);
+  expect(name).toBe("Saved by another tab");
+});
+
+test("a recent-list failure does not leave the tab rewriting on every hide", async ({ page }) => {
+  // The document itself saves; only the (much larger) recent list hits the quota.
+  await page.addInitScript(() => {
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === "perf-pattern:recent") throw new DOMException("quota exceeded", "QuotaExceededError");
+      return original.call(this, key, value);
+    };
+  });
+  await page.reload();
+  await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
+  const name = await page.evaluate(() => {
+    const other = JSON.parse(localStorage.getItem("perf-pattern:current"));
+    other.name = "Saved by another tab";
+    localStorage.setItem("perf-pattern:current", JSON.stringify(other));
+    window.dispatchEvent(new Event("pagehide"));
+    return JSON.parse(localStorage.getItem("perf-pattern:current")).name;
+  });
+  expect(name).toBe("Saved by another tab");
 });
 
 test("a failed write reports NOT SAVED instead of hanging on SAVING", async ({ page }) => {

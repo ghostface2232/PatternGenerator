@@ -67,11 +67,11 @@ export function useDocument(initial) {
   );
   const doc = h.present;
   // Mirror of the current document for code that runs outside React: canvas
-  // pointer handlers, the export buttons and the unload flush. A layout effect,
-  // not a passive one: layout effects run synchronously as part of the commit,
-  // so a listener firing later in the same task as the edit that dispatched it
-  // still reads the new document. A passive effect would land after that and
-  // hand the listener the previous one.
+  // pointer handlers, the export buttons and the unload flush. A layout effect
+  // rather than a passive one so the mirror is current as soon as the commit is,
+  // without depending on React choosing to flush passive effects synchronously
+  // inside a discrete event — which it does today, so this is defence in depth
+  // rather than a fix for an observed bug.
   const ref = useRef(doc);
   useLayoutEffect(() => {
     ref.current = doc;
