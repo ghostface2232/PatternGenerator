@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import LZString from "lz-string";
 
 // Persistence, sharing and undo/redo (Phase 1).
 
@@ -257,12 +258,62 @@ test("a dropped file never navigates the tab away, and a document file opens", a
   await expect(page.getByLabel("Panel Width", { exact: true })).toHaveValue("150");
 });
 
-test("a corrupt autosave or share link falls back instead of blanking the app", async ({ page }) => {
-  await page.evaluate(() =>
-    localStorage.setItem("perf-pattern:current", '{"sheet":{"w":1},"hole":null,"variation":null}')
-  );
-  await page.reload();
-  await expect(stat(page, "stat-holes")).toHaveText("739"); // unusable save → fresh document
-  await page.goto("/#d=not-a-real-payload");
-  await expect(stat(page, "stat-holes")).toBeVisible();
+// A document whose types are all wrong but whose shape passes the "is this even
+// a document?" guard, so it reaches validateDocument rather than being rejected
+// outright. Without validation the render throws on variation.layers.find and
+// on rendering an object as the document name, and the app comes up blank.
+const CORRUPT_DOCUMENT = {
+  schemaVersion: 1,
+  name: { not: "a string" },
+  units: "furlongs",
+  sheet: { w: "abc", h: null },
+  hole: { shape: "Blob", diameter: "7", cornerRadius: 1e9 },
+  layout: { type: 42, edgeGapX: -5, radial: { mode: "Nope" } },
+  variation: { layers: null, selectedLayerId: "ghost", minScale: 9, maxScale: 0.1 },
+  taper: { enabled: "yes", direction: "Sideways" },
+  appearance: { holeColor: "red", bgColor: "#00FF00" },
+  removedHoles: "nope",
+};
+
+// A link click or a cold start, not a hash change inside a page that is already
+// running: same-document navigation would never re-read the URL.
+async function coldStart(browser, url, seed) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  if (seed) {
+    await page.addInitScript(doc => localStorage.setItem("perf-pattern:current", JSON.stringify(doc)), seed);
+  }
+  await page.goto(url);
+  return { context, page };
+}
+
+async function expectRepaired(page) {
+  await expect(stat(page, "doc-name")).toHaveText("Untitled");
+  await expect(page.getByRole("button", { name: "Hole Shape", exact: true })).toHaveText("Circle");
+  await expect(page.getByLabel("Hole Diameter", { exact: true })).toHaveValue("7"); // numeric string kept
+  await expect(page.getByLabel("Panel Width", { exact: true })).toHaveValue("200"); // "abc" → default
+  await expect(page.getByLabel("X Edge Gap", { exact: true })).toHaveValue("0"); // -5 clamped
+  await expect(stat(page, "stat-holes")).not.toHaveText("0");
+}
+
+test("a corrupt autosave is repaired rather than blanking the app", async ({ browser }) => {
+  const { context, page } = await coldStart(browser, "/", CORRUPT_DOCUMENT);
+  await expectRepaired(page);
+  await context.close();
+});
+
+test("a corrupt share link is repaired rather than blanking the app", async ({ browser }) => {
+  const payload = LZString.compressToEncodedURIComponent(JSON.stringify(CORRUPT_DOCUMENT));
+  const { context, page } = await coldStart(browser, `/#d=${payload}`);
+  await expectRepaired(page);
+  expect(page.url()).not.toContain("#d=");
+  await context.close();
+});
+
+test("an undecodable share link falls back to the autosaved document", async ({ browser }) => {
+  const autosaved = { schemaVersion: 1, name: "Autosaved", sheet: { w: 150, h: 150 }, hole: { shape: "Circle" } };
+  const { context, page } = await coldStart(browser, "/#d=not-a-real-payload", autosaved);
+  await expect(stat(page, "doc-name")).toHaveText("Autosaved");
+  await expect(page.getByLabel("Panel Width", { exact: true })).toHaveValue("150");
+  await context.close();
 });

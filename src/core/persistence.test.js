@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDocument, patchIn } from "./document.js";
+import { DOC_LIMITS } from "./constants.js";
 import { computePattern } from "./pipeline.js";
 import {
   decodeShareHash,
@@ -152,8 +153,17 @@ test("validation clamps out-of-range numbers to what the UI can produce", () => 
   assert.equal(doc.variation.layers[0].exponent, 5);
   assert.equal(doc.variation.layers[0].seed, 0);
   assert.equal(doc.variation.layers[0].detail, 6);
-  // A pathological sheet can no longer generate an unbounded pattern.
-  assert.ok(computePattern(doc).holes.length < 5e6);
+  // Every clamp lands on the matching slider bound, so an imported document can
+  // never describe a pattern the UI itself could not reach.
+  assert.deepEqual(
+    [doc.sheet.w, doc.sheet.h, doc.hole.diameter, doc.layout.edgeGapX],
+    [
+      DOC_LIMITS["sheet.w"][1],
+      DOC_LIMITS["sheet.h"][0],
+      DOC_LIMITS["hole.diameter"][0],
+      DOC_LIMITS["layout.edgeGap"][0],
+    ]
+  );
 });
 
 test("validation repairs the variation block and its layer selection", () => {
