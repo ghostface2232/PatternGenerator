@@ -138,3 +138,40 @@ test("triEquilateral only changes the signature when it changes the height", () 
   const other = patchIn(tri, { "hole.h": 10 });
   assert.notEqual(patternSignature(patchIn(other, { "hole.triEquilateral": false })), patternSignature(other));
 });
+
+test("a dense pattern computes its statistics without overflowing the stack", () => {
+  // 200 mm panel of 0.5 mm holes at zero gap — reachable from the sliders alone.
+  // The exit-size extremes used to be spread into Math.min/Math.max, which throws
+  // RangeError past roughly 125k arguments.
+  const dense = doc({ "hole.diameter": 0.5, "layout.edgeGapX": 0, "layout.edgeGapY": 0 });
+  const { stats, activeHoles } = computePattern(dense);
+  assert.ok(activeHoles.length > 150000, `only ${activeHoles.length} holes`);
+  assert.equal(stats.perfMode, true);
+  assert.equal(stats.minLigament, null); // skipped above the performance-mode limit
+  assert.equal(fixed(stats.minExit, 3), 0.5);
+  assert.equal(fixed(stats.maxExit, 3), 0.5);
+  assert.equal(stats.hasClosedHoles, false);
+
+  // With taper on, the extremes are the tapered exit size, still in one pass.
+  const tapered = computePattern(
+    doc({
+      "hole.diameter": 0.5,
+      "layout.edgeGapX": 0,
+      "layout.edgeGapY": 0,
+      "taper.enabled": true,
+      "taper.thickness": 1,
+      "taper.angle": 5,
+    })
+  );
+  assert.ok(tapered.stats.minExit > 0 && tapered.stats.minExit < 0.5);
+  assert.equal(fixed(tapered.stats.minExit, 6), fixed(tapered.stats.maxExit, 6));
+  assert.equal(fixed(tapered.stats.dExit, 6), fixed(tapered.stats.minExit, 6));
+});
+
+test("exit statistics are empty rather than infinite when every hole is closed", () => {
+  const closed = computePattern(doc({ "taper.enabled": true, "taper.thickness": 10, "taper.angle": 15 }));
+  assert.equal(closed.stats.holeClosed, true);
+  assert.equal(closed.stats.minExit, 0);
+  assert.equal(closed.stats.maxExit, 0);
+  assert.equal(closed.stats.dExit, 0);
+});

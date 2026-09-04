@@ -236,13 +236,29 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   const countedOAR = perforatedArea > 0 ? (totalHoleArea / perforatedArea) * 100 : 0;
   const nominalOAR = useCountedOAR ? countedOAR : theoreticalOAR;
 
-  const closedHoleCount = activeHoles.filter(h => h.isClosed).length;
+  // Closed-hole count and exit-size extremes in one pass. This used to spread the
+  // per-hole values into Math.min/Math.max, which overflows the call stack past
+  // roughly 125k arguments — reachable from the sliders alone (a 200 mm panel of
+  // 0.5 mm holes at zero gap is 160,801 holes).
+  let closedHoleCount = 0;
+  let openHoleCount = 0;
+  let exitSum = 0;
+  let minExit = 0;
+  let maxExit = 0;
+  for (const h of activeHoles) {
+    if (h.isClosed) {
+      closedHoleCount++;
+      continue;
+    }
+    const exit = Math.min(h.exitW, h.exitH);
+    openHoleCount++;
+    exitSum += exit;
+    if (openHoleCount === 1 || exit < minExit) minExit = exit;
+    if (openHoleCount === 1 || exit > maxExit) maxExit = exit;
+  }
   const holeClosed = activeHoleCount > 0 && closedHoleCount === activeHoleCount;
   const hasClosedHoles = closedHoleCount > 0;
-  const dExitValues = activeHoles.filter(h => !h.isClosed).map(h => Math.min(h.exitW, h.exitH));
-  const dExit = dExitValues.length ? dExitValues.reduce((s, v) => s + v, 0) / dExitValues.length : 0;
-  const minExit = dExitValues.length ? Math.min(...dExitValues) : 0;
-  const maxExit = dExitValues.length ? Math.max(...dExitValues) : 0;
+  const dExit = openHoleCount ? exitSum / openHoleCount : 0;
   const theoreticalExitW = taperActive ? Math.max(0, effW - taperInset) : effW;
   const theoreticalExitH = taperActive ? Math.max(0, effH - taperInset) : effH;
   const theoreticalExitRadius = Math.max(
