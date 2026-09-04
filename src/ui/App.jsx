@@ -70,6 +70,20 @@ function loadInitialDocument() {
 
 export default function App() {
   const [doc, api] = useDocument(loadInitialDocument);
+  const closeHistoryGroup = api.closeGroup;
+
+  // Continuous edits coalesce while a pointer gesture is active. End the group
+  // at the browser boundary so two quick slider or colour-picker drags remain
+  // separate undo steps, including when pointer capture moves the release away
+  // from the control that started the gesture.
+  useEffect(() => {
+    window.addEventListener("pointerup", closeHistoryGroup);
+    window.addEventListener("pointercancel", closeHistoryGroup);
+    return () => {
+      window.removeEventListener("pointerup", closeHistoryGroup);
+      window.removeEventListener("pointercancel", closeHistoryGroup);
+    };
+  }, [closeHistoryGroup]);
 
   // ─── UI-only state (never saved with the document) ─────────────────
   const [dark, setDark] = useState(true);

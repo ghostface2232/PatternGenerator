@@ -261,7 +261,27 @@ export function loadCurrent(storage) {
 export function loadRecent(storage) {
   try {
     const list = JSON.parse(storage.getItem(STORAGE_KEY_RECENT) || "[]");
-    return Array.isArray(list) ? list : [];
+    if (!Array.isArray(list)) return [];
+    const recent = [];
+    const seen = new Set();
+    for (const raw of list) {
+      if (!raw || typeof raw !== "object") continue;
+      try {
+        const doc = migrateDocument(raw.doc);
+        if (seen.has(doc.id)) continue;
+        seen.add(doc.id);
+        recent.push({
+          id: doc.id,
+          name: doc.name,
+          updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : 0,
+          doc,
+        });
+      } catch {
+        // One damaged entry must not prevent the application from opening.
+      }
+      if (recent.length >= RECENT_LIMIT) break;
+    }
+    return recent;
   } catch {
     return [];
   }

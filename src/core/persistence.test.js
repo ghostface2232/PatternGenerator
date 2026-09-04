@@ -13,6 +13,7 @@ import {
   migrateDocument,
   saveCurrent,
   serializeDocument,
+  STORAGE_KEY_RECENT,
   touchRecent,
   validateDocument,
 } from "./persistence.js";
@@ -86,6 +87,28 @@ test("localStorage autosave and the recent list", () => {
   );
   for (let i = 0; i < 20; i++) touchRecent(storage, { ...createDocument(), id: `x${i}` }, 10 + i);
   assert.equal(loadRecent(storage).length, 10);
+});
+
+test("the recent list drops damaged entries and normalises valid documents", () => {
+  const storage = memStorage();
+  const valid = patchIn(createDocument(), { id: "valid", name: "Kept", "sheet.w": 321 });
+  storage.setItem(
+    STORAGE_KEY_RECENT,
+    JSON.stringify([
+      null,
+      7,
+      { id: "stale", name: "Stale metadata", updatedAt: "yesterday", doc: valid },
+      { id: "broken", updatedAt: 2, doc: { schemaVersion: 99, sheet: {}, hole: {} } },
+      { id: "duplicate", updatedAt: 3, doc: valid },
+    ])
+  );
+
+  const recent = loadRecent(storage);
+  assert.equal(recent.length, 1);
+  assert.deepEqual(
+    [recent[0].id, recent[0].name, recent[0].updatedAt, recent[0].doc.sheet.w],
+    ["valid", "Kept", 0, 321]
+  );
 });
 
 test("fileStem sanitises the document name", () => {

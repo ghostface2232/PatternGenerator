@@ -118,6 +118,43 @@ test("undo and redo walk through edits, and a slider drag is one step", async ({
   await expect(page.getByLabel("Hole Diameter", { exact: true })).toHaveValue("5");
 });
 
+test("two quick slider gestures remain separate undo steps", async ({ page }) => {
+  const slider = page.locator('input[type="range"]').first(); // Hole Diameter
+  const box = await slider.boundingBox();
+  await page.mouse.click(box.x + box.width * 0.35, box.y + box.height / 2);
+  const first = await page.getByLabel("Hole Diameter", { exact: true }).inputValue();
+  await page.mouse.click(box.x + box.width * 0.65, box.y + box.height / 2);
+  await expect(page.getByLabel("Hole Diameter", { exact: true })).not.toHaveValue(first);
+
+  await page.keyboard.press("Control+z");
+  await expect(page.getByLabel("Hole Diameter", { exact: true })).toHaveValue(first);
+});
+
+test("a damaged recent list cannot blank the application", async ({ page }) => {
+  await page.evaluate(() => localStorage.setItem("perf-pattern:recent", "[null,7]"));
+  await page.reload();
+  await expect(stat(page, "stat-holes")).toBeVisible();
+  await expect(page.getByText("Perf Pattern", { exact: true })).toBeVisible();
+});
+
+test("PNG export reports synchronous canvas failures", async ({ page }) => {
+  await page.evaluate(() => {
+    const createElement = document.createElement.bind(document);
+    document.createElement = (tagName, options) => {
+      const element = createElement(tagName, options);
+      if (String(tagName).toLowerCase() === "canvas") element.getContext = () => null;
+      return element;
+    };
+  });
+
+  const dialogPromise = page.waitForEvent("dialog");
+  const clickPromise = page.getByRole("button", { name: "PNG 2x", exact: true }).click();
+  const dialog = await dialogPromise;
+  expect(dialog.message()).toContain("Could not export this pattern as PNG: 2D canvas is unavailable");
+  await dialog.dismiss();
+  await clickPromise;
+});
+
 test("an unload flushes edits the debounce has not written yet", async ({ page }) => {
   await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
   // Drive the slider and the unload in one task so the 300 ms debounce cannot

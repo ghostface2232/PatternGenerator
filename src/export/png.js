@@ -2,13 +2,14 @@
 import { traceHolePath } from "../geometry/shapes.js";
 import { tracePerfBoundary } from "../geometry/boundary.js";
 
-export function renderPNGBlob({ activeHoles, params, holeColor, bgColor, dark, pixelsPerMm = 8 }) {
+export async function renderPNGBlob({ activeHoles, params, holeColor, bgColor, dark, pixelsPerMm = 8 }) {
   const { sheetW, sheetH, holeShape } = params;
   const taperActive = params.thickness > 0 && params.taperAngle > 0;
   const oc = document.createElement("canvas");
   oc.width = sheetW * pixelsPerMm;
   oc.height = sheetH * pixelsPerMm;
   const ctx = oc.getContext("2d");
+  if (!ctx) throw new Error("2D canvas is unavailable");
   const s = Math.min(oc.width / sheetW, oc.height / sheetH);
   ctx.fillStyle = bgColor;
   ctx.fillRect(0, 0, oc.width, oc.height);
