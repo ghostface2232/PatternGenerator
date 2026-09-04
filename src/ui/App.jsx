@@ -19,7 +19,7 @@ import {
 import { generateHoles } from "../layouts/grid.js";
 import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
-import { generateSVGString } from "../export/svg.js";
+import { generateSVGParts } from "../export/svg.js";
 import { renderPNGBlob } from "../export/png.js";
 import { downloadBlob, downloadText } from "../export/download.js";
 import { getTheme, MONO } from "./theme.js";
@@ -360,17 +360,31 @@ export default function App() {
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
+  // Both exports can fail on a very large pattern (memory, canvas limits), and a
+  // button that silently does nothing is worse than one that says why.
   const exportSVG = useCallback(() => {
-    downloadText(
-      generateSVGString(activeHoles, { ...params, holeColor, bgColor }),
-      `${fileStem(doc)}.svg`,
-      "image/svg+xml"
-    );
+    try {
+      // Blob from the chunks, never one joined string: a multi-million-hole
+      // document overruns the maximum string length.
+      const parts = generateSVGParts(activeHoles, { ...params, holeColor, bgColor });
+      downloadBlob(new Blob(parts, { type: "image/svg+xml" }), `${fileStem(doc)}.svg`);
+    } catch (err) {
+      console.error("SVG export failed:", err);
+      window.alert(
+        `Could not export this pattern as SVG (${activeHoles.length.toLocaleString()} holes): ${err.message}`
+      );
+    }
   }, [activeHoles, params, holeColor, bgColor, doc]);
   const exportPNG = useCallback(() => {
-    renderPNGBlob({ activeHoles, params, holeColor, bgColor, dark }).then(blob =>
-      downloadBlob(blob, `${fileStem(doc)}.png`)
-    );
+    renderPNGBlob({ activeHoles, params, holeColor, bgColor, dark })
+      .then(blob => {
+        if (!blob) throw new Error("the image could not be rendered at this size");
+        downloadBlob(blob, `${fileStem(doc)}.png`);
+      })
+      .catch(err => {
+        console.error("PNG export failed:", err);
+        window.alert(`Could not export this pattern as PNG: ${err.message}`);
+      });
   }, [activeHoles, params, holeColor, bgColor, dark, doc]);
 
   // ─── Project: new / open / save / share / recent ──────────────────

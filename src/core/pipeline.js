@@ -243,7 +243,7 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   // Closed-hole count and exit-size extremes in one pass. This used to spread the
   // per-hole values into Math.min/Math.max, which overflows the call stack past
   // roughly 125k arguments — reachable from the sliders alone (a 200 mm panel of
-  // 0.5 mm holes at zero gap is 160,801 holes).
+  // 0.5 mm holes at zero gap is 161,001 holes in the default staggered layout).
   let closedHoleCount = 0;
   let openHoleCount = 0;
   let exitSum = 0;

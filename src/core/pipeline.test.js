@@ -267,3 +267,39 @@ test("removals recorded against a different pattern do not count as removed", ()
   assert.equal(real.stats.hasRemovedHoles, true);
   assert.equal(real.activeHoles.length, 737);
 });
+
+test("a partly closed pattern reports the open holes' extremes, not the closed ones", () => {
+  // Variation makes the holes range from 20% to 100% of 5 mm; the taper inset
+  // closes only the smallest of them, which is the case where the exit loop has
+  // to skip closed holes without letting them seed the extremes.
+  const mixed = computePattern(
+    doc({
+      "variation.enabled": true,
+      "variation.minScale": 0.2,
+      "variation.maxScale": 1,
+      "taper.enabled": true,
+      "taper.thickness": 3,
+      "taper.angle": 15,
+    })
+  );
+  const { stats, activeHoles } = mixed;
+  assert.ok(stats.closedHoleCount > 0, "expected some holes to close");
+  assert.ok(stats.closedHoleCount < activeHoles.length, "expected some holes to stay open");
+  assert.equal(stats.holeClosed, false);
+  assert.equal(stats.hasClosedHoles, true);
+  assert.ok(stats.minExit > 0, `minExit ${stats.minExit} should ignore the closed holes`);
+  assert.ok(stats.minExit <= stats.dExit && stats.dExit <= stats.maxExit);
+
+  // Cross-check against a direct computation over the open holes only.
+  const open = activeHoles.filter(h => !h.isClosed).map(h => Math.min(h.exitW, h.exitH));
+  assert.equal(open.length, activeHoles.length - stats.closedHoleCount);
+  assert.equal(
+    stats.minExit,
+    open.reduce((m, v) => Math.min(m, v), Infinity)
+  );
+  assert.equal(
+    stats.maxExit,
+    open.reduce((m, v) => Math.max(m, v), -Infinity)
+  );
+  assert.equal(stats.dExit, open.reduce((s, v) => s + v, 0) / open.length);
+});
