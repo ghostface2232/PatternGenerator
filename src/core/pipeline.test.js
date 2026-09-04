@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createDocument, getIn, patchIn, setIn } from "./document.js";
 import { PLACEMENT_PARAMS, buildParams, computePattern, deriveGeometry, patternSignature } from "./pipeline.js";
+import { validateDocument } from "./persistence.js";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { generateHoles } from "../layouts/grid.js";
@@ -394,6 +395,53 @@ test("the type tag, field position and quoting each carry their weight", () => {
     patchIn(radial, { "layout.radial.mode": `Full${NUL}string:Concentric`, "layout.radial.layout": "Sunflower" }),
     "a value must not shift the fields around it"
   );
+});
+
+test("validation leaves every placement param a primitive", () => {
+  // patternSignature calls String() on each param and does not catch, so a value
+  // with no primitive form would throw inside the reducer and take down the
+  // render. What stops that is validateDocument, not the signature: this is the
+  // invariant the comment above the encoding leans on, asserted.
+  const base = createDocument();
+  const PRIMITIVE = new Set(["number", "string", "boolean"]);
+  // Everything JSON can carry that is not a primitive, plus the shapes a
+  // hand-written share link or a stale autosave could hold.
+  const poisons = [{}, [], [1, 2], { toString: null }, null, "", "abc", -1e9, 1e9];
+  const fields = [
+    "sheet.w",
+    "sheet.h",
+    "hole.diameter",
+    "hole.w",
+    "hole.h",
+    "hole.shape",
+    "hole.cornerRadius",
+    "hole.diamondOrient",
+    "layout.type",
+    "layout.customAngle",
+    "layout.edgeGapX",
+    "layout.edgeGapY",
+    "layout.radial.edgeGap",
+    "layout.radial.circumGap",
+    "layout.radial.mode",
+    "layout.radial.layout",
+    "layout.radial.centerHole",
+    "boundary.margins.top",
+    "boundary.margins.left",
+    "boundary.cornerRadius",
+  ];
+  for (const field of fields) {
+    for (const poison of poisons) {
+      const doc = validateDocument(patchIn(base, { [field]: poison }));
+      const params = buildParams(doc, deriveGeometry(doc));
+      for (const key of PLACEMENT_PARAMS) {
+        assert.ok(
+          PRIMITIVE.has(typeof params[key]),
+          `${key} is ${typeof params[key]} after validating ${field} = ${JSON.stringify(poison)}`
+        );
+      }
+      assert.doesNotThrow(() => patternSignature(doc), `${field} = ${JSON.stringify(poison)}`);
+    }
+  }
 });
 
 test("PLACEMENT_PARAMS is exactly what generateHoles reads", () => {

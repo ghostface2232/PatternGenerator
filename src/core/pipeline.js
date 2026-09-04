@@ -380,10 +380,12 @@ export function patternSignature(doc) {
   // behave very differently in the arithmetic in generateHoles. JSON's quoting
   // then stops a value that happens to contain the separator from shifting the
   // fields around it, which joining on a separator does not.
-  // String() throws for a value with no primitive form (Object.create(null)),
-  // and this runs inside the reducer, where a throw takes down the render. It is
-  // deliberately not caught: deriveGeometry above throws on the same value in
-  // any numeric field, so catching here would cover only the four string params
-  // and buy a guarantee this function cannot make. validateDocument is the gate.
+  // String() throws for a value with no primitive form, and this runs inside the
+  // reducer, where a throw takes down the render. Not caught, because it cannot
+  // happen: validateDocument rebuilds every field from defaults, so each of the
+  // params below is a number, a string or a boolean by the time it gets here —
+  // pipeline.test.js asserts that against poisoned documents. deriveGeometry
+  // throws first on much of the same input, but not all of it (customAngle and
+  // cornerRadius, among others, it never touches), so validation is the gate.
   return JSON.stringify(PLACEMENT_PARAMS.map(key => [typeof params[key], String(params[key])]));
 }
