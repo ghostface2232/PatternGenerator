@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDocument, getIn, patchIn, setIn } from "./document.js";
-import { buildParams, computePattern, deriveGeometry, patternSignature } from "./pipeline.js";
+import { PLACEMENT_PARAMS, buildParams, computePattern, deriveGeometry, patternSignature } from "./pipeline.js";
+import { readFileSync } from "node:fs";
 import { generateHoles } from "../layouts/grid.js";
 import { generateSVGString } from "../export/svg.js";
 
@@ -156,7 +157,7 @@ test("every edit that changes hole placement changes the signature", () => {
     { "layout.type": "Radial", "layout.radial.layout": "Sunflower" },
     { "layout.type": "Radial", "layout.radial.layout": "6k Rosette", "layout.radial.mode": "Circle" },
     { "boundary.margins.top": 8, "boundary.cornerRadius": 15 },
-    { "hole.shape": "Rectangle", "hole.w": 6, "hole.h": 3, "layout.gapLinked": false, "layout.type": "Straight" },
+    { "hole.shape": "Rectangle", "hole.w": 6, "hole.h": 3, "layout.type": "Straight" },
   ];
   const edits = [
     { "hole.diameter": 7 },
@@ -338,7 +339,7 @@ test("culled holes are not counted as removed ones", () => {
   assert.equal(both.stats.activeHoleCount, culledOnly.stats.activeHoleCount);
 });
 
-test("the signature encoding cannot collapse distinct values together", () => {
+test("null, undefined and NaN encode differently in the signature", () => {
   // JSON.stringify writes undefined, null and NaN identically in array position.
   // Validation keeps those out of a document, but the encoding must not depend
   // on that: null coerces to 0 in the placement arithmetic while undefined
@@ -351,6 +352,23 @@ test("the signature encoding cannot collapse distinct values together", () => {
   assert.equal(new Set(signatures).size, 3, "null, undefined and NaN must encode differently");
   assert.notEqual(generateHoles(buildParams(withNull, deriveGeometry(withNull))).length, 0);
   assert.equal(generateHoles(buildParams(withUndefined, deriveGeometry(withUndefined))).length, 0);
-  // A numeric string is not the number it looks like, either.
-  assert.notEqual(patternSignature(patchIn(base, { "sheet.w": "200" })), patternSignature(base));
+  // A value carrying the field separator cannot shift the fields around it.
+  const NUL = String.fromCharCode(0);
+  const a = patchIn(base, { "layout.radial.mode": "Full", "layout.radial.layout": `Concentric${NUL}string:Sunflower` });
+  const b = patchIn(base, { "layout.radial.mode": `Full${NUL}string:Concentric`, "layout.radial.layout": "Sunflower" });
+  assert.notEqual(patternSignature(a), patternSignature(b));
+});
+
+test("PLACEMENT_PARAMS is exactly what generateHoles destructures", () => {
+  // The sweep cannot see a param ADDED to generateHoles and forgotten here, and
+  // that would be a silent false negative. This is the guarantee in prose above
+  // PLACEMENT_PARAMS, asserted.
+  const source = readFileSync(new URL("../layouts/grid.js", import.meta.url), "utf8");
+  const destructuring = source.match(/export function generateHoles\(params\) \{\s*const \{([\s\S]*?)\} = params;/);
+  assert.ok(destructuring, "could not find generateHoles' destructuring");
+  const names = destructuring[1]
+    .split(",")
+    .map(part => part.trim())
+    .filter(Boolean);
+  assert.deepEqual(names, PLACEMENT_PARAMS);
 });

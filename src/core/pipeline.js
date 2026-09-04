@@ -336,13 +336,14 @@ export function computePattern(doc) {
 // What makes this sound is structural, not empirical: generateHoles is pure in
 // `params` (it reads no module state, and generateRadialHoles receives only
 // values derived from these), so a list equal to its destructuring cannot miss a
-// placement input. The sweep in pipeline.test.js spot-checks that and catches 18
-// of the 23 if they are dropped; the other five — diameter, radialEdgeGap,
-// circumEdgeGap, ringSpacing, circumSpacing — are covered by their partners
-// (ringSpacing is derived from diameter and radialEdgeGap, and so on), so no
-// document separates them. They stay for clarity. Do not drop an entry because
-// the tests still pass: check it against the destructuring.
-const PLACEMENT_PARAMS = [
+// placement input. pipeline.test.js asserts that equality directly by parsing
+// grid.js, and separately sweeps documents × edits; the sweep alone catches only
+// 18 of the 23 if they are dropped. Four of the rest — radialEdgeGap,
+// circumEdgeGap, ringSpacing, circumSpacing — cannot be isolated by any document
+// at all, since each ring spacing is derived from its gap. The fifth, diameter,
+// is redundant only while holeW and holeH are non-falsy: grid.js reads
+// `holeW || diameter`, so a zero width would make it load-bearing again.
+export const PLACEMENT_PARAMS = [
   "diameter",
   "holeShape",
   "holeW",
@@ -374,11 +375,15 @@ const PLACEMENT_PARAMS = [
 // are absent by construction: they never reach buildParams.
 export function patternSignature(doc) {
   const params = buildParams(doc, deriveGeometry(doc));
-  // Tagged with the value's type rather than JSON-encoded: in array position
-  // JSON.stringify writes undefined, null and NaN all as "null", and those three
-  // behave very differently once they reach the arithmetic in generateHoles.
-  return PLACEMENT_PARAMS.map(key => {
-    const value = params[key];
-    return `${typeof value}:${String(value)}`;
-  }).join("\u0000");
+  // Pairs of [type, text] inside JSON. The type keeps null, undefined and NaN
+  // apart — JSON alone writes all three as null in array position, and the three
+  // behave very differently in the arithmetic in generateHoles. JSON's quoting
+  // then stops a value that happens to contain the separator from shifting the
+  // fields around it, which joining on a separator does not.
+  // String() throws for a value with no primitive form (Object.create(null)),
+  // and this runs inside the reducer, where a throw takes down the render. It is
+  // deliberately not caught: deriveGeometry above throws on the same value in
+  // any numeric field, so catching here would cover only the four string params
+  // and buy a guarantee this function cannot make. validateDocument is the gate.
+  return JSON.stringify(PLACEMENT_PARAMS.map(key => [typeof params[key], String(params[key])]));
 }
