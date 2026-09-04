@@ -257,7 +257,7 @@ export function CanvasView() {
       if (variationDrag.current) {
         const { startVariation } = variationDrag.current;
         variationDrag.current = null;
-        history.recordDragFrom(startVariation);
+        history.endDrag(startVariation);
         window.setTimeout(() => setVariationHud(null), 650);
         pointerDownPos.current = null;
         return;

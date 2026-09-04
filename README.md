@@ -15,6 +15,7 @@ Built with React + Vite. Installable as an offline-capable PWA.
 - **Thickness & taper** — models tapered (conical) holes: exit diameter, surface vs. effective (through-thickness) open area, closed-hole warnings
 - **Live statistics** — open area ratio (OAR) gauge, hole count, exact minimum ligament, overlap detection
 - **Export** — dimensioned SVG (mm units, entry/exit layers when taper is active) and high-resolution PNG
+- **Projects** — autosave in the browser, `.perf.json` save / open (or drop a file onto the page), copy-to-clipboard share links, a recent-documents list, and global undo / redo (Ctrl+Z, Ctrl+Shift+Z)
 
 ## Getting started
 

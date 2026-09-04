@@ -1,4 +1,5 @@
 import { useEditor } from "./EditorContext.jsx";
+import { ProjectPanel } from "./panels/ProjectPanel.jsx";
 import { PatternPanel } from "./panels/PatternPanel.jsx";
 import { DimensionsPanel } from "./panels/DimensionsPanel.jsx";
 import { VariationPanel } from "./panels/VariationPanel.jsx";
@@ -38,6 +39,7 @@ export function Sidebar() {
           scrollbarColor: `${theme.scrollbar} transparent`,
         }}
       >
+        <ProjectPanel />
         <PatternPanel />
         <DimensionsPanel />
         <VariationPanel />

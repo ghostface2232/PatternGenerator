@@ -1,6 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CUSTOM_SIZE_SHAPES, DIN_PRESETS } from "../core/constants.js";
+import { cloneVariation, createDocument } from "../core/document.js";
 import { buildParams, computeStats, decorateHoles, deriveGeometry, filterActive } from "../core/pipeline.js";
+import {
+  FILE_EXTENSION,
+  FILE_MIME,
+  decodeShareHash,
+  deserializeDocument,
+  encodeShareHash,
+  fileStem,
+  loadCurrent,
+  loadRecent,
+  migrateDocument,
+  saveCurrent,
+  serializeDocument,
+  touchRecent,
+} from "../core/persistence.js";
 import { generateHoles } from "../layouts/grid.js";
 import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
@@ -9,15 +24,39 @@ import { renderPNGBlob } from "../export/png.js";
 import { downloadBlob, downloadText } from "../export/download.js";
 import { getTheme, MONO } from "./theme.js";
 import { useDocument } from "./useDocument.js";
-import { useVariationHistory } from "./useVariationHistory.js";
 import { EditorContext } from "./EditorContext.jsx";
 import { GlobalStyles } from "./GlobalStyles.jsx";
 import { TopBar } from "./TopBar.jsx";
 import { CanvasView } from "./canvas/CanvasView.jsx";
 import { Sidebar } from "./Sidebar.jsx";
 
+const AUTOSAVE_MS = 300;
+
+function storage() {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+// Share link in the URL beats the autosaved document, which beats a fresh one.
+function loadInitialDocument() {
+  try {
+    const shared = decodeShareHash(window.location.hash);
+    if (shared) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      return shared;
+    }
+  } catch (err) {
+    console.warn("Ignoring damaged share link:", err);
+  }
+  const store = storage();
+  return (store && loadCurrent(store)) || createDocument();
+}
+
 export default function App() {
-  const [doc, api] = useDocument();
+  const [doc, api] = useDocument(loadInitialDocument);
 
   // ─── UI-only state (never saved with the document) ─────────────────
   const [dark, setDark] = useState(true);
@@ -28,6 +67,11 @@ export default function App() {
   const [variationHud, setVariationHud] = useState(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
+  const [savedDoc, setSavedDoc] = useState(null); // the last document written to localStorage
+  const [recent, setRecent] = useState(() => {
+    const store = storage();
+    return store ? loadRecent(store) : [];
+  });
   const theme = useMemo(() => getTheme(dark), [dark]);
 
   // ─── Derived pipeline (memoised step by step) ──────────────────────
@@ -49,14 +93,59 @@ export default function App() {
   );
 
   // Hole indices are only meaningful for the pattern they were generated from.
+  // Not a history step of its own: undoing the pattern change brings them back.
   useEffect(() => {
-    if (doc.removedHoles.length) api.set("removedHoles", []);
+    if (api.ref.current.removedHoles.length) api.set("removedHoles", [], { record: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
-  // ─── Variation history (undo/redo scoped to the variation block) ───
-  const setVariation = useCallback(next => api.set("variation", next), [api]);
-  const history = useVariationHistory(variation, setVariation);
+  // ─── Autosave (localStorage) ──────────────────────────────────────
+  useEffect(() => {
+    const store = storage();
+    if (!store) return;
+    const t = window.setTimeout(() => {
+      try {
+        saveCurrent(store, doc);
+        setRecent(touchRecent(store, doc));
+        setSavedDoc(doc);
+      } catch (err) {
+        console.warn("Autosave failed:", err);
+      }
+    }, AUTOSAVE_MS);
+    return () => window.clearTimeout(t);
+  }, [doc]);
+  const saveStatus = !storage() ? "idle" : savedDoc === doc ? "saved" : "saving";
+
+  // ─── Variation history adapter ────────────────────────────────────
+  // The variation panel and canvas gizmo edit the variation block through this
+  // small API; underneath it is the global document history.
+  const history = useMemo(
+    () => ({
+      ref: {
+        get current() {
+          return api.ref.current.variation;
+        },
+      },
+      // Discrete edit → its own undo step.
+      commit: updater =>
+        api.update(d => {
+          const next = typeof updater === "function" ? updater(cloneVariation(d.variation)) : updater;
+          return JSON.stringify(next) === JSON.stringify(d.variation) ? d : { ...d, variation: next };
+        }),
+      // Continuous edit (slider / handle drag) → coalesced into one step.
+      live: updater =>
+        api.update(
+          d => ({ ...d, variation: typeof updater === "function" ? updater(cloneVariation(d.variation)) : updater }),
+          { merge: "variation" }
+        ),
+      endDrag: () => api.closeGroup(),
+      undo: api.undo,
+      redo: api.redo,
+      canUndo: api.canUndo,
+      canRedo: api.canRedo,
+    }),
+    [api]
+  );
   const selectedVariationLayer = useMemo(
     () => variation.layers.find(l => l.id === variation.selectedLayerId) || variation.layers[0],
     [variation]
@@ -78,9 +167,10 @@ export default function App() {
       api.patch(
         doc.layout.gapLinked
           ? { "layout.edgeGapX": v, "layout.edgeGapY": v, presetIndex: 0 }
-          : { "layout.edgeGapX": v, presetIndex: 0 }
+          : { "layout.edgeGapX": v, presetIndex: 0 },
+        { merge: "layout.edgeGapX" }
       );
-    const setEdgeGapY = v => api.patch({ "layout.edgeGapY": v, presetIndex: 0 });
+    const setEdgeGapY = v => api.patch({ "layout.edgeGapY": v, presetIndex: 0 }, { merge: "layout.edgeGapY" });
     const toggleGapLinked = () =>
       api.patch(
         doc.layout.gapLinked
@@ -91,7 +181,8 @@ export default function App() {
       api.patch(
         doc.layout.radial.linked
           ? { "layout.radial.edgeGap": v, "layout.radial.circumGap": v }
-          : { "layout.radial.edgeGap": v }
+          : { "layout.radial.edgeGap": v },
+        { merge: "layout.radial.edgeGap" }
       );
     const setCircumEdgeGap = v => api.set("layout.radial.circumGap", v);
     const toggleRadialLinked = () =>
@@ -100,14 +191,18 @@ export default function App() {
           ? { "layout.radial.linked": false }
           : { "layout.radial.linked": true, "layout.radial.circumGap": doc.layout.radial.edgeGap }
       );
-    const setSunflowerGap = v => api.patch({ "layout.radial.edgeGap": v, "layout.radial.circumGap": v });
+    const setSunflowerGap = v =>
+      api.patch({ "layout.radial.edgeGap": v, "layout.radial.circumGap": v }, { merge: "layout.radial.sunflower" });
     const setMarginUniform = v =>
-      api.patch({
-        "boundary.margins.top": v,
-        "boundary.margins.bottom": v,
-        "boundary.margins.left": v,
-        "boundary.margins.right": v,
-      });
+      api.patch(
+        {
+          "boundary.margins.top": v,
+          "boundary.margins.bottom": v,
+          "boundary.margins.left": v,
+          "boundary.margins.right": v,
+        },
+        { merge: "boundary.margins" }
+      );
     const toggleMarginLinked = () => {
       const m = doc.boundary.margins.top;
       api.patch(
@@ -136,7 +231,7 @@ export default function App() {
       });
     };
     // Any hand edit of a preset-controlled field drops back to "Custom".
-    const setWithPresetReset = (path, v) => api.patch({ [path]: v, presetIndex: 0 });
+    const setWithPresetReset = (path, v) => api.patch({ [path]: v, presetIndex: 0 }, { merge: path });
     const toggleRemovedHole = idx =>
       api.update(d => {
         const next = new Set(d.removedHoles);
@@ -248,15 +343,112 @@ export default function App() {
   const exportSVG = useCallback(() => {
     downloadText(
       generateSVGString(activeHoles, { ...params, holeColor, bgColor }),
-      "perforation_pattern.svg",
+      `${fileStem(doc)}.svg`,
       "image/svg+xml"
     );
-  }, [activeHoles, params, holeColor, bgColor]);
+  }, [activeHoles, params, holeColor, bgColor, doc]);
   const exportPNG = useCallback(() => {
     renderPNGBlob({ activeHoles, params, holeColor, bgColor, dark }).then(blob =>
-      downloadBlob(blob, "perforation_pattern.png")
+      downloadBlob(blob, `${fileStem(doc)}.png`)
     );
-  }, [activeHoles, params, holeColor, bgColor, dark]);
+  }, [activeHoles, params, holeColor, bgColor, dark, doc]);
+
+  // ─── Project: new / open / save / share / recent ──────────────────
+  const loadDocument = useCallback(
+    next => {
+      api.replace(next);
+      setVariationEditMode(false);
+      setHoleRemovalMode(false);
+      setVariationHud(null);
+    },
+    [api]
+  );
+  const openFile = useCallback(
+    file => {
+      file
+        .text()
+        .then(text => loadDocument(deserializeDocument(text)))
+        .catch(err => window.alert(`Could not open ${file.name}: ${err.message}`));
+    },
+    [loadDocument]
+  );
+  const project = useMemo(
+    () => ({
+      saveStatus,
+      recent,
+      fileExtension: FILE_EXTENSION,
+      newDocument: () => loadDocument(createDocument()),
+      openFile,
+      openRecent: id => {
+        const entry = recent.find(e => e.id === id);
+        if (!entry) return;
+        try {
+          loadDocument(migrateDocument(entry.doc));
+        } catch (err) {
+          window.alert(`Could not open ${entry.name}: ${err.message}`);
+        }
+      },
+      saveFile: () =>
+        downloadText(serializeDocument(api.ref.current), `${fileStem(api.ref.current)}${FILE_EXTENSION}`, FILE_MIME),
+      shareLink: async () => {
+        const url = `${window.location.origin}${window.location.pathname}${encodeShareHash(api.ref.current)}`;
+        try {
+          await navigator.clipboard.writeText(url);
+          return true;
+        } catch {
+          window.prompt("Copy this link:", url);
+          return false;
+        }
+      },
+    }),
+    [saveStatus, recent, loadDocument, openFile, api]
+  );
+
+  // Keyboard shortcuts: undo / redo / save. Text fields keep their own undo.
+  useEffect(() => {
+    const onKey = e => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      // Only text-editing fields keep the browser's own undo; sliders and buttons pass it through.
+      const t = e.target;
+      const inField =
+        t?.isContentEditable ||
+        t?.tagName === "TEXTAREA" ||
+        (t?.tagName === "INPUT" && !/^(range|checkbox|radio|button|file|color)$/.test(t.type));
+      const key = e.key.toLowerCase();
+      if (key === "s") {
+        e.preventDefault();
+        project.saveFile();
+      } else if (!inField && key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        api.undo();
+      } else if (!inField && ((key === "z" && e.shiftKey) || key === "y")) {
+        e.preventDefault();
+        api.redo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [api, project]);
+
+  // Drop a document file anywhere on the page to open it.
+  useEffect(() => {
+    const onDragOver = e => {
+      if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+    };
+    const onDrop = e => {
+      const file = [...(e.dataTransfer?.files || [])].find(f => /\.json$/i.test(f.name));
+      if (!file) return;
+      e.preventDefault();
+      openFile(file);
+    };
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [openFile]);
 
   const ui = {
     dark,
@@ -289,6 +481,7 @@ export default function App() {
     history,
     selectedVariationLayer,
     actions,
+    project,
     exportSVG,
     exportPNG,
   };

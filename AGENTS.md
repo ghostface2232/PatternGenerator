@@ -33,13 +33,13 @@ In the remote sandbox Chromium is pre-installed: `PLAYWRIGHT_CHROMIUM_PATH=/opt/
 
 ```
 src/
-  core/        document model, constants, math, and the pure pipeline (document → holes → stats)
+  core/        document model, constants, math, history, persistence, and the pure pipeline (document → holes → stats)
   geometry/    hole shapes (SHAPES registry), polygon helpers, boundary, ligament/overlap, OAR
   layouts/     hole placement: grid.js (grid family + uniform-ligament tilings) and radial-engine.js
   fields/      size-variation scalar fields (variation-engine.js) and the on-canvas gizmo math
   export/      svg.js, png.js, download.js
   render/      canvas-renderer.js (pure drawScene) and view.js (sheet ↔ canvas transform)
-  ui/          React: App.jsx, EditorContext, TopBar, Sidebar, canvas/, panels/, controls/, theme.js
+  ui/          React: App.jsx (state, pipeline memos, actions, project I/O), EditorContext, TopBar, Sidebar, canvas/, panels/, controls/, theme.js
 ```
 
 ### Data flow
@@ -61,7 +61,18 @@ doc (ui/useDocument.js reducer)
 
 `core/document.js` → `createDocument()` is the schema (`schemaVersion` 1): `sheet`, `boundary` (margins, corner radius), `hole`, `layout` (type, gaps, radial block), `presetIndex`, `variation`, `taper`, `appearance`, `removedHoles`. UI-only state (theme, zoom, edit modes) lives in `App.jsx` and is never part of the document.
 
-Edits go through the `api` from `useDocument`: `set(path, value)`, `patch({ path: value })`, `update(fn)`, `replace(doc)`. `setIn` shares untouched branches, and the pipeline memos in `App.jsx` key on the sub-objects, so a colour or removed-hole edit does not regenerate the pattern. Compound edits (preset apply, linked gaps, shape switch) are `actions` in `App.jsx`.
+Edits go through the `api` from `useDocument`: `set(path, value, opts)`, `patch({ path: value }, opts)`, `update(fn, opts)`, `replace(doc)`, plus `undo()`, `redo()`, `closeGroup()`, `canUndo`, `canRedo` and `ref.current` (latest document for pointer handlers). `setIn` shares untouched branches, and the pipeline memos in `App.jsx` key on the sub-objects, so a colour or removed-hole edit does not regenerate the pattern. Compound edits (preset apply, linked gaps, shape switch) are `actions` in `App.jsx`.
+
+### History (undo/redo)
+
+`core/history.js` is a pure past/present/future structure. Every recorded edit is one undo step, except that consecutive edits with the same coalescing key inside `COALESCE_MS` merge into one (a slider drag, typing, a gizmo drag). `useDocument` picks the key automatically: numeric/string `set`s use their path, all-numeric `patch`es use their joined paths, everything else stands alone. Pass `{ merge: "key" }` to control it, `{ record: false }` for transient changes that must not create a step (the removed-holes reset), and call `api.closeGroup()` when a drag ends. The variation panel and gizmo use the small `history` adapter in `App.jsx` (`commit` / `live` / `endDrag`), which maps onto the same API.
+
+### Persistence (`core/persistence.js`)
+
+- Autosave: `App.jsx` writes the document to `localStorage` 300 ms after every change and upserts it into the recent list (10 entries, keyed by `doc.id`). `loadInitialDocument()` restores it on start.
+- Files: `.perf.json` via `serializeDocument` / `deserializeDocument`; opening runs `migrateDocument`, which upgrades older `schemaVersion`s through `MIGRATIONS` and fills missing fields from `createDocument()`. **When you change the document shape, bump `DOC_SCHEMA_VERSION` and add a migration step.**
+- Share links: `encodeShareHash(doc)` → `#d=<lz-string>`; a link beats the autosaved document on load and is stripped from the URL afterwards. The `id` is dropped so a shared copy becomes its own document.
+- Keyboard: Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redo, Ctrl/Cmd+S download. Text fields keep the browser's own undo.
 
 ### Hole shapes
 
@@ -75,7 +86,7 @@ Three shape/pattern combos replace the generic grid with an exact tiling where t
 
 ### Size variation
 
-`fields/variation-engine.js` is pure scalar-field math (spaces × profiles × blending). `fields/gizmo.js` maps the four canvas handles to layer parameters. `ui/useVariationHistory.js` gives the variation block its own undo/redo: `commit()` records a step, `live()` does not (drags), `recordDragFrom(snapshot)` records once at pointer-up.
+`fields/variation-engine.js` is pure scalar-field math (spaces × profiles × blending). `fields/gizmo.js` maps the four canvas handles to layer parameters. Edits to the variation block go through the `history` adapter (see History above) so they share the global undo stack.
 
 ## Gotchas
 

@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Maximize, Moon, Sun } from "lucide-react";
+import { Eye, EyeOff, Maximize, Moon, Redo2, Sun, Undo2 } from "lucide-react";
 import { useEditor } from "./EditorContext.jsx";
 import { MONO } from "./theme.js";
 import { smallLabelStyle } from "./controls/index.js";
@@ -17,7 +17,7 @@ function TopStat({ label, value, color, theme }) {
 }
 
 export function TopBar() {
-  const { theme, ui, stats, geometry, actions } = useEditor();
+  const { doc, api, theme, ui, stats, geometry, actions, project } = useEditor();
   const { dark, setDark, showHud, setShowHud } = ui;
   const { taperActive } = geometry;
   const divider = <div style={{ width: 1, alignSelf: "stretch", background: theme.sectionBorder, margin: "10px 0" }} />;
@@ -38,6 +38,15 @@ export function TopBar() {
     fontFamily: MONO,
     ...extra,
   });
+  const historyBtn = (enabled, extra = {}) =>
+    btn({
+      width: 30,
+      padding: 0,
+      color: enabled ? theme.textPrimary : theme.textSecondary,
+      cursor: enabled ? "pointer" : "default",
+      opacity: enabled ? 1 : 0.45,
+      ...extra,
+    });
 
   return (
     <div
@@ -57,6 +66,25 @@ export function TopBar() {
         <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: -0.3 }}>Perf Pattern</div>
         <div style={{ fontSize: 8, color: theme.textSecondary, marginTop: 1, letterSpacing: 0.5 }}>
           PERFORATION GENERATOR
+        </div>
+      </div>
+      {divider}
+      <div style={{ whiteSpace: "nowrap", minWidth: 0 }}>
+        <div
+          data-testid="doc-name"
+          style={{ fontSize: 11, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", maxWidth: 220 }}
+        >
+          {doc.name}
+        </div>
+        <div
+          data-testid="save-status"
+          style={{ fontSize: 8, color: theme.textSecondary, marginTop: 1, letterSpacing: 0.5 }}
+        >
+          {project.saveStatus === "saving"
+            ? "SAVING…"
+            : project.saveStatus === "saved"
+              ? "SAVED IN BROWSER"
+              : "NOT SAVED"}
         </div>
       </div>
       {divider}
@@ -91,6 +119,17 @@ export function TopBar() {
         </>
       )}
       <div style={{ flex: 1 }} />
+      <button onClick={api.undo} disabled={!api.canUndo} title="Undo (Ctrl+Z)" style={historyBtn(api.canUndo)}>
+        <Undo2 size={13} />
+      </button>
+      <button
+        onClick={api.redo}
+        disabled={!api.canRedo}
+        title="Redo (Ctrl+Shift+Z)"
+        style={historyBtn(api.canRedo, { marginLeft: -10 })}
+      >
+        <Redo2 size={13} />
+      </button>
       <button
         onClick={() => setShowHud(v => !v)}
         title="Show/hide all canvas overlays (margins, removed-hole marks, stats, gizmos)"
