@@ -10,9 +10,16 @@ export const cloneVariation = variation => ({
   layers: (variation.layers || []).map(layer => ({ ...layer })),
 });
 
+// Stable per-document id (used by the recent list). Falls back for old runtimes.
+export function newDocumentId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return `doc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function createDocument() {
   return {
     schemaVersion: DOC_SCHEMA_VERSION,
+    id: newDocumentId(),
     units: "mm",
     name: "Untitled",
     sheet: { w: 200, h: 200 },
