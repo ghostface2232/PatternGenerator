@@ -68,6 +68,7 @@ export default function App() {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [savedDoc, setSavedDoc] = useState(null); // the last document written to localStorage
+  const [saveError, setSaveError] = useState(false);
   const [recent, setRecent] = useState(() => {
     const store = storage();
     return store ? loadRecent(store) : [];
@@ -93,21 +94,36 @@ export default function App() {
   );
 
   // ─── Autosave (localStorage) ──────────────────────────────────────
-  useEffect(() => {
+  // Removed-hole indices are dropped by the reducer when the pattern changes,
+  // so a loaded document keeps the removals it was saved with.
+  const saveNow = useCallback(next => {
     const store = storage();
-    if (!store) return;
-    const t = window.setTimeout(() => {
-      try {
-        saveCurrent(store, doc);
-        setRecent(touchRecent(store, doc));
-        setSavedDoc(doc);
-      } catch (err) {
-        console.warn("Autosave failed:", err);
-      }
-    }, AUTOSAVE_MS);
+    if (!store || !next) return;
+    try {
+      saveCurrent(store, next);
+      setRecent(touchRecent(store, next));
+      setSavedDoc(next);
+      setSaveError(false);
+    } catch (err) {
+      console.warn("Autosave failed:", err);
+      setSaveError(true);
+    }
+  }, []);
+  useEffect(() => {
+    const t = window.setTimeout(() => saveNow(doc), AUTOSAVE_MS);
     return () => window.clearTimeout(t);
-  }, [doc]);
-  const saveStatus = !storage() ? "idle" : savedDoc === doc ? "saved" : "saving";
+  }, [doc, saveNow]);
+  // The debounce would otherwise lose the last edits when the tab goes away.
+  useEffect(() => {
+    const flush = () => saveNow(api.ref.current);
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", flush);
+    };
+  }, [api, saveNow]);
+  const saveStatus = !storage() || saveError ? "idle" : savedDoc === doc ? "saved" : "saving";
 
   // ─── Variation history adapter ────────────────────────────────────
   // The variation panel and canvas gizmo edit the variation block through this
@@ -349,12 +365,13 @@ export default function App() {
   // ─── Project: new / open / save / share / recent ──────────────────
   const loadDocument = useCallback(
     next => {
+      saveNow(api.ref.current); // the outgoing document may hold un-debounced edits
       api.replace(next);
       setVariationEditMode(false);
       setHoleRemovalMode(false);
       setVariationHud(null);
     },
-    [api]
+    [api, saveNow]
   );
   const openFile = useCallback(
     file => {
