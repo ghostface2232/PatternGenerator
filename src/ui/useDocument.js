@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useLayoutEffect, useMemo, useReducer, useRef } from "react";
 import { createDocument, patchIn, setIn } from "../core/document.js";
 import { patternSignature } from "../core/pipeline.js";
 import * as H from "../core/history.js";
@@ -68,8 +68,14 @@ export function useDocument(initial) {
     H.createHistory((typeof init === "function" ? init() : init) || createDocument())
   );
   const doc = h.present;
+  // Mirror of the current document for code that runs outside React: canvas
+  // pointer handlers, the export buttons and the unload flush. A layout effect,
+  // not a passive one: layout effects run synchronously as part of the commit,
+  // so a listener firing later in the same task as the edit that dispatched it
+  // still reads the new document. A passive effect would land after that and
+  // hand the listener the previous one.
   const ref = useRef(doc);
-  useEffect(() => {
+  useLayoutEffect(() => {
     ref.current = doc;
   }, [doc]);
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_VARIATION_LAYERS } from "../core/constants.js";
 import { cloneVariation, createDocument } from "../core/document.js";
 import { buildParams, computeStats, decorateHoles, deriveGeometry, filterActive } from "../core/pipeline.js";
@@ -96,12 +96,14 @@ export default function App() {
   // ─── Autosave (localStorage) ──────────────────────────────────────
   // Removed-hole indices are dropped by the reducer when the pattern changes,
   // so a loaded document keeps the removals it was saved with.
+  const savedRef = useRef(null); // same as savedDoc, readable from event handlers
   const saveNow = useCallback(next => {
     const store = storage();
     if (!store || !next) return;
     try {
       saveCurrent(store, next);
       setRecent(touchRecent(store, next));
+      savedRef.current = next;
       setSavedDoc(next);
       setSaveError(false);
     } catch (err) {
@@ -113,16 +115,25 @@ export default function App() {
     const t = window.setTimeout(() => saveNow(doc), AUTOSAVE_MS);
     return () => window.clearTimeout(t);
   }, [doc, saveNow]);
-  // The debounce would otherwise lose the last edits when the tab goes away.
-  useEffect(() => {
-    const flush = () => saveNow(api.ref.current);
-    window.addEventListener("pagehide", flush);
-    document.addEventListener("visibilitychange", flush);
-    return () => {
-      window.removeEventListener("pagehide", flush);
-      document.removeEventListener("visibilitychange", flush);
-    };
+  // Write only what is genuinely unsaved. A tab that has not been touched since
+  // it loaded must stay quiet: writing its copy would undo whatever another tab
+  // saved in the meantime, and both share the one `current` key.
+  const flushPending = useCallback(() => {
+    if (api.ref.current !== savedRef.current) saveNow(api.ref.current);
   }, [api, saveNow]);
+  // The debounce would otherwise lose the last edits when the page goes away.
+  // visibilitychange fires on the way back in as well, so check which way it went.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flushPending();
+    };
+    window.addEventListener("pagehide", flushPending);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", flushPending);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [flushPending]);
   const saveStatus = !storage() || saveError ? "idle" : savedDoc === doc ? "saved" : "saving";
 
   // ─── Variation history adapter ────────────────────────────────────
@@ -365,13 +376,13 @@ export default function App() {
   // ─── Project: new / open / save / share / recent ──────────────────
   const loadDocument = useCallback(
     next => {
-      saveNow(api.ref.current); // the outgoing document may hold un-debounced edits
+      flushPending(); // the outgoing document may hold un-debounced edits
       api.replace(next);
       setVariationEditMode(false);
       setHoleRemovalMode(false);
       setVariationHud(null);
     },
-    [api, saveNow]
+    [api, flushPending]
   );
   const openFile = useCallback(
     file => {

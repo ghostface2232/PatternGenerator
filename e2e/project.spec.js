@@ -105,6 +105,67 @@ test("undo and redo walk through edits, and a slider drag is one step", async ({
   await expect(page.getByLabel("Hole Diameter", { exact: true })).toHaveValue("5");
 });
 
+test("an unload flushes edits the debounce has not written yet", async ({ page }) => {
+  await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
+  // Drive the slider and the unload in one task so the 300 ms debounce cannot
+  // fire in between: whatever lands in storage got there through the flush.
+  const saved = await page.evaluate(() => {
+    const slider = document.querySelector('input[type="range"]'); // Hole Diameter
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    setValue.call(slider, "7");
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    window.dispatchEvent(new Event("pagehide"));
+    return JSON.parse(localStorage.getItem("perf-pattern:current")).hole.diameter;
+  });
+  expect(saved).toBe(7);
+});
+
+test("an untouched tab never overwrites what another tab saved", async ({ page }) => {
+  await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
+  const name = await page.evaluate(() => {
+    const other = JSON.parse(localStorage.getItem("perf-pattern:current"));
+    other.name = "Saved by another tab";
+    localStorage.setItem("perf-pattern:current", JSON.stringify(other));
+    document.dispatchEvent(new Event("visibilitychange")); // this tab is still visible
+    window.dispatchEvent(new Event("pagehide")); // and has nothing of its own to save
+    return JSON.parse(localStorage.getItem("perf-pattern:current")).name;
+  });
+  expect(name).toBe("Saved by another tab");
+});
+
+test("a visibility change while the tab is still visible leaves the write to the debounce", async ({ page }) => {
+  await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
+  const [afterVisible, afterHide] = await page.evaluate(() => {
+    const slider = document.querySelector('input[type="range"]'); // Hole Diameter
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    setValue.call(slider, "9");
+    slider.dispatchEvent(new Event("input", { bubbles: true })); // unsaved, debounce armed
+    const other = JSON.parse(localStorage.getItem("perf-pattern:current"));
+    other.name = "Written elsewhere";
+    localStorage.setItem("perf-pattern:current", JSON.stringify(other));
+    document.dispatchEvent(new Event("visibilitychange")); // visibilityState is still "visible"
+    const stillThere = JSON.parse(localStorage.getItem("perf-pattern:current")).name;
+    window.dispatchEvent(new Event("pagehide")); // now the page really is going away
+    return [stillThere, JSON.parse(localStorage.getItem("perf-pattern:current")).hole.diameter];
+  });
+  expect(afterVisible).toBe("Written elsewhere");
+  expect(afterHide).toBe(9);
+});
+
+test("a failed write reports NOT SAVED instead of hanging on SAVING", async ({ page }) => {
+  await page.addInitScript(() => {
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === "perf-pattern:current") throw new DOMException("quota exceeded", "QuotaExceededError");
+      return original.call(this, key, value);
+    };
+  });
+  await page.reload();
+  await setSlider(page, "Hole Diameter", 6);
+  await expect(stat(page, "save-status")).toHaveText("NOT SAVED");
+  await expect(stat(page, "stat-holes")).toBeVisible(); // and the app keeps working
+});
+
 // Click near the canvas centre until one hole is actually removed.
 async function removeOneHole(page) {
   await page.getByRole("switch", { name: "Click to Remove" }).click();
