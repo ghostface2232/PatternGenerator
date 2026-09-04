@@ -447,10 +447,11 @@ export default function App() {
       if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
     };
     const onDrop = e => {
-      const file = [...(e.dataTransfer?.files || [])].find(f => /\.json$/i.test(f.name));
-      if (!file) return;
+      if (!e.dataTransfer?.types?.includes("Files")) return;
+      // Always swallow a file drop: letting it through navigates the tab away from the app.
       e.preventDefault();
-      openFile(file);
+      const file = [...(e.dataTransfer.files || [])].find(f => /\.json$/i.test(f.name));
+      if (file) openFile(file);
     };
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("drop", onDrop);

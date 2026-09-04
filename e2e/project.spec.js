@@ -153,6 +153,32 @@ test("a link toggle keeps removed holes; a pattern edit clears them and undo res
   await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeVisible();
 });
 
+test("a dropped file never navigates the tab away, and a document file opens", async ({ page }) => {
+  const prevented = await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["hello"], "notes.txt", { type: "text/plain" }));
+    const ev = new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt });
+    window.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  });
+  expect(prevented).toBe(true);
+  await expect(stat(page, "doc-name")).toHaveText("Untitled");
+
+  await page.evaluate(() => {
+    const doc = {
+      schemaVersion: 1,
+      name: "Dropped in",
+      sheet: { w: 150, h: 150 },
+      hole: { shape: "Circle", diameter: 5 },
+    };
+    const dt = new DataTransfer();
+    dt.items.add(new File([JSON.stringify(doc)], "dropped.perf.json", { type: "application/json" }));
+    window.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  await expect(stat(page, "doc-name")).toHaveText("Dropped in");
+  await expect(page.getByLabel("Panel Width", { exact: true })).toHaveValue("150");
+});
+
 test("a corrupt autosave or share link falls back instead of blanking the app", async ({ page }) => {
   await page.evaluate(() =>
     localStorage.setItem("perf-pattern:current", '{"sheet":{"w":1},"hole":null,"variation":null}')
