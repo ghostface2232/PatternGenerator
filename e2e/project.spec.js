@@ -167,22 +167,33 @@ test("a failed write reports NOT SAVED instead of hanging on SAVING", async ({ p
   await expect(stat(page, "stat-holes")).toBeVisible(); // and the app keeps working
 });
 
-// Click near the canvas centre until one hole is actually removed.
+// Remove exactly one hole by clicking the canvas. Steps of 25 px are wider than
+// the 3.75 mm hit radius at this zoom, so a click that misses is followed by one
+// aimed at a different hole rather than one that toggles the same hole back on.
 async function removeOneHole(page) {
+  const before = Number(await stat(page, "stat-holes").textContent());
   await page.getByRole("switch", { name: "Click to Remove" }).click();
   const box = await page.locator("canvas").boundingBox();
-  const restore = page.getByRole("button", { name: "Restore All Holes" });
+  const centreX = box.x + box.width / 2;
+  const centreY = box.y + box.height / 2;
   for (const [dx, dy] of [
     [0, 0],
-    [11, 0],
-    [0, 11],
-    [22, 11],
-    [11, 22],
+    [25, 0],
+    [0, 25],
+    [25, 25],
+    [50, 25],
   ]) {
-    await page.mouse.click(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy);
-    if (await restore.isVisible().catch(() => false)) break;
+    await page.mouse.click(centreX + dx, centreY + dy);
+    const removed = await expect(stat(page, "stat-holes"))
+      .toHaveText(String(before - 1), { timeout: 500 })
+      .then(
+        () => true,
+        () => false
+      );
+    if (removed) break;
   }
-  await expect(restore).toBeVisible();
+  await expect(stat(page, "stat-holes")).toHaveText(String(before - 1));
+  await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeVisible();
   await page.getByRole("switch", { name: "Click to Remove" }).click();
 }
 
