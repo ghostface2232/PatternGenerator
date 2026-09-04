@@ -156,6 +156,7 @@ test("every edit that changes hole placement changes the signature", () => {
     { "layout.type": "Radial", "layout.radial.layout": "Sunflower" },
     { "layout.type": "Radial", "layout.radial.layout": "6k Rosette", "layout.radial.mode": "Circle" },
     { "boundary.margins.top": 8, "boundary.cornerRadius": 15 },
+    { "hole.shape": "Rectangle", "hole.w": 6, "hole.h": 3, "layout.gapLinked": false, "layout.type": "Straight" },
   ];
   const edits = [
     { "hole.diameter": 7 },
@@ -192,6 +193,12 @@ test("every edit that changes hole placement changes the signature", () => {
     { presetIndex: 3 },
     { name: "x" },
     { "appearance.bgColor": "#123456" },
+    // Compensating pairs: the pitch is unchanged, only the hole extent moves.
+    // Single-field edits alone cannot separate hole size from pitch.
+    { "hole.w": 1, "layout.edgeGapX": 8 },
+    { "hole.h": 5, "layout.edgeGapY": 1 },
+    { "hole.diameter": 1, "layout.edgeGapX": 7, "layout.edgeGapY": 7 },
+    { "hole.diameter": 8, "layout.radial.edgeGap": 2, "layout.radial.circumGap": 2 },
   ];
   let moved = 0;
   for (const basePatch of bases) {
@@ -329,4 +336,21 @@ test("culled holes are not counted as removed ones", () => {
   assert.equal(both.stats.removedHoleCount, 1);
   assert.equal(both.stats.culledHoleCount, culledOnly.stats.culledHoleCount - 1);
   assert.equal(both.stats.activeHoleCount, culledOnly.stats.activeHoleCount);
+});
+
+test("the signature encoding cannot collapse distinct values together", () => {
+  // JSON.stringify writes undefined, null and NaN identically in array position.
+  // Validation keeps those out of a document, but the encoding must not depend
+  // on that: null coerces to 0 in the placement arithmetic while undefined
+  // poisons it to NaN and empties the pattern.
+  const base = createDocument();
+  const withNull = patchIn(base, { "boundary.margins.left": null });
+  const withUndefined = patchIn(base, { "boundary.margins.left": undefined });
+  const withNaN = patchIn(base, { "boundary.margins.left": NaN });
+  const signatures = [withNull, withUndefined, withNaN].map(patternSignature);
+  assert.equal(new Set(signatures).size, 3, "null, undefined and NaN must encode differently");
+  assert.notEqual(generateHoles(buildParams(withNull, deriveGeometry(withNull))).length, 0);
+  assert.equal(generateHoles(buildParams(withUndefined, deriveGeometry(withUndefined))).length, 0);
+  // A numeric string is not the number it looks like, either.
+  assert.notEqual(patternSignature(patchIn(base, { "sheet.w": "200" })), patternSignature(base));
 });

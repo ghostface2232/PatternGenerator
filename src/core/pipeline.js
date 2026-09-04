@@ -332,6 +332,16 @@ export function computePattern(doc) {
 // The params generateHoles actually reads — keep in step with its destructuring.
 // buildParams also carries the hole corner radius and the taper fields, which
 // change how a hole is drawn but never where it sits.
+//
+// What makes this sound is structural, not empirical: generateHoles is pure in
+// `params` (it reads no module state, and generateRadialHoles receives only
+// values derived from these), so a list equal to its destructuring cannot miss a
+// placement input. The sweep in pipeline.test.js spot-checks that and catches 18
+// of the 23 if they are dropped; the other five — diameter, radialEdgeGap,
+// circumEdgeGap, ringSpacing, circumSpacing — are covered by their partners
+// (ringSpacing is derived from diameter and radialEdgeGap, and so on), so no
+// document separates them. They stay for clarity. Do not drop an entry because
+// the tests still pass: check it against the destructuring.
 const PLACEMENT_PARAMS = [
   "diameter",
   "holeShape",
@@ -364,5 +374,11 @@ const PLACEMENT_PARAMS = [
 // are absent by construction: they never reach buildParams.
 export function patternSignature(doc) {
   const params = buildParams(doc, deriveGeometry(doc));
-  return JSON.stringify(PLACEMENT_PARAMS.map(key => params[key]));
+  // Tagged with the value's type rather than JSON-encoded: in array position
+  // JSON.stringify writes undefined, null and NaN all as "null", and those three
+  // behave very differently once they reach the arithmetic in generateHoles.
+  return PLACEMENT_PARAMS.map(key => {
+    const value = params[key];
+    return `${typeof value}:${String(value)}`;
+  }).join("\u0000");
 }
