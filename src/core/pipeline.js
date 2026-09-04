@@ -307,3 +307,11 @@ export function computePattern(doc) {
   const stats = computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps });
   return { geometry: g, params, baseHoles, holes, activeHoles, removedSet, overlaps, stats };
 }
+
+// Value signature of everything that shapes the generated hole list. Removed-hole
+// indices only stay meaningful while this is unchanged, so edits that alter it
+// clear them (see ui/useDocument.js). Link flags and colours are absent by
+// construction: they never reach buildParams.
+export function patternSignature(doc) {
+  return JSON.stringify(buildParams(doc, deriveGeometry(doc)));
+}

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDocument, getIn, patchIn, setIn } from "./document.js";
-import { computePattern } from "./pipeline.js";
+import { computePattern, patternSignature } from "./pipeline.js";
 import { generateSVGString } from "../export/svg.js";
 
 // These numbers mirror e2e/smoke.spec.js so a geometry regression is caught
@@ -99,4 +99,42 @@ test("setIn / patchIn are structural-sharing immutable updates", () => {
   assert.equal(d2.layout, d.layout); // untouched branch shared
   assert.notEqual(d2.hole, d.hole);
   assert.equal(setIn(d, "hole.diameter", 5), d); // same value → same object
+});
+
+test("patternSignature ignores link flags and colours but tracks pattern fields", () => {
+  const base = createDocument();
+  const same = [
+    { "layout.gapLinked": false },
+    { "layout.radial.linked": false },
+    { "boundary.marginLinked": false },
+    { "appearance.holeColor": "#ff0000" },
+    { name: "Renamed" },
+    { removedHoles: [1, 2, 3] },
+    { presetIndex: 4 },
+    { "taper.thickness": 3 }, // taper disabled → not in the params
+  ];
+  for (const patch of same) {
+    assert.equal(patternSignature(doc(patch)), patternSignature(base), JSON.stringify(patch));
+  }
+  const different = [
+    { "hole.diameter": 6 },
+    { "hole.shape": "Hexagon" },
+    { "layout.edgeGapX": 4 },
+    { "layout.type": "Straight" },
+    { "sheet.w": 300 },
+    { "boundary.margins.top": 5 },
+    { "boundary.cornerRadius": 10 },
+    { "taper.enabled": true, "taper.thickness": 3, "taper.angle": 5 },
+  ];
+  for (const patch of different) {
+    assert.notEqual(patternSignature(doc(patch)), patternSignature(base), JSON.stringify(patch));
+  }
+});
+
+test("triEquilateral only changes the signature when it changes the height", () => {
+  const tri = doc({ "hole.shape": "Triangle", "hole.w": 6, "hole.h": (6 * Math.sqrt(3)) / 2 });
+  // h already equals the equilateral height, so unlocking it leaves the pattern alone
+  assert.equal(patternSignature(patchIn(tri, { "hole.triEquilateral": false })), patternSignature(tri));
+  const other = patchIn(tri, { "hole.h": 10 });
+  assert.notEqual(patternSignature(patchIn(other, { "hole.triEquilateral": false })), patternSignature(other));
 });

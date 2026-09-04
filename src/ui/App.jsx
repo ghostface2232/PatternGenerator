@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CUSTOM_SIZE_SHAPES, DIN_PRESETS } from "../core/constants.js";
 import { cloneVariation, createDocument } from "../core/document.js";
-import { buildParams, computeStats, decorateHoles, deriveGeometry, filterActive } from "../core/pipeline.js";
+import {
+  buildParams,
+  computeStats,
+  decorateHoles,
+  deriveGeometry,
+  filterActive,
+  patternSignature,
+} from "../core/pipeline.js";
 import {
   FILE_EXTENSION,
   FILE_MIME,
@@ -93,11 +100,14 @@ export default function App() {
   );
 
   // Hole indices are only meaningful for the pattern they were generated from.
+  // Keyed on the value signature, not the identity of `params`: link flags and
+  // other settings that leave every hole where it is must not discard removals.
   // Not a history step of its own: undoing the pattern change brings them back.
+  const patternKey = patternSignature(patternDoc);
   useEffect(() => {
     if (api.ref.current.removedHoles.length) api.set("removedHoles", [], { record: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params]);
+  }, [patternKey]);
 
   // ─── Autosave (localStorage) ──────────────────────────────────────
   useEffect(() => {
