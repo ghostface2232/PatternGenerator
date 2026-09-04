@@ -502,9 +502,9 @@ test("PLACEMENT_PARAMS is exactly what generateHoles reads", () => {
   // The list below only stands for everything generateHoles reads while the one
   // destructuring is the only way it touches its argument. A second `= params;`,
   // a direct `params.foo`, or an `arguments[0].foo` would read an input no list
-  // can cover, so pin that first. A mention in a comment inside the function
-  // trips the count too, deliberately — a false alarm is one line to fix, and
-  // the alternative is an AST parser.
+  // can cover, so pin that first. A mention of either word in a comment inside
+  // the function trips these too, deliberately — a false alarm is one line to
+  // fix, and the alternative is an AST parser.
   assert.equal(
     (source.match(/\bparams\b/g) || []).length,
     2,
@@ -521,26 +521,58 @@ test("PLACEMENT_PARAMS is exactly what generateHoles reads", () => {
   assert.deepEqual(names, PLACEMENT_PARAMS);
 });
 
-test("nothing generateHoles depends on holds mutable module state", () => {
-  // The other half of the claim above PLACEMENT_PARAMS, and the half no list can
-  // stand for: a value that changes underneath generateHoles is a placement
-  // input arriving from outside params. Neither the sweep nor the list can see
-  // one — it holds the same value in both documents being compared — so a module
-  // `let` anywhere in the import closure ships the silent false negative
-  // directly. Reached transitively so a new helper is covered on arrival.
-  const closure = new Set();
+test("no module let, var or ambient global in generateHoles' import closure", () => {
+  // The other half of the claim above PLACEMENT_PARAMS: a value that changes
+  // underneath generateHoles is a placement input arriving from outside params,
+  // and neither the sweep nor the list can see one — it holds the same value in
+  // both documents being compared.
+  //
+  // Read the test's name literally. It scans for two spellings of that mistake,
+  // and a scan cannot prove purity: `const cfg = {}` mutated through an exported
+  // setter, a pushed-to array, a class static, an IIFE closure, all defeat it
+  // while moving holes. There is no assertion that catches those — a channel a
+  // future edit merely *could* use produces identical output today, so nothing
+  // behavioural sees it either. What this buys is that the two forms a
+  // maintainer reaches for first fail loudly, and that the closure it scans is
+  // the real one. Treat a failure as a design question, not a lint to satisfy by
+  // rewriting the `let` as a const object — that spelling is the hole.
+  //
+  // Two false alarms are known and deliberate: a pure module-level memo
+  // (`let cache = new Map()`) trips it, and so does a commented-out `let`.
+  const source = url => readFileSync(url, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const closure = new Map();
   const walk = url => {
     if (closure.has(url.href)) return;
-    closure.add(url.href);
-    const src = readFileSync(url, "utf8");
-    for (const found of src.matchAll(/^import[^"']*["'](\.[^"']+)["']/gm)) walk(new URL(found[1], url));
+    const src = source(url);
+    closure.set(url.href, src);
+    // `export ... from` as well as `import`: src/ui/controls/index.js is a
+    // barrel built entirely of re-exports, so the idiom is already in the repo
+    // and would otherwise route a helper past this walk unseen. Block comments
+    // are stripped above for the same reason — one before an import hides it.
+    for (const found of src.matchAll(/^\s*(?:import|export)[^"']*["'](\.[^"']+)["']/gm)) walk(new URL(found[1], url));
   };
   walk(new URL("../layouts/grid.js", import.meta.url));
-  assert.ok(closure.size >= 5, `expected the closure to reach the geometry helpers, got ${closure.size} files`);
 
-  for (const href of closure) {
-    const name = href.slice(href.indexOf("/src/") + 1);
-    const mutable = readFileSync(new URL(href), "utf8").match(/^(?:export\s+)?(?:let|var)\s+\w+/m);
+  // The exact list, not a count: in both escapes above the closure stayed at
+  // five files while the true dependency set was six, so a floor said nothing.
+  const root = new URL("../../", import.meta.url).href;
+  const files = [...closure.keys()].map(href => href.slice(root.length)).sort();
+  assert.deepEqual(files, [
+    "src/core/math.js",
+    "src/geometry/polygon.js",
+    "src/geometry/rounded-rect.js",
+    "src/layouts/grid.js",
+    "src/layouts/radial-engine.js",
+  ]);
+
+  for (const [href, src] of closure) {
+    const name = href.slice(root.length);
+    const mutable = src.match(/^(?:export\s+)?(?:let|var)\s+\w+/m);
     assert.equal(mutable, null, `${name} declares \`${mutable?.[0]}\` at module level`);
+    // Ambient state reaches generateHoles without passing through any module
+    // binding at all, so the scan above cannot see it. Math and the rest of the
+    // deterministic globals are fine; these are not.
+    const ambient = src.match(/\b(?:globalThis|window|document|process|self|Math\.random|Date\.now|performance)\b/);
+    assert.equal(ambient, null, `${name} reads \`${ambient?.[0]}\`, which no document controls`);
   }
 });
