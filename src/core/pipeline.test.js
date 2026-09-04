@@ -460,21 +460,53 @@ test("PLACEMENT_PARAMS is exactly what generateHoles reads", () => {
   // The sweep may not see a param ADDED to generateHoles and forgotten here, and
   // that would be a silent false negative. This is the guarantee in prose above
   // PLACEMENT_PARAMS, asserted.
-  const source = readFileSync(new URL("../layouts/grid.js", import.meta.url), "utf8");
+  // The function's own text, not the file's: a second function in grid.js that
+  // happened to take a params would otherwise fail this and send whoever reads
+  // the message hunting in the wrong place.
+  const source = generateHoles.toString();
 
   // The list below only stands for everything generateHoles reads while the one
-  // destructuring is the only way it touches params. A second `= params;`, or a
-  // direct `params.foo`, would read an input no list can cover, so pin the count
-  // first: the signature and the parameter, and nothing else. A mention in a
-  // comment trips this too, deliberately — a false alarm here is one line to
-  // fix, and the alternative is parsing the file.
-  assert.equal((source.match(/\bparams\b/g) || []).length, 2, "generateHoles must touch params exactly twice");
+  // destructuring is the only way it touches its argument. A second `= params;`,
+  // a direct `params.foo`, or an `arguments[0].foo` would read an input no list
+  // can cover, so pin that first. A mention in a comment inside the function
+  // trips the count too, deliberately — a false alarm is one line to fix, and
+  // the alternative is an AST parser.
+  assert.equal(
+    (source.match(/\bparams\b/g) || []).length,
+    2,
+    "generateHoles must mention params exactly twice: its parameter and its one destructuring"
+  );
+  assert.equal(source.match(/\barguments\b/), null, "generateHoles must not reach its input through arguments");
 
-  const destructuring = source.match(/export function generateHoles\(params\) \{\s*const \{([\s\S]*?)\} = params;/);
+  const destructuring = source.match(/^function generateHoles\(params\) \{\s*const \{([\s\S]*?)\} = params;/);
   assert.ok(destructuring, "could not find generateHoles' destructuring");
   const names = destructuring[1]
     .split(",")
     .map(part => part.trim())
     .filter(Boolean);
   assert.deepEqual(names, PLACEMENT_PARAMS);
+});
+
+test("nothing generateHoles depends on holds mutable module state", () => {
+  // The other half of the claim above PLACEMENT_PARAMS, and the half no list can
+  // stand for: a value that changes underneath generateHoles is a placement
+  // input arriving from outside params. Neither the sweep nor the list can see
+  // one — it holds the same value in both documents being compared — so a module
+  // `let` anywhere in the import closure ships the silent false negative
+  // directly. Reached transitively so a new helper is covered on arrival.
+  const closure = new Set();
+  const walk = url => {
+    if (closure.has(url.href)) return;
+    closure.add(url.href);
+    const src = readFileSync(url, "utf8");
+    for (const found of src.matchAll(/^import[^"']*["'](\.[^"']+)["']/gm)) walk(new URL(found[1], url));
+  };
+  walk(new URL("../layouts/grid.js", import.meta.url));
+  assert.ok(closure.size >= 5, `expected the closure to reach the geometry helpers, got ${closure.size} files`);
+
+  for (const href of closure) {
+    const name = href.slice(href.indexOf("/src/") + 1);
+    const mutable = readFileSync(new URL(href), "utf8").match(/^(?:export\s+)?(?:let|var)\s+\w+/m);
+    assert.equal(mutable, null, `${name} declares \`${mutable?.[0]}\` at module level`);
+  }
 });
