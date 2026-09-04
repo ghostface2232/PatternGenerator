@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/**/*.test.js src/*.test.js",
+    "test": "node --test \"src/**/*.test.js\"",
     "test:e2e": "playwright test",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.{js,jsx}\" \"e2e/**/*.js\"",
