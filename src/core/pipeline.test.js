@@ -359,11 +359,20 @@ test("null, undefined and NaN encode differently in the signature", () => {
   assert.notEqual(patternSignature(a), patternSignature(b));
 });
 
-test("PLACEMENT_PARAMS is exactly what generateHoles destructures", () => {
-  // The sweep cannot see a param ADDED to generateHoles and forgotten here, and
+test("PLACEMENT_PARAMS is exactly what generateHoles reads", () => {
+  // The sweep may not see a param ADDED to generateHoles and forgotten here, and
   // that would be a silent false negative. This is the guarantee in prose above
   // PLACEMENT_PARAMS, asserted.
   const source = readFileSync(new URL("../layouts/grid.js", import.meta.url), "utf8");
+
+  // The list below only stands for everything generateHoles reads while the one
+  // destructuring is the only way it touches params. A second `= params;`, or a
+  // direct `params.foo`, would read an input no list can cover, so pin the count
+  // first: the signature and the parameter, and nothing else. A mention in a
+  // comment trips this too, deliberately — a false alarm here is one line to
+  // fix, and the alternative is parsing the file.
+  assert.equal((source.match(/\bparams\b/g) || []).length, 2, "generateHoles must touch params exactly twice");
+
   const destructuring = source.match(/export function generateHoles\(params\) \{\s*const \{([\s\S]*?)\} = params;/);
   assert.ok(destructuring, "could not find generateHoles' destructuring");
   const names = destructuring[1]
