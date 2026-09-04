@@ -436,44 +436,42 @@ test("validation leaves every placement param a primitive", () => {
   // with no primitive form would throw inside the reducer and take down the
   // render. What stops that is validateDocument, not the signature: this is the
   // invariant the comment above the encoding leans on, asserted.
-  const base = createDocument();
   const PRIMITIVE = new Set(["number", "string", "boolean"]);
   // Everything JSON can carry that is not a primitive, plus the shapes a
-  // hand-written share link or a stale autosave could hold.
+  // hand-written share link or a stale autosave could hold. { toString: null }
+  // stands in for Object.create(null), which JSON cannot express: both make
+  // String() throw, and only the first survives a round trip.
   const poisons = [{}, [], [1, 2], { toString: null }, null, "", "abc", -1e9, 1e9];
-  const fields = [
-    "sheet.w",
-    "sheet.h",
-    "hole.diameter",
-    "hole.w",
-    "hole.h",
-    "hole.shape",
-    "hole.cornerRadius",
-    "hole.diamondOrient",
-    "layout.type",
-    "layout.customAngle",
-    "layout.edgeGapX",
-    "layout.edgeGapY",
-    "layout.radial.edgeGap",
-    "layout.radial.circumGap",
-    "layout.radial.mode",
-    "layout.radial.layout",
-    "layout.radial.centerHole",
-    "boundary.margins.top",
-    "boundary.margins.left",
-    "boundary.cornerRadius",
-  ];
-  for (const field of fields) {
-    for (const poison of poisons) {
-      const doc = validateDocument(patchIn(base, { [field]: poison }));
-      const params = buildParams(doc, deriveGeometry(doc));
-      for (const key of PLACEMENT_PARAMS) {
-        assert.ok(
-          PRIMITIVE.has(typeof params[key]),
-          `${key} is ${typeof params[key]} after validating ${field} = ${JSON.stringify(poison)}`
-        );
+
+  // Every leaf of the document, walked rather than listed. A hand-written list
+  // silently rots: it named hole.cornerRadius, which is not a placement param at
+  // all, and omitted boundary.margins.bottom and .right, which are — and passing
+  // those two through unvalidated survives the whole suite.
+  const leaves = (node, prefix = "") =>
+    Object.entries(node).flatMap(([key, value]) =>
+      value && typeof value === "object" && !Array.isArray(value)
+        ? leaves(value, `${prefix}${key}.`)
+        : [`${prefix}${key}`]
+    );
+
+  // Twice over, because a field can hide behind a shape: deriveGeometry reads
+  // hole.diameter for a Circle and hole.w / hole.h for the custom-size shapes,
+  // so a poisoned hole.w never reaches a param under the default document.
+  for (const shape of ["Circle", "Rectangle"]) {
+    const base = patchIn(createDocument(), { "hole.shape": shape });
+    for (const field of leaves(base)) {
+      for (const poison of poisons) {
+        const doc = validateDocument(patchIn(base, { [field]: poison }));
+        // A throw here is the same failure by another route — deriveGeometry
+        // reaches most of these values before the signature does.
+        const params = buildParams(doc, deriveGeometry(doc));
+        for (const key of PLACEMENT_PARAMS) {
+          assert.ok(
+            PRIMITIVE.has(typeof params[key]),
+            `${key} is ${typeof params[key]} after validating ${field} = ${JSON.stringify(poison)} on a ${shape}`
+          );
+        }
       }
-      assert.doesNotThrow(() => patternSignature(doc), `${field} = ${JSON.stringify(poison)}`);
     }
   }
 });
