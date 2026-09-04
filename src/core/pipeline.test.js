@@ -369,6 +369,9 @@ test("the type tag, field position and quoting each carry their weight", () => {
   // Three ways an encoding of the same values could collapse two documents into
   // one signature. Each is paired with the placement it would wrongly preserve
   // removals across, so none of them can be satisfied by encoding alone.
+  // None of the three inputs survives validateDocument — it coerces the numeric
+  // string and enum-picks the two radial fields — so these are properties the
+  // encoding should hold on its own, not hazards reachable from the app today.
   const base = createDocument();
   // Hashed, not compared whole: a mismatch otherwise prints both hole lists.
   const place = d => createHash("sha1").update(JSON.stringify(generateHoles(buildParams(d, deriveGeometry(d))))).digest("hex"); // prettier-ignore

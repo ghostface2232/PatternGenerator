@@ -342,7 +342,9 @@ export function computePattern(doc) {
 // circumEdgeGap, ringSpacing, circumSpacing — cannot be isolated by any document
 // at all, since each ring spacing is derived from its gap. The fifth, diameter,
 // is redundant only while holeW and holeH are non-falsy: grid.js reads
-// `holeW || diameter`, so a zero width would make it load-bearing again.
+// `holeW || diameter`, so a zero width would make it load-bearing again. That is
+// hypothetical today — DOC_LIMITS floors hole.w at 0.5 and every width slider
+// starts there — but the list does not depend on the floor staying put.
 export const PLACEMENT_PARAMS = [
   "diameter",
   "holeShape",
