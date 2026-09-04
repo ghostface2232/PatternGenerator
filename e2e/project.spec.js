@@ -244,6 +244,11 @@ test("reshaping a hole keeps removals: corner radius and taper never move one", 
 });
 
 test("a dropped file never navigates the tab away, and a document file opens", async ({ page }) => {
+  let dismissed = null;
+  page.on("dialog", d => {
+    dismissed = d.message();
+    d.dismiss();
+  });
   const prevented = await page.evaluate(() => {
     const dt = new DataTransfer();
     dt.items.add(new File(["hello"], "notes.txt", { type: "text/plain" }));
@@ -252,6 +257,7 @@ test("a dropped file never navigates the tab away, and a document file opens", a
     return ev.defaultPrevented;
   });
   expect(prevented).toBe(true);
+  expect(dismissed).toBe(`Not a Perf Pattern document: drop a .perf.json file to open it.`);
   await expect(stat(page, "doc-name")).toHaveText("Untitled");
 
   await page.evaluate(() => {

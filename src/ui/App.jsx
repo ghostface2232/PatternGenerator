@@ -461,8 +461,10 @@ export default function App() {
       if (!e.dataTransfer?.types?.includes("Files")) return;
       // Always swallow a file drop: letting it through navigates the tab away from the app.
       e.preventDefault();
-      const file = [...(e.dataTransfer.files || [])].find(f => /\.json$/i.test(f.name));
+      const files = [...(e.dataTransfer.files || [])];
+      const file = files.find(f => /\.json$/i.test(f.name));
       if (file) openFile(file);
+      else if (files.length) window.alert(`Not a Perf Pattern document: drop a ${FILE_EXTENSION} file to open it.`);
     };
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("drop", onDrop);
