@@ -42,7 +42,10 @@ export function ColorField({ label, value, onChange, dark }) {
   const textPrimary = dark ? "#e4e4e7" : "#18181b";
   const labelStyle = { fontSize: 8, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: "#71717a", fontFamily: MONO };
 
+  // Sync the local text / HSV copies when the committed colour changes from outside
+  // (swatch click, undo). The HSV copy is left alone mid-drag so the pad doesn't jump.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prop→local sync
     setText(value);
     if (!dragging.current) { const next = hexToHsv(value); hsvRef.current = next; setHsv(next); }
   }, [value]);

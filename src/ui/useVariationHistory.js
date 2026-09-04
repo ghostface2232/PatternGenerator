@@ -12,9 +12,12 @@ export function useVariationHistory(variation, setVariation) {
   const ref = useRef(variation);
   const past = useRef([]);
   const future = useRef([]);
-  const [version, setVersion] = useState(0);
+  // Stack sizes mirrored into state so canUndo/canRedo re-render correctly.
+  const [depth, setDepth] = useState({ past: 0, future: 0 });
 
   useEffect(() => { ref.current = variation; }, [variation]);
+
+  const syncDepth = useCallback(() => setDepth({ past: past.current.length, future: future.current.length }), []);
 
   const resolve = useCallback(nextOrUpdater => {
     const current = ref.current;
@@ -29,8 +32,8 @@ export function useVariationHistory(variation, setVariation) {
     future.current = [];
     ref.current = next;
     setVariation(next);
-    setVersion(v => v + 1);
-  }, [resolve, setVariation]);
+    syncDepth();
+  }, [resolve, setVariation, syncDepth]);
 
   const live = useCallback(nextOrUpdater => {
     const next = resolve(nextOrUpdater);
@@ -42,8 +45,8 @@ export function useVariationHistory(variation, setVariation) {
     if (JSON.stringify(startSnapshot) === JSON.stringify(ref.current)) return;
     past.current = [...past.current.slice(-(HISTORY_LIMIT - 1)), startSnapshot];
     future.current = [];
-    setVersion(v => v + 1);
-  }, []);
+    syncDepth();
+  }, [syncDepth]);
 
   const undo = useCallback(() => {
     const previous = past.current.pop();
@@ -51,8 +54,8 @@ export function useVariationHistory(variation, setVariation) {
     future.current.push(cloneVariation(ref.current));
     ref.current = previous;
     setVariation(previous);
-    setVersion(v => v + 1);
-  }, [setVariation]);
+    syncDepth();
+  }, [setVariation, syncDepth]);
 
   const redo = useCallback(() => {
     const next = future.current.pop();
@@ -60,12 +63,8 @@ export function useVariationHistory(variation, setVariation) {
     past.current.push(cloneVariation(ref.current));
     ref.current = next;
     setVariation(next);
-    setVersion(v => v + 1);
-  }, [setVariation]);
+    syncDepth();
+  }, [setVariation, syncDepth]);
 
-  return {
-    ref, commit, live, recordDragFrom, undo, redo,
-    canUndo: version >= 0 && past.current.length > 0,
-    canRedo: version >= 0 && future.current.length > 0,
-  };
+  return { ref, commit, live, recordDragFrom, undo, redo, canUndo: depth.past > 0, canRedo: depth.future > 0 };
 }
