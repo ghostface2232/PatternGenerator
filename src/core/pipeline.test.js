@@ -196,6 +196,15 @@ test("every edit that changes hole placement changes the signature", () => {
     { presetIndex: 3 },
     { name: "x" },
     { "appearance.bgColor": "#123456" },
+    // Sub-step edits. Every other edit here is coarse, so a signature that
+    // rounded its numbers — to 2dp, say — would pass the whole sweep while
+    // silently keeping removals across a real move. The sliders step by 0.1 but
+    // their numeric fields commit raw parseFloat, and a share link or an
+    // autosave carries whatever it was given, so this resolution is reachable.
+    { "hole.diameter": 5.001 },
+    { "sheet.w": 200.001 },
+    { "layout.edgeGapX": 3.001 },
+    { "boundary.margins.left": 0.001 },
     // Compensating pairs: the pitch is unchanged, only the hole extent moves.
     // Single-field edits alone cannot separate hole size from pitch.
     { "hole.w": 1, "layout.edgeGapX": 8 },
