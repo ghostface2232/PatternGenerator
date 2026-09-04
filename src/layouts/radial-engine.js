@@ -12,28 +12,40 @@ export function diamondFlatAngle(w, h) {
 
 function triInradius(w, h) {
   const slant = Math.hypot(w / 2, h);
-  return (w * h / 2) / (w / 2 + slant);
+  return (w * h) / 2 / (w / 2 + slant);
 }
 
 function shapeVertices(shape, w, h) {
   if (shape === "Hexagon") {
     const R = w / 2;
     return Array.from({ length: 6 }, (_, i) => {
-      const angle = i * Math.PI / 3 + Math.PI / 6;
+      const angle = (i * Math.PI) / 3 + Math.PI / 6;
       return [R * Math.cos(angle), R * Math.sin(angle)];
     });
   }
-  if (shape === "Diamond") return [[0, -h / 2], [w / 2, 0], [0, h / 2], [-w / 2, 0]];
+  if (shape === "Diamond")
+    return [
+      [0, -h / 2],
+      [w / 2, 0],
+      [0, h / 2],
+      [-w / 2, 0],
+    ];
   if (shape === "Triangle") {
     const r = triInradius(w, h);
-    return [[0, -(h - r)], [w / 2, r], [-w / 2, r]];
+    return [
+      [0, -(h - r)],
+      [w / 2, r],
+      [-w / 2, r],
+    ];
   }
   return null;
 }
 
 function projectedVertexExtent(vertices, angle) {
-  const c = Math.cos(angle), s = Math.sin(angle);
-  let lo = Infinity, hi = -Infinity;
+  const c = Math.cos(angle),
+    s = Math.sin(angle);
+  let lo = Infinity,
+    hi = -Infinity;
   for (const [x, y] of vertices) {
     const projection = x * c + y * s;
     lo = Math.min(lo, projection);
@@ -44,7 +56,7 @@ function projectedVertexExtent(vertices, angle) {
 
 export function getRadialShapeExtents(shape, w, h, diamondOrient = "Point up") {
   if (shape === "Triangle") return { radial: h, tangential: w };
-  if (shape === "Hexagon") return { radial: w * Math.sqrt(3) / 2, tangential: w };
+  if (shape === "Hexagon") return { radial: (w * Math.sqrt(3)) / 2, tangential: w };
   if (shape === "Diamond") {
     const offset = diamondOrient === "Flat up" ? diamondFlatAngle(w, h) : 0;
     const vertices = shapeVertices(shape, w, h);
@@ -75,12 +87,13 @@ function actualHoleAngle(shape, polarAngle, index, w, h, diamondOrient) {
 
 function shapeSupport(shape, w, h, orientation, direction) {
   const local = direction - orientation;
-  const c = Math.cos(local), s = Math.sin(local);
+  const c = Math.cos(local),
+    s = Math.sin(local);
   if (shape === "Circle") return w / 2;
-  if (shape === "Rectangle") return Math.abs(c) * w / 2 + Math.abs(s) * h / 2;
+  if (shape === "Rectangle") return (Math.abs(c) * w) / 2 + (Math.abs(s) * h) / 2;
   if (shape === "Pill") {
-    if (w >= h) return Math.abs(c) * (w - h) / 2 + h / 2;
-    return Math.abs(s) * (h - w) / 2 + w / 2;
+    if (w >= h) return (Math.abs(c) * (w - h)) / 2 + h / 2;
+    return (Math.abs(s) * (h - w)) / 2 + w / 2;
   }
   const vertices = shapeVertices(shape, w, h);
   let support = -Infinity;
@@ -89,7 +102,8 @@ function shapeSupport(shape, w, h, orientation, direction) {
 }
 
 export function projectedShapeGap(a, b, config) {
-  const dx = b.x - a.x, dy = b.y - a.y;
+  const dx = b.x - a.x,
+    dy = b.y - a.y;
   const distance = Math.hypot(dx, dy);
   if (distance < EPS) return -Infinity;
   const direction = Math.atan2(dy, dx);
@@ -100,13 +114,13 @@ export function projectedShapeGap(a, b, config) {
   const angleB = Number.isFinite(b.angle)
     ? b.angle
     : actualHoleAngle(shape, b.polarAngle || 0, b.index || 0, w, h, diamondOrient);
-  return distance
-    - shapeSupport(shape, w, h, angleA, direction)
-    - shapeSupport(shape, w, h, angleB, direction + Math.PI);
+  return (
+    distance - shapeSupport(shape, w, h, angleA, direction) - shapeSupport(shape, w, h, angleB, direction + Math.PI)
+  );
 }
 
 function ringHole(radius, count, phase, index, cx, cy, config) {
-  const polarAngle = phase + TAU * index / count;
+  const polarAngle = phase + (TAU * index) / count;
   return {
     x: cx + radius * Math.cos(polarAngle),
     y: cy + radius * Math.sin(polarAngle),
@@ -131,7 +145,7 @@ function closestPreviousIndices(angle, previous) {
   if (previous.count === 1) return [0];
   const step = TAU / previous.count;
   const nearest = Math.round((angle - previous.phase) / step);
-  return [-2, -1, 0, 1, 2].map(offset => ((nearest + offset) % previous.count + previous.count) % previous.count);
+  return [-2, -1, 0, 1, 2].map(offset => (((nearest + offset) % previous.count) + previous.count) % previous.count);
 }
 
 function minimumInterRingGap(radius, count, phase, previous, cx, cy, config) {
@@ -152,9 +166,10 @@ function optimizedPhase(radius, count, previous, cx, cy, config) {
   if (!previous) return { phase: 0, gap: Infinity };
   const period = TAU / count;
   const samples = 48;
-  let bestPhase = 0, bestGap = -Infinity;
+  let bestPhase = 0,
+    bestGap = -Infinity;
   for (let i = 0; i < samples; i++) {
-    const phase = period * i / samples;
+    const phase = (period * i) / samples;
     const gap = minimumInterRingGap(radius, count, phase, previous, cx, cy, config);
     if (gap > bestGap + EPS) {
       bestGap = gap;
@@ -195,19 +210,22 @@ export function generateRadialHoles(options) {
 
   const cx = center?.x ?? (xMin + xMax) / 2;
   const cy = center?.y ?? (yMin + yMax) / 2;
-  const perfW = xMax - xMin, perfH = yMax - yMin;
+  const perfW = xMax - xMin,
+    perfH = yMax - yMin;
   const extents = getRadialShapeExtents(shape, w, h, diamondOrient);
-  const ringSpacing = Math.max(EPS, layout === "Concentric" && legacyRingSpacing > 0
-    ? legacyRingSpacing
-    : extents.radial + Math.max(0, radialGap));
-  const circumSpacing = Math.max(EPS, layout === "Concentric" && legacyCircumSpacing > 0
-    ? legacyCircumSpacing
-    : extents.tangential + Math.max(0, circumGap));
+  const ringSpacing = Math.max(
+    EPS,
+    layout === "Concentric" && legacyRingSpacing > 0 ? legacyRingSpacing : extents.radial + Math.max(0, radialGap)
+  );
+  const circumSpacing = Math.max(
+    EPS,
+    layout === "Concentric" && legacyCircumSpacing > 0
+      ? legacyCircumSpacing
+      : extents.tangential + Math.max(0, circumGap)
+  );
   const circleRadius = Math.min(perfW, perfH) / 2;
   const boundaryPad = Math.max(w, h) / 2;
-  const maxRadius = fillMode === "Circle"
-    ? circleRadius
-    : Math.hypot(perfW / 2, perfH / 2) + boundaryPad;
+  const maxRadius = fillMode === "Circle" ? circleRadius : Math.hypot(perfW / 2, perfH / 2) + boundaryPad;
   const config = { shape, w, h, diamondOrient };
   const holes = [];
 
@@ -218,8 +236,11 @@ export function generateRadialHoles(options) {
     } else if (cornerRadius > 0) {
       inside = isInsideRoundedRect(hole.x, hole.y, bounds, cornerRadius);
     } else {
-      inside = hole.x >= xMin - boundaryPad && hole.x <= xMax + boundaryPad
-        && hole.y >= yMin - boundaryPad && hole.y <= yMax + boundaryPad;
+      inside =
+        hole.x >= xMin - boundaryPad &&
+        hole.x <= xMax + boundaryPad &&
+        hole.y >= yMin - boundaryPad &&
+        hole.y <= yMax + boundaryPad;
     }
     if (inside) holes.push({ x: hole.x, y: hole.y, angle: hole.angle });
   };
@@ -236,13 +257,11 @@ export function generateRadialHoles(options) {
     // circumference approximation and every ring starts on the positive x
     // axis. This intentionally keeps the visual rhythm of the pre-engine
     // implementation instead of optimizing phases and projected gaps.
-    const legacyMaxRadius = fillMode === "Circle"
-      ? circleRadius
-      : Math.hypot(perfW, perfH) / 2 + ringSpacing;
+    const legacyMaxRadius = fillMode === "Circle" ? circleRadius : Math.hypot(perfW, perfH) / 2 + ringSpacing;
     const ringCount = Math.max(0, Math.floor(legacyMaxRadius / ringSpacing));
     for (let ring = 1; ring <= ringCount; ring++) {
       const radius = ring * ringSpacing;
-      const count = Math.max(1, Math.floor(TAU * radius / circumSpacing));
+      const count = Math.max(1, Math.floor((TAU * radius) / circumSpacing));
       for (let i = 0; i < count; i++) {
         const hole = ringHole(radius, count, 0, i, cx, cy, config);
         // Hexagon rotation was ignored by the original renderer.
@@ -259,8 +278,7 @@ export function generateRadialHoles(options) {
     const minimumCenterDistance = outerRadius * 2 + requestedGap;
     // A centre hole makes n=0 -> n=1 the limiting pair. Without it, the
     // tighter n=1 -> n=4 Fermat pair determines the scale.
-    const spiralScale = minimumCenterDistance
-      / (centerHole ? 1 : SUNFLOWER_SAFE_SEPARATION);
+    const spiralScale = minimumCenterDistance / (centerHole ? 1 : SUNFLOWER_SAFE_SEPARATION);
     for (let n = 1; ; n++) {
       const radius = spiralScale * Math.sqrt(n);
       if (radius > maxRadius + EPS) break;

@@ -15,34 +15,40 @@ Built with React + Vite. Installable as an offline-capable PWA.
 - **Thickness & taper** — models tapered (conical) holes: exit diameter, surface vs. effective (through-thickness) open area, closed-hole warnings
 - **Live statistics** — open area ratio (OAR) gauge, hole count, exact minimum ligament, overlap detection
 - **Export** — dimensioned SVG (mm units, entry/exit layers when taper is active) and high-resolution PNG
+- **Projects** — autosave in the browser, `.perf.json` save / open (or drop a file onto the page), copy-to-clipboard share links, a recent-documents list, and global undo / redo (Ctrl+Z, Ctrl+Shift+Z)
 
 ## Getting started
 
 ```bash
 npm install
-npm run dev      # dev server at http://localhost:5173
-npm test         # unit tests (node --test)
-npm run build    # production build → docs/
+npm run dev        # dev server at http://localhost:5173
+npm test           # unit tests (node --test)
+npm run test:e2e   # browser smoke tests (Playwright)
+npm run lint       # ESLint
+npm run build      # production build → docs/
 ```
 
 ## Deployment
 
-`vite build` outputs to `docs/` (relative base path), which is committed and served via GitHub Pages. After changing source, run `npm run build` and commit the regenerated `docs/` alongside your changes.
+`vite build` outputs to `docs/` (relative base path), which is committed and served via GitHub Pages. After changing source, run `npm run build` and commit the regenerated `docs/` alongside your changes; CI checks that the two match.
 
 The app registers a service worker (`public/sw.js`) for offline use. Bump `CACHE_NAME` in `sw.js` when changing cached app-shell files.
 
 ## Project layout
 
 ```
-index.html                     entry point + service-worker registration
-src/main.jsx                   React bootstrap
-src/perforation-generator.jsx  the entire app: geometry, pattern generation, canvas, UI
-src/radial-engine.js           pure radial-pattern geometry (unit-tested)
-src/radial-engine.test.js      tests for radial layouts and spacing
-src/variation-engine.js        pure size-variation field math (unit-tested)
-src/variation-engine.test.js   tests for the variation engine
-public/                        PWA assets (manifest, service worker, icons)
-docs/                          committed production build (GitHub Pages)
+index.html                 entry point + service-worker registration
+src/main.jsx               React bootstrap
+src/core/                  document model, constants, and the pure document → holes → stats pipeline
+src/geometry/              hole shapes (registry), polygon helpers, boundary, ligament, OAR
+src/layouts/               hole placement: grid family, uniform-ligament tilings, radial engine
+src/fields/                size-variation fields and the on-canvas gizmo math
+src/export/                SVG / PNG writers and download helpers
+src/render/                canvas renderer and view transform
+src/ui/                    React app: App, TopBar, Sidebar, canvas/, panels/, controls/, theme
+e2e/                       Playwright smoke tests
+public/                    PWA assets (manifest, service worker, icons)
+docs/                      committed production build (GitHub Pages)
 ```
 
-All geometry is computed in millimeters in sheet space; the canvas applies zoom/pan transforms on top.
+All geometry is computed in millimeters in sheet space; the canvas applies zoom/pan transforms on top. See `AGENTS.md` for the architecture in more depth and `ROADMAP.md` for the improvement plan.

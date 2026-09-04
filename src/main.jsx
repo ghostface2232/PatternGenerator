@@ -1,5 +1,4 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import PerforationGenerator from './perforation-generator.jsx';
+import ReactDOM from "react-dom/client";
+import App from "./ui/App.jsx";
 
-ReactDOM.createRoot(document.getElementById('root')).render(<PerforationGenerator />);
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
