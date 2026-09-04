@@ -1117,6 +1117,7 @@ function SliderRow({ label, value, min, max, step, onChange, unit, dark }) {
             ref={inputRef}
             type="text"
             inputMode="decimal"
+            aria-label={label}
             value={inputVal}
             onFocus={() => { isFocused.current = true; inputRef.current?.select(); }}
             onBlur={commitInput}
@@ -1146,10 +1147,10 @@ function SliderRow({ label, value, min, max, step, onChange, unit, dark }) {
 }
 
 // ─── Tiny Toggle ─────────────────────────────────────────────────────
-function Toggle({ value, onChange, dark }) {
+function Toggle({ value, onChange, dark, label }) {
   const accent = dark ? "#60a5fa" : "#2563eb";
   return (
-    <div onClick={() => onChange(!value)} style={{
+    <div onClick={() => onChange(!value)} role="switch" aria-checked={value} aria-label={label} style={{
       width: 34, height: 18, borderRadius: 9, padding: 2, flexShrink: 0, cursor: "pointer",
       background: value ? accent : (dark ? "#333" : "#ccc"), transition: "background 0.2s",
       display: "flex", alignItems: "center",
@@ -1164,7 +1165,7 @@ function Toggle({ value, onChange, dark }) {
 }
 
 // ─── Custom dropdown (replaces native <select>, styled to match the GUI) ──
-function Select({ value, options, onChange, dark, placeholder }) {
+function Select({ value, options, onChange, dark, placeholder, ariaLabel }) {
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState(null);
   const btnRef = useRef(null);
@@ -1201,7 +1202,7 @@ function Select({ value, options, onChange, dark, placeholder }) {
 
   return (
     <div style={{ position: "relative", flex: 1, minWidth: 0 }} onPointerDown={e => e.stopPropagation()}>
-      <button ref={btnRef} onClick={() => (open ? setOpen(false) : openMenu())}
+      <button ref={btnRef} onClick={() => (open ? setOpen(false) : openMenu())} aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open}
         style={{ width: "100%", height: 30, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, padding: "0 8px 0 9px", fontSize: 11, background: bg, color: current ? text : "#71717a", border: `1px solid ${open ? accent : border}`, borderRadius: 5, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace" }}>
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{current ? current.label : (placeholder || "Select…")}</span>
         <ChevronDown size={12} style={{ flexShrink: 0, color: "#71717a", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
@@ -2260,7 +2261,7 @@ export default function PerforationGenerator() {
   const dropdown = (label, value, onChange, options) => (
     <div key={label} style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
       <span style={topLabelStyle}>{label}</span>
-      <Select value={value} onChange={onChange} options={options} dark={dark} />
+      <Select value={value} onChange={onChange} options={options} dark={dark} ariaLabel={label} />
     </div>
   );
   const topStat = (label, value, color) => (
@@ -2270,10 +2271,10 @@ export default function PerforationGenerator() {
     </div>
   );
   // Small label/value row for the canvas HUD card
-  const hudRow = (label, value, color) => (
+  const hudRow = (label, value, color, testId) => (
     <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 14, fontSize: 9, fontFamily: "'JetBrains Mono', monospace" }}>
       <span style={{ color: textSecondary }}>{label}</span>
-      <span style={{ color: color || textPrimary, fontWeight: 500 }}>{value}</span>
+      <span data-testid={testId} style={{ color: color || textPrimary, fontWeight: 500 }}>{value}</span>
     </div>
   );
   const topDivider = <div style={{ width: 1, alignSelf: "stretch", background: sectionBorder, margin: "10px 0" }} />;
@@ -2292,7 +2293,7 @@ export default function PerforationGenerator() {
         {topDivider}
         {/* Current OAR */}
         <div style={{ display: "flex", alignItems: "baseline", gap: 6, whiteSpace: "nowrap" }}>
-          <span style={{ fontSize: 24, fontWeight: 700, color: accentColor, lineHeight: 1 }}>{displayOAR.toFixed(1)}</span>
+          <span data-testid="stat-oar" style={{ fontSize: 24, fontWeight: 700, color: accentColor, lineHeight: 1 }}>{displayOAR.toFixed(1)}</span>
           <span style={{ fontSize: 10, color: textSecondary }}>% OAR</span>
           {taperActive && oarDelta < 0 && <span style={{ fontSize: 9, color: dark ? "#f87171" : "#dc2626" }}>({oarDelta.toFixed(1)}%p taper)</span>}
         </div>
@@ -2336,7 +2337,7 @@ export default function PerforationGenerator() {
           {/* Stats card */}
           <div style={{ background: dark ? "rgba(0,0,0,0.65)" : "rgba(255,255,255,0.8)", backdropFilter: "blur(10px)", padding: "8px 12px", borderRadius: 8, fontFamily: "'JetBrains Mono', monospace", border: `1px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)"}` }}>
             <div style={{ display: "flex", gap: 12, marginBottom: 6 }}>
-              <span style={{ fontSize: 10, color: textSecondary }}>Holes <span style={{ color: textPrimary, fontWeight: 500 }}>{activeHoleCount.toLocaleString()}</span>{hasRemovedHoles ? <span style={{ color: warnColor }}> / {holeCount.toLocaleString()}</span> : ""}</span>
+              <span style={{ fontSize: 10, color: textSecondary }}>Holes <span data-testid="stat-holes" style={{ color: textPrimary, fontWeight: 500 }}>{activeHoleCount.toLocaleString()}</span>{hasRemovedHoles ? <span style={{ color: warnColor }}> / {holeCount.toLocaleString()}</span> : ""}</span>
               <span style={{ fontSize: 10, color: textSecondary }}>{zoom.toFixed(1)}x</span>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -2344,7 +2345,7 @@ export default function PerforationGenerator() {
               {hudRow("Open Area", `${totalHoleArea.toFixed(1)} mm²`)}
               {hudRow("Panel Area", `${grossArea.toFixed(0)} mm²`)}
               {hudRow("Perf. Area", `${perforatedArea.toFixed(0)} mm²`)}
-              {minLigament !== null && hudRow("Min Ligament", `${minLigament.toFixed(2)} mm`, minLigament <= 0 ? warnColor : accentColor)}
+              {minLigament !== null && hudRow("Min Ligament", `${minLigament.toFixed(2)} mm`, minLigament <= 0 ? warnColor : accentColor, "stat-ligament")}
             </div>
           </div>
           {/* Warning badges */}
@@ -2411,7 +2412,7 @@ export default function PerforationGenerator() {
               {holeShape === "Triangle" && (
                 <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                   <span style={{ fontSize: 11, color: textSecondary }}>Equilateral (H = W·√3/2)</span>
-                  <Toggle value={triEquilateral} onChange={setTriEquilateral} dark={dark} />
+                  <Toggle value={triEquilateral} onChange={setTriEquilateral} dark={dark} label="Equilateral" />
                 </label>
               )}
               {holeShape === "Triangle" && triEquilateral ? (
@@ -2547,7 +2548,7 @@ export default function PerforationGenerator() {
             <Toggle value={variation.enabled} onChange={enabled => {
               commitVariation(current => ({ ...current, enabled }));
               if (!enabled) setVariationEditMode(false);
-            }} dark={dark} />
+            }} dark={dark} label="Size Variation" />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 5, marginBottom: 8 }}>
@@ -2638,7 +2639,7 @@ export default function PerforationGenerator() {
         <div style={sectionStyle}>
           <div style={{ ...sectionTitle, display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: showTaper ? undefined : 0 }}>
             <span>Sheet Thickness & Hole Taper</span>
-            <Toggle value={showTaper} onChange={setShowTaper} dark={dark} />
+            <Toggle value={showTaper} onChange={setShowTaper} dark={dark} label="Sheet Thickness & Hole Taper" />
           </div>
           {showTaper && (
           <>
@@ -2669,7 +2670,7 @@ export default function PerforationGenerator() {
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
               <span style={{ fontSize: 11, color: textSecondary }}>Click to Remove</span>
-              <Toggle value={holeRemovalMode} onChange={setHoleRemovalMode} dark={dark} />
+              <Toggle value={holeRemovalMode} onChange={setHoleRemovalMode} dark={dark} label="Click to Remove" />
             </label>
             {holeRemovalMode && <div style={{ fontSize: 9, color: dark ? "#888" : "#888", lineHeight: 1.4 }}>Click holes on the canvas to remove/restore them. OAR recalculates automatically.</div>}
             {removedHoles.size > 0 && (

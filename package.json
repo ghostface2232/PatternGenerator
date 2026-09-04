@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/*.test.js"
+    "test": "node --test src/**/*.test.js src/*.test.js",
+    "test:e2e": "playwright test",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.{js,jsx}\" \"e2e/**/*.js\"",
+    "format:check": "prettier --check \"src/**/*.{js,jsx}\" \"e2e/**/*.js\""
   },
   "dependencies": {
     "lucide-react": "^1.25.0",
@@ -15,7 +19,13 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
     "@vitejs/plugin-react": "^4.3.0",
+    "eslint": "^10.9.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.6",
     "vite": "^6.0.0"
   }
 }
