@@ -112,7 +112,7 @@ export function ProjectPanel() {
           e.target.value = "";
         }}
       />
-      {project.recent.length > 0 && (
+      {project.recent.some(e => e.id !== doc.id) && (
         <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <span style={smallLabelStyle(theme)}>Recent (this browser)</span>
           <Select
