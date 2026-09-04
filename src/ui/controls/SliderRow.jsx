@@ -16,7 +16,10 @@ export function SliderRow({ label, value, min, max, step, onChange, unit, dark }
   const commitInput = () => {
     isFocused.current = false;
     const parsed = parseFloat(inputVal);
-    if (isNaN(parsed)) { setInputVal(String(value)); return; }
+    if (isNaN(parsed)) {
+      setInputVal(String(value));
+      return;
+    }
     const clamped = clamp(parsed, min, max);
     onChange(clamped);
     setInputVal(String(clamped));
@@ -29,7 +32,9 @@ export function SliderRow({ label, value, min, max, step, onChange, unit, dark }
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
-        <span style={{ fontSize: 11, color: dark ? "#ccc" : "#444", fontFamily: MONO, letterSpacing: 0.3 }}>{label}</span>
+        <span style={{ fontSize: 11, color: dark ? "#ccc" : "#444", fontFamily: MONO, letterSpacing: 0.3 }}>
+          {label}
+        </span>
         <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
           <input
             ref={inputRef}
@@ -37,27 +42,50 @@ export function SliderRow({ label, value, min, max, step, onChange, unit, dark }
             inputMode="decimal"
             aria-label={label}
             value={inputVal}
-            onFocus={() => { isFocused.current = true; inputRef.current?.select(); }}
+            onFocus={() => {
+              isFocused.current = true;
+              inputRef.current?.select();
+            }}
             onBlur={commitInput}
-            onKeyDown={e => { if (e.key === "Enter") { commitInput(); inputRef.current?.blur(); } }}
+            onKeyDown={e => {
+              if (e.key === "Enter") {
+                commitInput();
+                inputRef.current?.blur();
+              }
+            }}
             onChange={e => setInputVal(e.target.value)}
             style={{
-              width: 52, height: 24, fontSize: 11, textAlign: "right",
-              background: dark ? "#131316" : "#fff", color: dark ? "#eee" : "#222",
+              width: 52,
+              height: 24,
+              fontSize: 11,
+              textAlign: "right",
+              background: dark ? "#131316" : "#fff",
+              color: dark ? "#eee" : "#222",
               border: `1px solid ${dark ? "#333" : "#d0d0d0"}`,
-              borderRadius: 4, padding: "0 4px", outline: "none",
-              fontFamily: MONO
+              borderRadius: 4,
+              padding: "0 4px",
+              outline: "none",
+              fontFamily: MONO,
             }}
           />
           {unit && <span style={{ fontSize: 10, color: dark ? "#666" : "#999", fontFamily: MONO }}>{unit}</span>}
         </div>
       </div>
       <input
-        type="range" min={min} max={max} step={step} value={value}
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
         onChange={e => onChange(parseFloat(e.target.value))}
         style={{
-          width: "100%", height: 4, appearance: "none", outline: "none", borderRadius: 2, cursor: "pointer",
-          background: `linear-gradient(to right, ${trackFg} 0%, ${trackFg} ${pct}%, ${trackBg} ${pct}%, ${trackBg} 100%)`
+          width: "100%",
+          height: 4,
+          appearance: "none",
+          outline: "none",
+          borderRadius: 2,
+          cursor: "pointer",
+          background: `linear-gradient(to right, ${trackFg} 0%, ${trackFg} ${pct}%, ${trackBg} ${pct}%, ${trackBg} 100%)`,
         }}
       />
     </div>

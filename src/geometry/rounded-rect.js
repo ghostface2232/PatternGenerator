@@ -7,7 +7,12 @@ export function isInsideRoundedRect(px, py, x1, y1, x2, y2, cr) {
   const r = Math.min(cr, maxR);
   if (px >= x1 + r && px <= x2 - r && py >= y1 && py <= y2) return true;
   if (px >= x1 && px <= x2 && py >= y1 + r && py <= y2 - r) return true;
-  const corners = [[x1 + r, y1 + r], [x2 - r, y1 + r], [x1 + r, y2 - r], [x2 - r, y2 - r]];
+  const corners = [
+    [x1 + r, y1 + r],
+    [x2 - r, y1 + r],
+    [x1 + r, y2 - r],
+    [x2 - r, y2 - r],
+  ];
   for (const [cx, cy] of corners) {
     if (Math.hypot(px - cx, py - cy) <= r) return true;
   }

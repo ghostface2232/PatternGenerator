@@ -21,17 +21,31 @@ export function generateSVGString(holes, params) {
     holes.forEach(pt => {
       const topW = taperDirection === "Top larger" ? pt.w : pt.exitW;
       const topH = taperDirection === "Top larger" ? pt.h : pt.exitH;
-      if (topW > 0 && topH > 0) svg += holeSVGElement(pt.x, pt.y, shape, topW, topH, holeFill, '', pt.angle, pt.holeRadius);
+      if (topW > 0 && topH > 0)
+        svg += holeSVGElement(pt.x, pt.y, shape, topW, topH, holeFill, "", pt.angle, pt.holeRadius);
     });
     svg += `  </g>\n  <g id="exit-side">\n`;
     holes.forEach(pt => {
       const botW = taperDirection === "Top larger" ? pt.exitW : pt.w;
       const botH = taperDirection === "Top larger" ? pt.exitH : pt.h;
-      if (botW > 0 && botH > 0) svg += holeSVGElement(pt.x, pt.y, shape, botW, botH, 'fill="none"', 'stroke="#666" stroke-width="0.15"', pt.angle, pt.exitHoleRadius);
+      if (botW > 0 && botH > 0)
+        svg += holeSVGElement(
+          pt.x,
+          pt.y,
+          shape,
+          botW,
+          botH,
+          'fill="none"',
+          'stroke="#666" stroke-width="0.15"',
+          pt.angle,
+          pt.exitHoleRadius
+        );
     });
     svg += `  </g>\n`;
   } else {
-    holes.forEach(pt => { svg += holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, holeFill, '', pt.angle, pt.holeRadius); });
+    holes.forEach(pt => {
+      svg += holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, holeFill, "", pt.angle, pt.holeRadius);
+    });
   }
   return svg + `  </g>\n</svg>`;
 }

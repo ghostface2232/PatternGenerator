@@ -5,7 +5,7 @@
 export function calcTheoreticalOAR(patternType, pitchX, pitchY, holeArea) {
   let cellArea;
   if (patternType === "Staggered 60°") {
-    cellArea = pitchX * (pitchX * Math.sqrt(3) / 2);
+    cellArea = pitchX * ((pitchX * Math.sqrt(3)) / 2);
   } else if (patternType === "Staggered 45°") {
     cellArea = pitchX * pitchX;
   } else {

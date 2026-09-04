@@ -10,8 +10,15 @@
 // w = horizontal extent, h = vertical extent, both in mm. Rotation is a per-hole
 // `angle` (radians) applied by the callers below, so shape code stays canonical.
 import {
-  basePolyVerts, convexPolyGap, holePolyVerts, isInsideRoundedPoly, roundedPolyArea,
-  roundedPolySVGPath, segmentGap, tracePolyPath, unitToward,
+  basePolyVerts,
+  convexPolyGap,
+  holePolyVerts,
+  isInsideRoundedPoly,
+  roundedPolyArea,
+  roundedPolySVGPath,
+  segmentGap,
+  tracePolyPath,
+  unitToward,
 } from "./polygon.js";
 import { hexEdgeReach, hexVertices } from "./hexagon.js";
 import { isInsideRoundedRect } from "./rounded-rect.js";
@@ -20,9 +27,17 @@ const f3 = n => n.toFixed(3);
 
 // ─── Rectangle ────────────────────────────────────────────────────────
 function rectHoleVerts(hole, w, h) {
-  const hw = w / 2, hh = h / 2;
-  const verts = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
-  const angle = hole.angle || 0, c = Math.cos(angle), s = Math.sin(angle);
+  const hw = w / 2,
+    hh = h / 2;
+  const verts = [
+    [-hw, -hh],
+    [hw, -hh],
+    [hw, hh],
+    [-hw, hh],
+  ];
+  const angle = hole.angle || 0,
+    c = Math.cos(angle),
+    s = Math.sin(angle);
   return verts.map(([x, y]) => [hole.x + x * c - y * s, hole.y + x * s + y * c]);
 }
 
@@ -58,23 +73,27 @@ const Rectangle = {
 
 // ─── Pill (stadium) ───────────────────────────────────────────────────
 function pillAxis(hole) {
-  const w = hole.w, h = hole.h;
+  const w = hole.w,
+    h = hole.h;
   const horizontal = w >= h;
   const radius = Math.min(w, h) / 2;
   const halfSegment = Math.max(w, h) / 2 - radius;
   const angle = (hole.angle || 0) + (horizontal ? 0 : Math.PI / 2);
-  const dx = Math.cos(angle) * halfSegment, dy = Math.sin(angle) * halfSegment;
+  const dx = Math.cos(angle) * halfSegment,
+    dy = Math.sin(angle) * halfSegment;
   return { a: [hole.x - dx, hole.y - dy], b: [hole.x + dx, hole.y + dy], radius };
 }
 
 const Pill = {
   area(w, h) {
-    const s = Math.min(w, h), l = Math.max(w, h);
+    const s = Math.min(w, h),
+      l = Math.max(w, h);
     const r = s / 2;
     return Math.PI * r * r + s * (l - s);
   },
   trace(ctx, cx, cy, w, h) {
-    const hw = w / 2, hh = h / 2;
+    const hw = w / 2,
+      hh = h / 2;
     if (w >= h) {
       const s = hw - hh;
       ctx.moveTo(cx - s, cy - hh);
@@ -93,12 +112,15 @@ const Pill = {
     ctx.closePath();
   },
   svg(x, y, w, h) {
-    const hw = w / 2, hh = h / 2;
+    const hw = w / 2,
+      hh = h / 2;
     if (w >= h) {
-      const s = hw - hh, r = hh;
+      const s = hw - hh,
+        r = hh;
       return `<path d="M ${f3(x - s)} ${f3(y - r)} L ${f3(x + s)} ${f3(y - r)} A ${f3(r)} ${f3(r)} 0 0 1 ${f3(x + s)} ${f3(y + r)} L ${f3(x - s)} ${f3(y + r)} A ${f3(r)} ${f3(r)} 0 0 1 ${f3(x - s)} ${f3(y - r)} Z"`;
     }
-    const s = hh - hw, r = hw;
+    const s = hh - hw,
+      r = hw;
     return `<path d="M ${f3(x + r)} ${f3(y - s)} L ${f3(x + r)} ${f3(y + s)} A ${f3(r)} ${f3(r)} 0 0 1 ${f3(x - r)} ${f3(y + s)} L ${f3(x - r)} ${f3(y - s)} A ${f3(r)} ${f3(r)} 0 0 1 ${f3(x + r)} ${f3(y - s)} Z"`;
   },
   contains(x, y, w, h) {
@@ -112,7 +134,8 @@ const Pill = {
     return x * x + sy * sy <= (w / 2) ** 2;
   },
   gap(h1, h2) {
-    const p1 = pillAxis(h1), p2 = pillAxis(h2);
+    const p1 = pillAxis(h1),
+      p2 = pillAxis(h2);
     return segmentGap(p1.a, p1.b, p2.a, p2.b) - p1.radius - p2.radius;
   },
   rotates: true,
@@ -122,26 +145,28 @@ const Pill = {
 const Hexagon = {
   area(w, h, holeRadius) {
     const R = w / 2;
-    const sharp = (3 * Math.sqrt(3) / 2) * R * R;
-    const cr = Math.min(holeRadius || 0, R * Math.sqrt(3) / 2);
+    const sharp = ((3 * Math.sqrt(3)) / 2) * R * R;
+    const cr = Math.min(holeRadius || 0, (R * Math.sqrt(3)) / 2);
     // Rounding each of the 6 corners removes (2√3 − π)·r² of area total.
     return cr > 0 ? sharp - (2 * Math.sqrt(3) - Math.PI) * cr * cr : sharp;
   },
   trace(ctx, cx, cy, w, h, holeRadius) {
     const R = w / 2;
     const pts = hexVertices(cx, cy, R);
-    const cr = Math.min(holeRadius || 0, R * Math.sqrt(3) / 2);
+    const cr = Math.min(holeRadius || 0, (R * Math.sqrt(3)) / 2);
     if (cr > 0) {
       const mid = [(pts[5][0] + pts[0][0]) / 2, (pts[5][1] + pts[0][1]) / 2];
       ctx.moveTo(mid[0], mid[1]);
       for (let i = 0; i < 6; i++) {
-        const v = pts[i], n = pts[(i + 1) % 6];
+        const v = pts[i],
+          n = pts[(i + 1) % 6];
         ctx.arcTo(v[0], v[1], n[0], n[1], cr);
       }
       ctx.closePath();
     } else {
       for (let i = 0; i < 6; i++) {
-        if (i === 0) ctx.moveTo(pts[i][0], pts[i][1]); else ctx.lineTo(pts[i][0], pts[i][1]);
+        if (i === 0) ctx.moveTo(pts[i][0], pts[i][1]);
+        else ctx.lineTo(pts[i][0], pts[i][1]);
       }
       ctx.closePath();
     }
@@ -149,13 +174,17 @@ const Hexagon = {
   svg(x, y, w, h, holeRadius) {
     const R = w / 2;
     const verts = hexVertices(x, y, R);
-    const cr = Math.min(holeRadius || 0, R * Math.sqrt(3) / 2);
+    const cr = Math.min(holeRadius || 0, (R * Math.sqrt(3)) / 2);
     if (cr > 0) {
       const t = cr / Math.sqrt(3); // tangent length from each vertex (120° interior angle)
-      const tin = [], tout = [];
+      const tin = [],
+        tout = [];
       for (let i = 0; i < 6; i++) {
-        const v = verts[i], prev = verts[(i + 5) % 6], next = verts[(i + 1) % 6];
-        const up = unitToward(v, prev), un = unitToward(v, next);
+        const v = verts[i],
+          prev = verts[(i + 5) % 6],
+          next = verts[(i + 1) % 6];
+        const up = unitToward(v, prev),
+          un = unitToward(v, next);
         tin.push([v[0] + up[0] * t, v[1] + up[1] * t]);
         tout.push([v[0] + un[0] * t, v[1] + un[1] * t]);
       }
@@ -172,25 +201,30 @@ const Hexagon = {
   },
   contains(x, y, w, h, holeRadius) {
     const R = w / 2; // pointy-top: vertical corner-to-corner = 2R, flats on left/right
-    const apothem = Math.sqrt(3) * R / 2;
+    const apothem = (Math.sqrt(3) * R) / 2;
     const cr = Math.min(holeRadius || 0, apothem);
     if (cr <= 0) {
       return Math.abs(y) <= R && Math.abs(x) <= apothem && Math.sqrt(3) * Math.abs(y) + Math.abs(x) <= Math.sqrt(3) * R;
     }
     // Rounded hexagon = inner hexagon (shrunk inward by cr) grown by a disk of radius cr.
     const ai = apothem - cr;
-    const Ri = ai * 2 / Math.sqrt(3);
+    const Ri = (ai * 2) / Math.sqrt(3);
     let inside = true;
     for (let k = 0; k < 6; k++) {
-      const ang = k * Math.PI / 3;
-      if (x * Math.cos(ang) + y * Math.sin(ang) - ai > 1e-9) { inside = false; break; }
+      const ang = (k * Math.PI) / 3;
+      if (x * Math.cos(ang) + y * Math.sin(ang) - ai > 1e-9) {
+        inside = false;
+        break;
+      }
     }
     if (inside) return true;
     const iv = hexVertices(0, 0, Ri);
     let dmin = Infinity;
     for (let k = 0; k < 6; k++) {
-      const a = iv[k], b = iv[(k + 1) % 6];
-      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const a = iv[k],
+        b = iv[(k + 1) % 6];
+      const dx = b[0] - a[0],
+        dy = b[1] - a[1];
       const len2 = dx * dx + dy * dy;
       let t = len2 > 0 ? ((x - a[0]) * dx + (y - a[1]) * dy) / len2 : 0;
       t = Math.max(0, Math.min(1, t));
@@ -201,14 +235,14 @@ const Hexagon = {
   gap(h1, h2) {
     // Edge-aware: use each hexagon's reach toward the other instead of the circumradius,
     // otherwise tightly-spaced honeycombs read as overlapping when they only share edges.
-    const r1 = Math.max(h1.w, h1.h) / 2, r2 = Math.max(h2.w, h2.h) / 2;
-    const dx = h2.x - h1.x, dy = h2.y - h1.y;
+    const r1 = Math.max(h1.w, h1.h) / 2,
+      r2 = Math.max(h2.w, h2.h) / 2;
+    const dx = h2.x - h1.x,
+      dy = h2.y - h1.y;
     const dist = Math.hypot(dx, dy);
     if (dist < 1e-9) return -(r1 + r2);
     const dir = Math.atan2(dy, dx);
-    return dist
-      - hexEdgeReach(r1, dir - (h1.angle || 0))
-      - hexEdgeReach(r2, dir + Math.PI - (h2.angle || 0));
+    return dist - hexEdgeReach(r1, dir - (h1.angle || 0)) - hexEdgeReach(r2, dir + Math.PI - (h2.angle || 0));
   },
   rotates: true,
 };
@@ -239,12 +273,21 @@ const polyShape = name => ({
 
 // ─── Circle ───────────────────────────────────────────────────────────
 const Circle = {
-  area(w) { return Math.PI * (w / 2) ** 2; },
-  trace(ctx, cx, cy, w) { ctx.arc(cx, cy, w / 2, 0, Math.PI * 2); },
-  svg(x, y, w) { return `<circle cx="${f3(x)}" cy="${f3(y)}" r="${f3(w / 2)}"`; },
-  contains(x, y, w, h) { return (x / (w / 2)) ** 2 + (y / (h / 2)) ** 2 <= 1; },
+  area(w) {
+    return Math.PI * (w / 2) ** 2;
+  },
+  trace(ctx, cx, cy, w) {
+    ctx.arc(cx, cy, w / 2, 0, Math.PI * 2);
+  },
+  svg(x, y, w) {
+    return `<circle cx="${f3(x)}" cy="${f3(y)}" r="${f3(w / 2)}"`;
+  },
+  contains(x, y, w, h) {
+    return (x / (w / 2)) ** 2 + (y / (h / 2)) ** 2 <= 1;
+  },
   gap(h1, h2) {
-    const r1 = Math.max(h1.w, h1.h) / 2, r2 = Math.max(h2.w, h2.h) / 2;
+    const r1 = Math.max(h1.w, h1.h) / 2,
+      r2 = Math.max(h2.w, h2.h) / 2;
     return Math.hypot(h2.x - h1.x, h2.y - h1.y) - r1 - r2;
   },
   rotates: false,
@@ -285,9 +328,8 @@ export function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
 export function holeSVGElement(x, y, shape, w, h, fill, extra, angle, holeRadius) {
   const def = getShape(shape);
   const attrs = extra || "";
-  const rotAttr = angle && def.rotates
-    ? ` transform="rotate(${(angle * 180 / Math.PI).toFixed(2)} ${f3(x)} ${f3(y)})"`
-    : "";
+  const rotAttr =
+    angle && def.rotates ? ` transform="rotate(${((angle * 180) / Math.PI).toFixed(2)} ${f3(x)} ${f3(y)})"` : "";
   return `    ${def.svg(x, y, w, h, holeRadius)} ${fill} ${attrs}${rotAttr}/>\n`;
 }
 
@@ -298,9 +340,12 @@ export function isPointInsideHole(px, py, hole, shape, useExit = false) {
   const radius = useExit ? hole.exitHoleRadius : hole.holeRadius;
   if (w <= 0 || h <= 0) return false;
   const angle = hole.angle || 0;
-  const cos = Math.cos(-angle), sin = Math.sin(-angle);
-  const dx = px - hole.x, dy = py - hole.y;
-  const x = dx * cos - dy * sin, y = dx * sin + dy * cos;
+  const cos = Math.cos(-angle),
+    sin = Math.sin(-angle);
+  const dx = px - hole.x,
+    dy = py - hole.y;
+  const x = dx * cos - dy * sin,
+    y = dx * sin + dy * cos;
   return getShape(shape).contains(x, y, w, h, radius);
 }
 

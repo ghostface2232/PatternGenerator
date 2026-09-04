@@ -8,19 +8,45 @@ import { triInradius } from "../geometry/polygon.js";
 import { diamondFlatAngle, generateRadialHoles } from "./radial-engine.js";
 
 export function generateHoles(params) {
-  const { diameter, holeShape, holeW, holeH, patternType, pitchX, pitchY, sheetW, sheetH, marginTop, marginBottom, marginLeft, marginRight, cornerRadius, customAngle, radialEdgeGap, circumEdgeGap, ringSpacing, circumSpacing, radialMode, radialLayout, centerHole, diamondOrient } = params;
-  const hw = (holeW || diameter) / 2, hh = (holeH || diameter) / 2;
+  const {
+    diameter,
+    holeShape,
+    holeW,
+    holeH,
+    patternType,
+    pitchX,
+    pitchY,
+    sheetW,
+    sheetH,
+    marginTop,
+    marginBottom,
+    marginLeft,
+    marginRight,
+    cornerRadius,
+    customAngle,
+    radialEdgeGap,
+    circumEdgeGap,
+    ringSpacing,
+    circumSpacing,
+    radialMode,
+    radialLayout,
+    centerHole,
+    diamondOrient,
+  } = params;
+  const hw = (holeW || diameter) / 2,
+    hh = (holeH || diameter) / 2;
   const r = Math.max(hw, hh);
   const holes = [];
-  const xMin = marginLeft, xMax = sheetW - marginRight;
-  const yMin = marginTop, yMax = sheetH - marginBottom;
+  const xMin = marginLeft,
+    xMax = sheetW - marginRight;
+  const yMin = marginTop,
+    yMax = sheetH - marginBottom;
   if (xMin >= xMax || yMin >= yMax) return holes;
 
   // Diamond "Flat up" = canonical point-up rhombus rotated onto one of its edges.
   const flatTheta = holeShape === "Diamond" && diamondOrient === "Flat up" ? diamondFlatAngle(hw * 2, hh * 2) : 0;
-  const clipToBoundary = pts => cornerRadius > 0
-    ? pts.filter(p => isInsideRoundedRect(p.x, p.y, xMin, yMin, xMax, yMax, cornerRadius))
-    : pts;
+  const clipToBoundary = pts =>
+    cornerRadius > 0 ? pts.filter(p => isInsideRoundedRect(p.x, p.y, xMin, yMin, xMax, yMax, cornerRadius)) : pts;
 
   if (patternType === "Radial") {
     return generateRadialHoles({
@@ -49,12 +75,16 @@ export function generateHoles(params) {
   // each actual triangle inset at the shared incenter — every facing pair of
   // edges then sits exactly `gap` apart, so gap 0 is a seamless fit.
   if (holeShape === "Triangle") {
-    const w = hw * 2, h = hh * 2;
+    const w = hw * 2,
+      h = hh * 2;
     const rIn = triInradius(w, h);
     const gap = Math.max(0, pitchX - w);
     const k = (rIn + gap / 2) / rIn;
-    const cellW = w * k, cellH = h * k, rCell = rIn + gap / 2;
-    const cx = (xMin + xMax) / 2, cy = (yMin + yMax) / 2;
+    const cellW = w * k,
+      cellH = h * k,
+      rCell = rIn + gap / 2;
+    const cx = (xMin + xMax) / 2,
+      cy = (yMin + yMax) / 2;
     const rowsUp = Math.ceil((cy - yMin + r) / cellH) + 1;
     const rowsDown = Math.ceil((yMax + r - cy) / cellH) + 1;
     const cols = Math.ceil((Math.max(cx - xMin, xMax - cx) + r) / (cellW / 2)) + 1;
@@ -62,7 +92,7 @@ export function generateHoles(params) {
       const rowTop = cy - cellH / 2 + j * cellH;
       if (rowTop > yMax + r || rowTop + cellH < yMin - r) continue;
       for (let i = -cols; i <= cols; i++) {
-        const up = ((i + j) % 2 + 2) % 2 === 0;
+        const up = (((i + j) % 2) + 2) % 2 === 0;
         const x = cx + i * (cellW / 2);
         const y = up ? rowTop + cellH - rCell : rowTop + rCell;
         if (x < xMin - r || x > xMax + r) continue;
@@ -78,23 +108,38 @@ export function generateHoles(params) {
   // that of the expanded rhombus (offset outward by gap/2). "Flat up" rotates
   // the lattice together with the shapes so the tiling stays exact.
   if (holeShape === "Diamond" && patternType === "Staggered 60°") {
-    const w = hw * 2, h = hh * 2;
+    const w = hw * 2,
+      h = hh * 2;
     const rho = (w * h) / (2 * Math.hypot(w, h));
     const gap = Math.max(0, pitchX - w);
     const k = (rho + gap / 2) / rho;
-    const cellW = w * k, cellH = h * k;
-    const ct = Math.cos(flatTheta), st = Math.sin(flatTheta);
+    const cellW = w * k,
+      cellH = h * k;
+    const ct = Math.cos(flatTheta),
+      st = Math.sin(flatTheta);
     const u = [cellW * ct, cellW * st];
     const v = [(cellW / 2) * ct - (cellH / 2) * st, (cellW / 2) * st + (cellH / 2) * ct];
-    const cx = (xMin + xMax) / 2, cy = (yMin + yMax) / 2;
+    const cx = (xMin + xMax) / 2,
+      cy = (yMin + yMax) / 2;
     const det = u[0] * v[1] - u[1] * v[0];
-    let iMin = Infinity, iMax = -Infinity, jMin = Infinity, jMax = -Infinity;
-    for (const [bx, by] of [[xMin - r, yMin - r], [xMax + r, yMin - r], [xMin - r, yMax + r], [xMax + r, yMax + r]]) {
-      const dx = bx - cx, dy = by - cy;
+    let iMin = Infinity,
+      iMax = -Infinity,
+      jMin = Infinity,
+      jMax = -Infinity;
+    for (const [bx, by] of [
+      [xMin - r, yMin - r],
+      [xMax + r, yMin - r],
+      [xMin - r, yMax + r],
+      [xMax + r, yMax + r],
+    ]) {
+      const dx = bx - cx,
+        dy = by - cy;
       const fi = (dx * v[1] - dy * v[0]) / det;
       const fj = (u[0] * dy - u[1] * dx) / det;
-      iMin = Math.min(iMin, fi); iMax = Math.max(iMax, fi);
-      jMin = Math.min(jMin, fj); jMax = Math.max(jMax, fj);
+      iMin = Math.min(iMin, fi);
+      iMax = Math.max(iMax, fi);
+      jMin = Math.min(jMin, fj);
+      jMax = Math.max(jMax, fj);
     }
     for (let j = Math.floor(jMin) - 1; j <= Math.ceil(jMax) + 1; j++) {
       for (let i = Math.floor(iMin) - 1; i <= Math.ceil(iMax) + 1; i++) {
@@ -122,17 +167,17 @@ export function generateHoles(params) {
   // step by spacing·√3/2 to keep the lattice equilateral (every neighbour the same gap).
   const isHexHoneycomb = holeShape === "Hexagon" && patternType === "Staggered 60°";
   const hexGap = Math.max(0, pitchX - holeWidth);
-  const hexSpacing = holeWidth * Math.sqrt(3) / 2 + hexGap;
+  const hexSpacing = (holeWidth * Math.sqrt(3)) / 2 + hexGap;
 
   let inRowPitchX = is45 ? pitchX * Math.SQRT2 : pitchX;
   if (isHexHoneycomb) inRowPitchX = hexSpacing;
 
   let offsetFn = () => 0;
   if (patternType === "Staggered 60°" || is45) {
-    offsetFn = (rowIdx) => (rowIdx % 2 !== 0 ? inRowPitchX / 2 : 0);
+    offsetFn = rowIdx => (rowIdx % 2 !== 0 ? inRowPitchX / 2 : 0);
   } else if (patternType === "Custom Angle") {
     const angleRad = (customAngle * Math.PI) / 180;
-    offsetFn = (rowIdx) => (rowIdx % 2 !== 0 ? pitchY * Math.tan(angleRad) : 0);
+    offsetFn = rowIdx => (rowIdx % 2 !== 0 ? pitchY * Math.tan(angleRad) : 0);
   }
 
   const minEdgeGap = Math.min(pitchX - holeWidth, pitchY - holeHeight);
@@ -141,7 +186,7 @@ export function generateHoles(params) {
   let effPY = pitchY;
   if (isHexHoneycomb) {
     // Equilateral hex lattice: row spacing = inRowPitchX·√3/2 gives a uniform gap on every edge.
-    effPY = inRowPitchX * Math.sqrt(3) / 2;
+    effPY = (inRowPitchX * Math.sqrt(3)) / 2;
   } else if (patternType === "Staggered 60°" || is45) {
     // In staggered layouts, adjacent rows are offset by inRowPitchX/2 horizontally.
     // The nearest neighbor is diagonal, so use Euclidean distance for min gap check
@@ -151,7 +196,7 @@ export function generateHoles(params) {
     const minDist = holeDim + safeMinGap;
     const staggeredMinPY = Math.sqrt(Math.max(holeHeight * holeHeight, minDist * minDist - halfPX * halfPX));
     if (patternType === "Staggered 60°") {
-      effPY = Math.max(pitchX * Math.sqrt(3) / 2, staggeredMinPY);
+      effPY = Math.max((pitchX * Math.sqrt(3)) / 2, staggeredMinPY);
     } else {
       // 45°: vertical pitch = t/√2 where t = pitchX (nearest-neighbor distance)
       effPY = Math.max(pitchX / Math.SQRT2, staggeredMinPY);
@@ -159,7 +204,8 @@ export function generateHoles(params) {
   }
 
   // Center-aligned: start from panel center, expand outward
-  const cx = (xMin + xMax) / 2, cy = (yMin + yMax) / 2;
+  const cx = (xMin + xMax) / 2,
+    cy = (yMin + yMax) / 2;
   const rowsUp = Math.ceil((cy - yMin + r) / effPY);
   const rowsDown = Math.ceil((yMax + r - cy) / effPY);
 

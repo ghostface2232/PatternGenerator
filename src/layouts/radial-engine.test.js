@@ -99,7 +99,9 @@ test("legacy concentric spacing stays diameter-based for custom rectangles", () 
     ringSpacing: 8,
     circumSpacing: 8,
   });
-  const radii = [...new Set(holes.map(hole => Math.hypot(hole.x - 120, hole.y - 120).toFixed(5)))].map(Number).sort((a, b) => a - b);
+  const radii = [...new Set(holes.map(hole => Math.hypot(hole.x - 120, hole.y - 120).toFixed(5)))]
+    .map(Number)
+    .sort((a, b) => a - b);
   assert.equal(radii[0], 8);
   assert.equal(radii[1] - radii[0], 8);
 });
@@ -116,7 +118,10 @@ test("legacy concentric ring populations are independent of hole shape", () => {
   let expectedCount = null;
   for (const [shape, w, h] of cases) {
     const holes = generateRadialHoles({
-      shape, w, h, diamondOrient: "Point up",
+      shape,
+      w,
+      h,
+      diamondOrient: "Point up",
       bounds: { xMin: 0, xMax: 120, yMin: 0, yMax: 120 },
       radialGap: 3,
       circumGap: 3,
@@ -149,7 +154,7 @@ test("sunflower layout follows a golden-angle Fermat spiral", () => {
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
   const a = Math.atan2(holes[0].y - center.y, holes[0].x - center.x);
   const b = Math.atan2(holes[1].y - center.y, holes[1].x - center.x);
-  const wrappedDelta = ((b - a) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+  const wrappedDelta = (((b - a) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
   assert.ok(Math.abs(wrappedDelta - goldenAngle) < 1e-9);
 });
 

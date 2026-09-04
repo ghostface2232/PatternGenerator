@@ -70,34 +70,62 @@ export default function App() {
       if (CUSTOM_SIZE_SHAPES.includes(shape) && !CUSTOM_SIZE_SHAPES.includes(hole.shape)) {
         // Switching from Circle/Hex → custom size: init from diameter
         patch["hole.w"] = shape === "Pill" ? hole.diameter * 2 : hole.diameter;
-        patch["hole.h"] = shape === "Triangle" ? hole.diameter * Math.sqrt(3) / 2 : hole.diameter;
+        patch["hole.h"] = shape === "Triangle" ? (hole.diameter * Math.sqrt(3)) / 2 : hole.diameter;
       }
       api.patch(patch);
     };
-    const setEdgeGapX = v => api.patch(doc.layout.gapLinked
-      ? { "layout.edgeGapX": v, "layout.edgeGapY": v, presetIndex: 0 }
-      : { "layout.edgeGapX": v, presetIndex: 0 });
+    const setEdgeGapX = v =>
+      api.patch(
+        doc.layout.gapLinked
+          ? { "layout.edgeGapX": v, "layout.edgeGapY": v, presetIndex: 0 }
+          : { "layout.edgeGapX": v, presetIndex: 0 }
+      );
     const setEdgeGapY = v => api.patch({ "layout.edgeGapY": v, presetIndex: 0 });
-    const toggleGapLinked = () => api.patch(doc.layout.gapLinked
-      ? { "layout.gapLinked": false }
-      : { "layout.gapLinked": true, "layout.edgeGapY": doc.layout.edgeGapX });
-    const setRadialEdgeGap = v => api.patch(doc.layout.radial.linked
-      ? { "layout.radial.edgeGap": v, "layout.radial.circumGap": v }
-      : { "layout.radial.edgeGap": v });
+    const toggleGapLinked = () =>
+      api.patch(
+        doc.layout.gapLinked
+          ? { "layout.gapLinked": false }
+          : { "layout.gapLinked": true, "layout.edgeGapY": doc.layout.edgeGapX }
+      );
+    const setRadialEdgeGap = v =>
+      api.patch(
+        doc.layout.radial.linked
+          ? { "layout.radial.edgeGap": v, "layout.radial.circumGap": v }
+          : { "layout.radial.edgeGap": v }
+      );
     const setCircumEdgeGap = v => api.set("layout.radial.circumGap", v);
-    const toggleRadialLinked = () => api.patch(doc.layout.radial.linked
-      ? { "layout.radial.linked": false }
-      : { "layout.radial.linked": true, "layout.radial.circumGap": doc.layout.radial.edgeGap });
+    const toggleRadialLinked = () =>
+      api.patch(
+        doc.layout.radial.linked
+          ? { "layout.radial.linked": false }
+          : { "layout.radial.linked": true, "layout.radial.circumGap": doc.layout.radial.edgeGap }
+      );
     const setSunflowerGap = v => api.patch({ "layout.radial.edgeGap": v, "layout.radial.circumGap": v });
-    const setMarginUniform = v => api.patch({ "boundary.margins.top": v, "boundary.margins.bottom": v, "boundary.margins.left": v, "boundary.margins.right": v });
+    const setMarginUniform = v =>
+      api.patch({
+        "boundary.margins.top": v,
+        "boundary.margins.bottom": v,
+        "boundary.margins.left": v,
+        "boundary.margins.right": v,
+      });
     const toggleMarginLinked = () => {
       const m = doc.boundary.margins.top;
-      api.patch(doc.boundary.marginLinked
-        ? { "boundary.marginLinked": false }
-        : { "boundary.marginLinked": true, "boundary.margins.bottom": m, "boundary.margins.left": m, "boundary.margins.right": m });
+      api.patch(
+        doc.boundary.marginLinked
+          ? { "boundary.marginLinked": false }
+          : {
+              "boundary.marginLinked": true,
+              "boundary.margins.bottom": m,
+              "boundary.margins.left": m,
+              "boundary.margins.right": m,
+            }
+      );
     };
     const applyPreset = idx => {
-      if (idx === 0) { api.set("presetIndex", 0); return; }
+      if (idx === 0) {
+        api.set("presetIndex", 0);
+        return;
+      }
       const p = DIN_PRESETS[idx];
       api.patch({
         presetIndex: idx,
@@ -109,11 +137,13 @@ export default function App() {
     };
     // Any hand edit of a preset-controlled field drops back to "Custom".
     const setWithPresetReset = (path, v) => api.patch({ [path]: v, presetIndex: 0 });
-    const toggleRemovedHole = idx => api.update(d => {
-      const next = new Set(d.removedHoles);
-      if (next.has(idx)) next.delete(idx); else next.add(idx);
-      return { ...d, removedHoles: [...next] };
-    });
+    const toggleRemovedHole = idx =>
+      api.update(d => {
+        const next = new Set(d.removedHoles);
+        if (next.has(idx)) next.delete(idx);
+        else next.add(idx);
+        return { ...d, removedHoles: [...next] };
+      });
     const clearRemovedHoles = () => api.set("removedHoles", []);
 
     // Variation block
@@ -132,16 +162,18 @@ export default function App() {
     const updateSelectedLayer = (patch, record = false) => {
       const apply = current => ({
         ...current,
-        layers: current.layers.map(layer => layer.id === current.selectedLayerId ? { ...layer, ...patch } : layer),
+        layers: current.layers.map(layer => (layer.id === current.selectedLayerId ? { ...layer, ...patch } : layer)),
       });
-      if (record) history.commit(apply); else history.live(apply);
+      if (record) history.commit(apply);
+      else history.live(apply);
     };
     const applyVariationPreset = name => {
       const preset = VARIATION_PRESETS[name];
       if (!preset) return;
       history.commit(current => {
         const selectedId = current.selectedLayerId || current.layers[0]?.id || "layer-1";
-        const baseLayer = current.layers.find(layer => layer.id === selectedId) || current.layers[0] || createVariationLayer(1);
+        const baseLayer =
+          current.layers.find(layer => layer.id === selectedId) || current.layers[0] || createVariationLayer(1);
         return {
           ...current,
           enabled: true,
@@ -179,38 +211,106 @@ export default function App() {
       setHoleRemovalMode(on);
       if (on) setVariationEditMode(false);
     };
-    const resetView = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
+    const resetView = () => {
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+    };
 
     return {
-      setShape, setEdgeGapX, setEdgeGapY, toggleGapLinked, setRadialEdgeGap, setCircumEdgeGap, toggleRadialLinked,
-      setSunflowerGap, setMarginUniform, toggleMarginLinked, applyPreset, setWithPresetReset,
-      toggleRemovedHole, clearRemovedHoles,
-      setVariationEnabled, toggleVariationEditMode, updateSelectedLayer, applyVariationPreset,
-      addVariationLayer, removeSelectedVariationLayer, randomizeVariation, setHoleRemoval, resetView,
+      setShape,
+      setEdgeGapX,
+      setEdgeGapY,
+      toggleGapLinked,
+      setRadialEdgeGap,
+      setCircumEdgeGap,
+      toggleRadialLinked,
+      setSunflowerGap,
+      setMarginUniform,
+      toggleMarginLinked,
+      applyPreset,
+      setWithPresetReset,
+      toggleRemovedHole,
+      clearRemovedHoles,
+      setVariationEnabled,
+      toggleVariationEditMode,
+      updateSelectedLayer,
+      applyVariationPreset,
+      addVariationLayer,
+      removeSelectedVariationLayer,
+      randomizeVariation,
+      setHoleRemoval,
+      resetView,
     };
   }, [doc, api, history, variationEditMode]);
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
   const exportSVG = useCallback(() => {
-    downloadText(generateSVGString(activeHoles, { ...params, holeColor, bgColor }), "perforation_pattern.svg", "image/svg+xml");
+    downloadText(
+      generateSVGString(activeHoles, { ...params, holeColor, bgColor }),
+      "perforation_pattern.svg",
+      "image/svg+xml"
+    );
   }, [activeHoles, params, holeColor, bgColor]);
   const exportPNG = useCallback(() => {
-    renderPNGBlob({ activeHoles, params, holeColor, bgColor, dark }).then(blob => downloadBlob(blob, "perforation_pattern.png"));
+    renderPNGBlob({ activeHoles, params, holeColor, bgColor, dark }).then(blob =>
+      downloadBlob(blob, "perforation_pattern.png")
+    );
   }, [activeHoles, params, holeColor, bgColor, dark]);
 
   const ui = {
-    dark, setDark, showHud, setShowHud, holeRemovalMode, variationEditMode, variationAdvanced, setVariationAdvanced,
-    variationHud, setVariationHud, pan, setPan, zoom, setZoom,
+    dark,
+    setDark,
+    showHud,
+    setShowHud,
+    holeRemovalMode,
+    variationEditMode,
+    variationAdvanced,
+    setVariationAdvanced,
+    variationHud,
+    setVariationHud,
+    pan,
+    setPan,
+    zoom,
+    setZoom,
   };
   const value = {
-    doc, api, theme, ui, geometry, params, holes, activeHoles, removedSet, overlaps, stats,
-    history, selectedVariationLayer, actions, exportSVG, exportPNG,
+    doc,
+    api,
+    theme,
+    ui,
+    geometry,
+    params,
+    holes,
+    activeHoles,
+    removedSet,
+    overlaps,
+    stats,
+    history,
+    selectedVariationLayer,
+    actions,
+    exportSVG,
+    exportPNG,
   };
 
   return (
     <EditorContext.Provider value={value}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100vw", height: "100vh", padding: 10, background: theme.appBg, color: theme.textPrimary, fontFamily: `${MONO}, -apple-system, sans-serif`, overflow: "hidden", WebkitFontSmoothing: "antialiased", fontVariantNumeric: "tabular-nums" }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+          width: "100vw",
+          height: "100vh",
+          padding: 10,
+          background: theme.appBg,
+          color: theme.textPrimary,
+          fontFamily: `${MONO}, -apple-system, sans-serif`,
+          overflow: "hidden",
+          WebkitFontSmoothing: "antialiased",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
         <GlobalStyles theme={theme} />
         <TopBar />
         {/* Body: floating sidebar (left) + floating canvas (right, via flex order) */}

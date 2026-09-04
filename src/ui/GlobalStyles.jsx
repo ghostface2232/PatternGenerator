@@ -2,7 +2,10 @@ export function GlobalStyles({ theme }) {
   return (
     <>
       <link rel="preconnect" href="https://fonts.googleapis.com" />
-      <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet" />
+      <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&display=swap"
+        rel="stylesheet"
+      />
       <style>{`
         input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: ${theme.accent}; cursor: pointer; border: 2px solid ${theme.dark ? "#18181b" : "#fff"}; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
         input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: ${theme.accent}; cursor: pointer; border: 2px solid ${theme.dark ? "#18181b" : "#fff"}; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }

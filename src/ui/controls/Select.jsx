@@ -26,7 +26,9 @@ export function Select({ value, options, onChange, dark, placeholder, ariaLabel 
   useEffect(() => {
     if (!open) return;
     const close = () => setOpen(false);
-    const onKey = e => { if (e.key === "Escape") close(); };
+    const onKey = e => {
+      if (e.key === "Escape") close();
+    };
     window.addEventListener("pointerdown", close);
     window.addEventListener("wheel", close, { passive: true });
     window.addEventListener("resize", close);
@@ -41,18 +43,86 @@ export function Select({ value, options, onChange, dark, placeholder, ariaLabel 
 
   return (
     <div style={{ position: "relative", flex: 1, minWidth: 0 }} onPointerDown={e => e.stopPropagation()}>
-      <button ref={btnRef} onClick={() => (open ? setOpen(false) : openMenu())} aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open}
-        style={{ width: "100%", height: 30, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, padding: "0 8px 0 9px", fontSize: 11, background: bg, color: current ? text : "#71717a", border: `1px solid ${open ? accent : border}`, borderRadius: 5, cursor: "pointer", fontFamily: MONO }}>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{current ? current.label : (placeholder || "Select…")}</span>
-        <ChevronDown size={12} style={{ flexShrink: 0, color: "#71717a", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+      <button
+        ref={btnRef}
+        onClick={() => (open ? setOpen(false) : openMenu())}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={{
+          width: "100%",
+          height: 30,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 6,
+          padding: "0 8px 0 9px",
+          fontSize: 11,
+          background: bg,
+          color: current ? text : "#71717a",
+          border: `1px solid ${open ? accent : border}`,
+          borderRadius: 5,
+          cursor: "pointer",
+          fontFamily: MONO,
+        }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {current ? current.label : placeholder || "Select…"}
+        </span>
+        <ChevronDown
+          size={12}
+          style={{
+            flexShrink: 0,
+            color: "#71717a",
+            transform: open ? "rotate(180deg)" : "none",
+            transition: "transform 0.15s",
+          }}
+        />
       </button>
       {open && menuPos && (
-        <div style={{ position: "fixed", top: menuPos.top, left: menuPos.left, width: menuPos.width, maxHeight: 264, overflowY: "auto", zIndex: 100, background: menuBg, border: `1px solid ${border}`, borderRadius: 8, padding: 4, boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.55)" : "0 12px 32px rgba(0,0,0,0.16)" }}>
+        <div
+          style={{
+            position: "fixed",
+            top: menuPos.top,
+            left: menuPos.left,
+            width: menuPos.width,
+            maxHeight: 264,
+            overflowY: "auto",
+            zIndex: 100,
+            background: menuBg,
+            border: `1px solid ${border}`,
+            borderRadius: 8,
+            padding: 4,
+            boxShadow: dark ? "0 12px 32px rgba(0,0,0,0.55)" : "0 12px 32px rgba(0,0,0,0.16)",
+          }}
+        >
           {options.map(o => {
             const selected = String(o.value) === String(value);
             return (
-              <button key={String(o.value)} onClick={() => { onChange(o.value); setOpen(false); }} className="pg-menu-item"
-                style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", fontSize: 10.5, textAlign: "left", background: "transparent", color: selected ? accent : text, border: "none", borderRadius: 5, cursor: "pointer", fontFamily: MONO }}>
+              <button
+                key={String(o.value)}
+                onClick={() => {
+                  onChange(o.value);
+                  setOpen(false);
+                }}
+                className="pg-menu-item"
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  padding: "6px 8px",
+                  fontSize: 10.5,
+                  textAlign: "left",
+                  background: "transparent",
+                  color: selected ? accent : text,
+                  border: "none",
+                  borderRadius: 5,
+                  cursor: "pointer",
+                  fontFamily: MONO,
+                }}
+              >
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.label}</span>
                 {selected && <Check size={11} style={{ flexShrink: 0 }} />}
               </button>

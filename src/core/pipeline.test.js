@@ -40,7 +40,9 @@ test("seamless tilings reach 100% open area at gap 0 and report the gap as ligam
 });
 
 test("DIN Rv 3-5 gives the textbook 32.6% open area", () => {
-  const { stats } = computePattern(doc({ "hole.diameter": 3, "layout.edgeGapX": 2, "layout.edgeGapY": 1.33, "layout.type": "Staggered 60°" }));
+  const { stats } = computePattern(
+    doc({ "hole.diameter": 3, "layout.edgeGapX": 2, "layout.edgeGapY": 1.33, "layout.type": "Staggered 60°" })
+  );
   assert.equal(fixed(stats.displayOAR), 32.6);
 });
 
@@ -75,7 +77,9 @@ test("radial patterns always use counted OAR", () => {
 });
 
 test("size variation scales holes and can cull below the floor", () => {
-  const varied = computePattern(doc({ "variation.enabled": true, "variation.minScale": 0.2, "variation.maxScale": 1, "variation.cullBelow": 1.5 }));
+  const varied = computePattern(
+    doc({ "variation.enabled": true, "variation.minScale": 0.2, "variation.maxScale": 1, "variation.cullBelow": 1.5 })
+  );
   assert.ok(varied.stats.culledHoleCount > 0);
   assert.ok(varied.activeHoles.every(h => h.w >= 1.5));
 });
@@ -92,7 +96,7 @@ test("setIn / patchIn are structural-sharing immutable updates", () => {
   const d2 = setIn(d, "hole.diameter", 6);
   assert.equal(getIn(d2, "hole.diameter"), 6);
   assert.equal(getIn(d, "hole.diameter"), 5);
-  assert.equal(d2.layout, d.layout);          // untouched branch shared
+  assert.equal(d2.layout, d.layout); // untouched branch shared
   assert.notEqual(d2.hole, d.hole);
   assert.equal(setIn(d, "hole.diameter", 5), d); // same value → same object
 });

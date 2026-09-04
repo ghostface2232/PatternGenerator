@@ -9,9 +9,15 @@ import { getShape, isPointInsideHole } from "./shapes.js";
 // Normalised description of the boundary from generator params.
 export function perfBoundsFromParams(params) {
   const {
-    sheetW, sheetH,
-    marginLeft = 0, marginRight = 0, marginTop = 0, marginBottom = 0,
-    cornerRadius = 0, patternType, radialMode,
+    sheetW,
+    sheetH,
+    marginLeft = 0,
+    marginRight = 0,
+    marginTop = 0,
+    marginBottom = 0,
+    cornerRadius = 0,
+    patternType,
+    radialMode,
   } = params;
   return {
     xMin: marginLeft,
@@ -24,7 +30,8 @@ export function perfBoundsFromParams(params) {
 }
 
 export function perfBoundsArea(bounds) {
-  const w = Math.max(0, bounds.xMax - bounds.xMin), h = Math.max(0, bounds.yMax - bounds.yMin);
+  const w = Math.max(0, bounds.xMax - bounds.xMin),
+    h = Math.max(0, bounds.yMax - bounds.yMin);
   if (bounds.circleMode) {
     const r = Math.min(w, h) / 2;
     return Math.PI * r * r;
@@ -34,7 +41,8 @@ export function perfBoundsArea(bounds) {
 
 export function tracePerfBoundary(ctx, params) {
   const b = perfBoundsFromParams(params);
-  const x = b.xMin, y = b.yMin;
+  const x = b.xMin,
+    y = b.yMin;
   const w = Math.max(0, b.xMax - b.xMin);
   const h = Math.max(0, b.yMax - b.yMin);
   ctx.beginPath();
@@ -47,7 +55,8 @@ export function tracePerfBoundary(ctx, params) {
 
 export function perfBoundarySVG(params) {
   const b = perfBoundsFromParams(params);
-  const x = b.xMin, y = b.yMin;
+  const x = b.xMin,
+    y = b.yMin;
   const w = Math.max(0, b.xMax - b.xMin);
   const h = Math.max(0, b.yMax - b.yMin);
   if (b.circleMode) {
@@ -60,7 +69,8 @@ export function perfBoundarySVG(params) {
 export function isPointInsidePerfBoundary(px, py, bounds) {
   const { xMin, xMax, yMin, yMax, cornerRadius: cr, circleMode } = bounds;
   if (circleMode) {
-    const cx = (xMin + xMax) / 2, cy = (yMin + yMax) / 2;
+    const cx = (xMin + xMax) / 2,
+      cy = (yMin + yMax) / 2;
     return Math.hypot(px - cx, py - cy) <= Math.min(xMax - xMin, yMax - yMin) / 2;
   }
   return isInsideRoundedRect(px, py, xMin, yMin, xMax, yMax, cr);
@@ -79,19 +89,33 @@ export function estimateVisibleHoleArea(hole, shape, bounds, useExit = false) {
     // Polygon shapes are not centred in their w×h box (triangle origin = incenter),
     // so take the exact bounding box of the rotated vertices.
     const verts = holePolyVerts(shape, hole.x, hole.y, w, h, angle);
-    left = Math.min(...verts.map(v => v[0])); right = Math.max(...verts.map(v => v[0]));
-    top = Math.min(...verts.map(v => v[1])); bottom = Math.max(...verts.map(v => v[1]));
+    left = Math.min(...verts.map(v => v[0]));
+    right = Math.max(...verts.map(v => v[0]));
+    top = Math.min(...verts.map(v => v[1]));
+    bottom = Math.max(...verts.map(v => v[1]));
   } else {
     const bw = Math.abs(Math.cos(angle)) * w + Math.abs(Math.sin(angle)) * h;
     const bh = Math.abs(Math.sin(angle)) * w + Math.abs(Math.cos(angle)) * h;
-    left = hole.x - bw / 2; right = hole.x + bw / 2;
-    top = hole.y - bh / 2; bottom = hole.y + bh / 2;
+    left = hole.x - bw / 2;
+    right = hole.x + bw / 2;
+    top = hole.y - bh / 2;
+    bottom = hole.y + bh / 2;
   }
-  const boxW = right - left, boxH = bottom - top;
+  const boxW = right - left,
+    boxH = bottom - top;
 
-  if ([[left, top], [right, top], [left, bottom], [right, bottom]].every(([x, y]) => isPointInsidePerfBoundary(x, y, bounds))) return exactArea;
+  if (
+    [
+      [left, top],
+      [right, top],
+      [left, bottom],
+      [right, bottom],
+    ].every(([x, y]) => isPointInsidePerfBoundary(x, y, bounds))
+  )
+    return exactArea;
   if (bounds.circleMode) {
-    const cx = (bounds.xMin + bounds.xMax) / 2, cy = (bounds.yMin + bounds.yMax) / 2;
+    const cx = (bounds.xMin + bounds.xMax) / 2,
+      cy = (bounds.yMin + bounds.yMax) / 2;
     const panelRadius = Math.min(bounds.xMax - bounds.xMin, bounds.yMax - bounds.yMin) / 2;
     if (Math.hypot(hole.x - cx, hole.y - cy) + Math.hypot(boxW, boxH) / 2 <= panelRadius) return exactArea;
   }
@@ -100,10 +124,10 @@ export function estimateVisibleHoleArea(hole, shape, bounds, useExit = false) {
   let inside = 0;
   for (let sy = 0; sy < samples; sy++) {
     for (let sx = 0; sx < samples; sx++) {
-      const px = left + (sx + 0.5) * boxW / samples;
-      const py = top + (sy + 0.5) * boxH / samples;
+      const px = left + ((sx + 0.5) * boxW) / samples;
+      const py = top + ((sy + 0.5) * boxH) / samples;
       if (isPointInsidePerfBoundary(px, py, bounds) && isPointInsideHole(px, py, hole, shape, useExit)) inside++;
     }
   }
-  return boxW * boxH * inside / (samples * samples);
+  return (boxW * boxH * inside) / (samples * samples);
 }

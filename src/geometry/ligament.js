@@ -15,12 +15,14 @@ function bucketize(holes, gridSize) {
 function forEachNeighbourPair(holes, gridSize, visit) {
   const grid = bucketize(holes, gridSize);
   holes.forEach((hole, i) => {
-    const gx = Math.floor(hole.x / gridSize), gy = Math.floor(hole.y / gridSize);
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-      for (const j of (grid[`${gx + dx},${gy + dy}`] || [])) {
-        if (j > i) visit(i, j);
+    const gx = Math.floor(hole.x / gridSize),
+      gy = Math.floor(hole.y / gridSize);
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++) {
+        for (const j of grid[`${gx + dx},${gy + dy}`] || []) {
+          if (j > i) visit(i, j);
+        }
       }
-    }
   });
 }
 
@@ -30,7 +32,10 @@ export function findOverlaps(holes, shape) {
   if (holes.length > PERF_MODE_HOLE_LIMIT) return overlaps;
   const gridSize = Math.max(0.001, ...holes.map(h => Math.max(h.w, h.h)));
   forEachNeighbourPair(holes, gridSize, (i, j) => {
-    if (checkShapeOverlap(holes[i], holes[j], shape)) { overlaps.add(i); overlaps.add(j); }
+    if (checkShapeOverlap(holes[i], holes[j], shape)) {
+      overlaps.add(i);
+      overlaps.add(j);
+    }
   });
   return overlaps;
 }

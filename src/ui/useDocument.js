@@ -9,11 +9,16 @@ import { createDocument, patchIn, setIn } from "../core/document.js";
 // Global undo/redo (Phase 1) will wrap these actions; keep new edits on this API.
 function reducer(doc, action) {
   switch (action.type) {
-    case "set": return setIn(doc, action.path, action.value);
-    case "patch": return patchIn(doc, action.patch);
-    case "update": return action.fn(doc);
-    case "replace": return action.doc;
-    default: return doc;
+    case "set":
+      return setIn(doc, action.path, action.value);
+    case "patch":
+      return patchIn(doc, action.patch);
+    case "update":
+      return action.fn(doc);
+    case "replace":
+      return action.doc;
+    default:
+      return doc;
   }
 }
 

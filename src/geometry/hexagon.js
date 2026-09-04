@@ -4,7 +4,7 @@
 // multiples of 60°; apothem (centre→edge) = R·√3/2. Used for accurate hexagon
 // gap/overlap so the honeycomb ligament reflects the true edge-to-edge spacing.
 export function hexEdgeReach(R, dirAngle) {
-  const apothem = R * Math.sqrt(3) / 2;
+  const apothem = (R * Math.sqrt(3)) / 2;
   const sector = Math.PI / 3;
   let d = dirAngle % sector;
   if (d > sector / 2) d -= sector;
@@ -21,4 +21,4 @@ export function hexVertices(cx, cy, R) {
   return pts;
 }
 
-export const hexApothem = R => R * Math.sqrt(3) / 2;
+export const hexApothem = R => (R * Math.sqrt(3)) / 2;

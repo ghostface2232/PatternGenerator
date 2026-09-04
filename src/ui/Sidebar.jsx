@@ -13,8 +13,31 @@ import { ExportPanel } from "./panels/ExportPanel.jsx";
 export function Sidebar() {
   const { theme } = useEditor();
   return (
-    <div style={{ width: 440, minWidth: 440, height: "100%", order: 1, background: theme.panelBg, borderRadius: 16, boxShadow: theme.floatShadow, padding: 8, boxSizing: "border-box", overflow: "hidden" }}>
-      <div style={{ height: "100%", overflowY: "auto", overflowX: "hidden", marginRight: -5, paddingRight: 5, scrollbarWidth: "thin", scrollbarColor: `${theme.scrollbar} transparent` }}>
+    <div
+      style={{
+        width: 440,
+        minWidth: 440,
+        height: "100%",
+        order: 1,
+        background: theme.panelBg,
+        borderRadius: 16,
+        boxShadow: theme.floatShadow,
+        padding: 8,
+        boxSizing: "border-box",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          height: "100%",
+          overflowY: "auto",
+          overflowX: "hidden",
+          marginRight: -5,
+          paddingRight: 5,
+          scrollbarWidth: "thin",
+          scrollbarColor: `${theme.scrollbar} transparent`,
+        }}
+      >
         <PatternPanel />
         <DimensionsPanel />
         <VariationPanel />

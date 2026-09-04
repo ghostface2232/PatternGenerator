@@ -23,17 +23,20 @@ export function deriveGeometry(doc) {
   const patternType = layout.type;
   const hasCustomSize = CUSTOM_SIZE_SHAPES.includes(hole.shape);
   const effW = hasCustomSize ? hole.w : hole.diameter;
-  const effH = hole.shape === "Triangle" && hole.triEquilateral
-    ? hole.w * Math.sqrt(3) / 2
-    : hasCustomSize ? hole.h : hole.diameter;
+  const effH =
+    hole.shape === "Triangle" && hole.triEquilateral
+      ? (hole.w * Math.sqrt(3)) / 2
+      : hasCustomSize
+        ? hole.h
+        : hole.diameter;
 
   const pitchX = effW + layout.edgeGapX;
   const pitchY = effH + layout.edgeGapY;
   // Hexagon honeycomb (pointy-top, 60° staggered): the edge gap is a uniform ligament, so the
   // centre spacing is 2·apothem + gap (= effW·√3/2 + gap), not effW + gap.
   const isHexHoneycomb = hole.shape === "Hexagon" && patternType === "Staggered 60°";
-  const honeyPitchX = isHexHoneycomb ? effW * Math.sqrt(3) / 2 + layout.edgeGapX : pitchX;
-  const honeyPitchY = isHexHoneycomb ? honeyPitchX * Math.sqrt(3) / 2 : pitchY;
+  const honeyPitchX = isHexHoneycomb ? (effW * Math.sqrt(3)) / 2 + layout.edgeGapX : pitchX;
+  const honeyPitchY = isHexHoneycomb ? (honeyPitchX * Math.sqrt(3)) / 2 : pitchY;
   // Triangle always fills via its alternating ▲▽ tiling (except Radial);
   // Diamond interlocks into a rhombus lattice under the staggered mode.
   const isRadial = patternType === "Radial";
@@ -48,12 +51,10 @@ export function deriveGeometry(doc) {
   const radial = layout.radial;
   const radialExtents = getRadialShapeExtents(hole.shape, effW, effH, hole.diamondOrient);
   const radialOuterRadius = getRadialShapeOuterRadius(hole.shape, effW, effH);
-  const ringSpacing = radial.layout === "Concentric"
-    ? hole.diameter + radial.edgeGap
-    : radialExtents.radial + radial.edgeGap;
-  const circumSpacing = radial.layout === "Concentric"
-    ? hole.diameter + radial.circumGap
-    : radialExtents.tangential + radial.circumGap;
+  const ringSpacing =
+    radial.layout === "Concentric" ? hole.diameter + radial.edgeGap : radialExtents.radial + radial.edgeGap;
+  const circumSpacing =
+    radial.layout === "Concentric" ? hole.diameter + radial.circumGap : radialExtents.tangential + radial.circumGap;
   const sunflowerGap = Math.max(radial.edgeGap, radial.circumGap);
   const sunflowerSpacing = radialOuterRadius * 2 + sunflowerGap;
 
@@ -75,25 +76,49 @@ export function deriveGeometry(doc) {
   const effPitchY = isHexHoneycomb
     ? honeyPitchY
     : patternType === "Staggered 60°"
-      ? Math.max(pitchX * Math.sqrt(3) / 2, sMinPY)
+      ? Math.max((pitchX * Math.sqrt(3)) / 2, sMinPY)
       : patternType === "Staggered 45°"
         ? Math.max(pitchX, sMinPY)
         : pitchY;
   // Spacing readouts for the uniform-ligament modes (hex / triangle / diamond)
   const uniformColPitch = isTriTiling ? (effW * triCellK) / 2 : isDiamondLattice ? effW * diaCellK : effPitchX;
   const uniformRowPitch = isTriTiling ? effH * triCellK : isDiamondLattice ? (effH * diaCellK) / 2 : effPitchY;
-  const polyCornerMax = (hole.shape === "Diamond" || hole.shape === "Triangle")
-    ? Math.max(0.1, Math.floor(maxCornerRadius(basePolyVerts(hole.shape, effW, effH)) * 10) / 10)
-    : 0;
+  const polyCornerMax =
+    hole.shape === "Diamond" || hole.shape === "Triangle"
+      ? Math.max(0.1, Math.floor(maxCornerRadius(basePolyVerts(hole.shape, effW, effH)) * 10) / 10)
+      : 0;
   const showGapY = patternType === "Straight" || patternType === "Custom Angle";
 
   return {
-    hasCustomSize, effW, effH, pitchX, pitchY,
-    isHexHoneycomb, honeyPitchX, honeyPitchY,
-    isRadial, isTriTiling, isDiamondLattice, uniformGapMode, triCellK, diaCellK,
-    ringSpacing, circumSpacing, sunflowerGap, sunflowerSpacing,
-    perfW, perfH, hasAnyMargin, taperActive, taperInset,
-    effPitchX, effPitchY, uniformColPitch, uniformRowPitch, polyCornerMax, showGapY,
+    hasCustomSize,
+    effW,
+    effH,
+    pitchX,
+    pitchY,
+    isHexHoneycomb,
+    honeyPitchX,
+    honeyPitchY,
+    isRadial,
+    isTriTiling,
+    isDiamondLattice,
+    uniformGapMode,
+    triCellK,
+    diaCellK,
+    ringSpacing,
+    circumSpacing,
+    sunflowerGap,
+    sunflowerSpacing,
+    perfW,
+    perfH,
+    hasAnyMargin,
+    taperActive,
+    taperInset,
+    effPitchX,
+    effPitchY,
+    uniformColPitch,
+    uniformRowPitch,
+    polyCornerMax,
+    showGapY,
   };
 }
 
@@ -101,16 +126,33 @@ export function buildParams(doc, g) {
   const { hole, layout, sheet, boundary, taper } = doc;
   const { margins } = boundary;
   return {
-    diameter: hole.diameter, holeShape: hole.shape, holeW: g.effW, holeH: g.effH, holeRadius: hole.cornerRadius,
-    diamondOrient: hole.diamondOrient, patternType: layout.type, pitchX: g.pitchX, pitchY: g.pitchY,
-    sheetW: sheet.w, sheetH: sheet.h,
-    marginTop: margins.top, marginBottom: margins.bottom, marginLeft: margins.left, marginRight: margins.right,
+    diameter: hole.diameter,
+    holeShape: hole.shape,
+    holeW: g.effW,
+    holeH: g.effH,
+    holeRadius: hole.cornerRadius,
+    diamondOrient: hole.diamondOrient,
+    patternType: layout.type,
+    pitchX: g.pitchX,
+    pitchY: g.pitchY,
+    sheetW: sheet.w,
+    sheetH: sheet.h,
+    marginTop: margins.top,
+    marginBottom: margins.bottom,
+    marginLeft: margins.left,
+    marginRight: margins.right,
     cornerRadius: boundary.cornerRadius,
     customAngle: layout.customAngle,
-    radialEdgeGap: layout.radial.edgeGap, circumEdgeGap: layout.radial.circumGap,
-    ringSpacing: g.ringSpacing, circumSpacing: g.circumSpacing,
-    radialMode: layout.radial.mode, radialLayout: layout.radial.layout, centerHole: layout.radial.centerHole,
-    thickness: taper.enabled ? taper.thickness : 0, taperAngle: taper.enabled ? taper.angle : 0, taperDirection: taper.direction,
+    radialEdgeGap: layout.radial.edgeGap,
+    circumEdgeGap: layout.radial.circumGap,
+    ringSpacing: g.ringSpacing,
+    circumSpacing: g.circumSpacing,
+    radialMode: layout.radial.mode,
+    radialLayout: layout.radial.layout,
+    centerHole: layout.radial.centerHole,
+    thickness: taper.enabled ? taper.thickness : 0,
+    taperAngle: taper.enabled ? taper.angle : 0,
+    taperDirection: taper.direction,
   };
 }
 
@@ -136,9 +178,14 @@ export function decorateHoles(baseHoles, doc, g) {
       id: base.id || `hole-${index}`,
       culled,
       fieldValue: variation.enabled ? evaluateVariationField(nx, ny, variation, index + 1) : 1,
-      scale, w, h, holeRadius: scaledRadius,
+      scale,
+      w,
+      h,
+      holeRadius: scaledRadius,
       area: calcHoleArea(hole.shape, w, h, scaledRadius),
-      exitW, exitH, exitHoleRadius,
+      exitW,
+      exitH,
+      exitHoleRadius,
       exitArea: exitW > 0 && exitH > 0 ? calcHoleArea(hole.shape, exitW, exitH, exitHoleRadius) : 0,
       isClosed: taperActive && (exitW <= 0 || exitH <= 0),
     };
@@ -160,10 +207,13 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   const grossArea = sheet.w * sheet.h;
   const perforatedArea = perfBoundsArea(perfBounds);
 
-  const visible = activeHoles.reduce((totals, h) => ({
-    nominal: totals.nominal + estimateVisibleHoleArea(h, shape, perfBounds, false),
-    exit: totals.exit + estimateVisibleHoleArea(h, shape, perfBounds, true),
-  }), { nominal: 0, exit: 0 });
+  const visible = activeHoles.reduce(
+    (totals, h) => ({
+      nominal: totals.nominal + estimateVisibleHoleArea(h, shape, perfBounds, false),
+      exit: totals.exit + estimateVisibleHoleArea(h, shape, perfBounds, true),
+    }),
+    { nominal: 0, exit: 0 }
+  );
   const totalHoleArea = visible.nominal;
   const totalExitHoleArea = visible.exit;
   const singleHoleArea = activeHoleCount > 0 ? totalHoleArea / activeHoleCount : 0;
@@ -175,9 +225,11 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   const theoreticalHoleArea = calcHoleArea(shape, effW, effH, hole.cornerRadius);
   // Triangle tiling / diamond lattice: one hole per tiling cell (the hole
   // expanded by gap/2), so the unit cell is simply that cell's area.
-  const uniformCellArea = g.isTriTiling ? (effW * effH / 2) * g.triCellK * g.triCellK
-    : g.isDiamondLattice ? (effW * effH / 2) * g.diaCellK * g.diaCellK
-    : null;
+  const uniformCellArea = g.isTriTiling
+    ? ((effW * effH) / 2) * g.triCellK * g.triCellK
+    : g.isDiamondLattice
+      ? ((effW * effH) / 2) * g.diaCellK * g.diaCellK
+      : null;
   const theoreticalOAR = uniformCellArea
     ? Math.min((theoreticalHoleArea / uniformCellArea) * 100, 100)
     : calcTheoreticalOAR(layout.type, g.honeyPitchX, g.honeyPitchY, theoreticalHoleArea);
@@ -193,8 +245,14 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   const maxExit = dExitValues.length ? Math.max(...dExitValues) : 0;
   const theoreticalExitW = taperActive ? Math.max(0, effW - taperInset) : effW;
   const theoreticalExitH = taperActive ? Math.max(0, effH - taperInset) : effH;
-  const theoreticalExitRadius = Math.max(0, Math.min(hole.cornerRadius - taperInset / 2, theoreticalExitW / 2, theoreticalExitH / 2));
-  const theoreticalExitArea = theoreticalExitW > 0 && theoreticalExitH > 0 ? calcHoleArea(shape, theoreticalExitW, theoreticalExitH, theoreticalExitRadius) : 0;
+  const theoreticalExitRadius = Math.max(
+    0,
+    Math.min(hole.cornerRadius - taperInset / 2, theoreticalExitW / 2, theoreticalExitH / 2)
+  );
+  const theoreticalExitArea =
+    theoreticalExitW > 0 && theoreticalExitH > 0
+      ? calcHoleArea(shape, theoreticalExitW, theoreticalExitH, theoreticalExitRadius)
+      : 0;
   const theoreticalEffOAR = uniformCellArea
     ? Math.min((theoreticalExitArea / uniformCellArea) * 100, 100)
     : calcTheoreticalOAR(layout.type, g.honeyPitchX, g.honeyPitchY, theoreticalExitArea);
@@ -208,11 +266,32 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   const perfMode = holeCount > PERF_MODE_HOLE_LIMIT;
 
   return {
-    perfBounds, activeHoleCount, holeCount, culledHoleCount, hasRemovedHoles,
-    grossArea, perforatedArea, totalHoleArea, totalExitHoleArea, singleHoleArea,
-    useCountedOAR, theoreticalOAR, countedOAR, nominalOAR, effectiveOAR, oarDelta, displayOAR,
-    closedHoleCount, holeClosed, hasClosedHoles, dExit, minExit, maxExit,
-    minLigament, perfMode, hasOverlap: overlaps.size > 0,
+    perfBounds,
+    activeHoleCount,
+    holeCount,
+    culledHoleCount,
+    hasRemovedHoles,
+    grossArea,
+    perforatedArea,
+    totalHoleArea,
+    totalExitHoleArea,
+    singleHoleArea,
+    useCountedOAR,
+    theoreticalOAR,
+    countedOAR,
+    nominalOAR,
+    effectiveOAR,
+    oarDelta,
+    displayOAR,
+    closedHoleCount,
+    holeClosed,
+    hasClosedHoles,
+    dExit,
+    minExit,
+    maxExit,
+    minLigament,
+    perfMode,
+    hasOverlap: overlaps.size > 0,
   };
 }
 

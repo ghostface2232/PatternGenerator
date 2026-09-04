@@ -23,8 +23,9 @@ export function createDocument() {
     },
     hole: {
       shape: "Circle",
-      diameter: 5,          // Circle & Hexagon (corner-to-corner)
-      w: 5, h: 5,           // Rectangle, Pill, Diamond, Triangle (mm)
+      diameter: 5, // Circle & Hexagon (corner-to-corner)
+      w: 5,
+      h: 5, // Rectangle, Pill, Diamond, Triangle (mm)
       cornerRadius: 0,
       diamondOrient: "Point up",
       triEquilateral: true, // Triangle: lock H = W·√3/2
@@ -39,8 +40,8 @@ export function createDocument() {
         edgeGap: 5,
         circumGap: 5,
         linked: true,
-        mode: "Full",          // "Full" | "Circle"
-        layout: "Concentric",  // "Concentric" | "Sunflower" | "6k Rosette"
+        mode: "Full", // "Full" | "Circle"
+        layout: "Concentric", // "Concentric" | "Sunflower" | "6k Rosette"
         centerHole: false,
       },
     },
@@ -48,7 +49,7 @@ export function createDocument() {
     variation: cloneVariation(DEFAULT_VARIATION),
     taper: { enabled: false, thickness: 0, angle: 0, direction: "Top larger" },
     appearance: { holeColor: "#141418", bgColor: "#c8c8cd" },
-    removedHoles: [],       // indices into the generated hole list
+    removedHoles: [], // indices into the generated hole list
   };
 }
 

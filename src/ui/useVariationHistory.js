@@ -15,7 +15,9 @@ export function useVariationHistory(variation, setVariation) {
   // Stack sizes mirrored into state so canUndo/canRedo re-render correctly.
   const [depth, setDepth] = useState({ past: 0, future: 0 });
 
-  useEffect(() => { ref.current = variation; }, [variation]);
+  useEffect(() => {
+    ref.current = variation;
+  }, [variation]);
 
   const syncDepth = useCallback(() => setDepth({ past: past.current.length, future: future.current.length }), []);
 
@@ -24,29 +26,38 @@ export function useVariationHistory(variation, setVariation) {
     return typeof nextOrUpdater === "function" ? nextOrUpdater(cloneVariation(current)) : nextOrUpdater;
   }, []);
 
-  const commit = useCallback(nextOrUpdater => {
-    const current = ref.current;
-    const next = resolve(nextOrUpdater);
-    if (JSON.stringify(current) === JSON.stringify(next)) return;
-    past.current = [...past.current.slice(-(HISTORY_LIMIT - 1)), cloneVariation(current)];
-    future.current = [];
-    ref.current = next;
-    setVariation(next);
-    syncDepth();
-  }, [resolve, setVariation, syncDepth]);
+  const commit = useCallback(
+    nextOrUpdater => {
+      const current = ref.current;
+      const next = resolve(nextOrUpdater);
+      if (JSON.stringify(current) === JSON.stringify(next)) return;
+      past.current = [...past.current.slice(-(HISTORY_LIMIT - 1)), cloneVariation(current)];
+      future.current = [];
+      ref.current = next;
+      setVariation(next);
+      syncDepth();
+    },
+    [resolve, setVariation, syncDepth]
+  );
 
-  const live = useCallback(nextOrUpdater => {
-    const next = resolve(nextOrUpdater);
-    ref.current = next;
-    setVariation(next);
-  }, [resolve, setVariation]);
+  const live = useCallback(
+    nextOrUpdater => {
+      const next = resolve(nextOrUpdater);
+      ref.current = next;
+      setVariation(next);
+    },
+    [resolve, setVariation]
+  );
 
-  const recordDragFrom = useCallback(startSnapshot => {
-    if (JSON.stringify(startSnapshot) === JSON.stringify(ref.current)) return;
-    past.current = [...past.current.slice(-(HISTORY_LIMIT - 1)), startSnapshot];
-    future.current = [];
-    syncDepth();
-  }, [syncDepth]);
+  const recordDragFrom = useCallback(
+    startSnapshot => {
+      if (JSON.stringify(startSnapshot) === JSON.stringify(ref.current)) return;
+      past.current = [...past.current.slice(-(HISTORY_LIMIT - 1)), startSnapshot];
+      future.current = [];
+      syncDepth();
+    },
+    [syncDepth]
+  );
 
   const undo = useCallback(() => {
     const previous = past.current.pop();

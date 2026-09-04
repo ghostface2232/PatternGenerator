@@ -2,7 +2,12 @@ import { Select } from "./Select.jsx";
 import { MONO } from "../theme.js";
 
 export const smallLabelStyle = theme => ({
-  fontSize: 8, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: theme.textSecondary, fontFamily: MONO,
+  fontSize: 8,
+  fontWeight: 600,
+  textTransform: "uppercase",
+  letterSpacing: 1,
+  color: theme.textSecondary,
+  fontFamily: MONO,
 });
 
 // Labelled Select. `options` may be plain strings or { value, label } objects.
