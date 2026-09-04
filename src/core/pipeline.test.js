@@ -198,9 +198,10 @@ test("every edit that changes hole placement changes the signature", () => {
     { "appearance.bgColor": "#123456" },
     // Sub-step edits. Every other edit here is coarse, so a signature that
     // rounded its numbers — to 2dp, say — would pass the whole sweep while
-    // silently keeping removals across a real move. The sliders step by 0.1 but
-    // their numeric fields commit raw parseFloat, and a share link or an
-    // autosave carries whatever it was given, so this resolution is reachable.
+    // silently keeping removals across a real move. The sliders step by 0.1 to
+    // 1, but their numeric fields commit raw parseFloat and nothing downstream
+    // rounds: validateDocument clamps to a range and no more, so a share link
+    // round-trips whatever it was given, to the last bit.
     { "hole.diameter": 5.001 },
     { "sheet.w": 200.001 },
     { "layout.edgeGapX": 3.001 },
@@ -227,6 +228,19 @@ test("every edit that changes hole placement changes the signature", () => {
     }
   }
   assert.ok(moved > 100, `expected the sweep to move holes often, got ${moved}`);
+
+  // Asserted again outside the loop, because the loop cannot protect it: an
+  // edit whose placement stops moving is silently skipped, and the floor above
+  // has enough slack to absorb all four sub-step edits going inert at once.
+  // The last value is the next representable double after 200 — it survives a
+  // share-link round trip exactly, so no rounding at any number of decimals is
+  // a sound signature, and this is the assertion that says so.
+  const flat = doc({});
+  for (const value of [200.001, 200.0001, 200 * (1 + Number.EPSILON)]) {
+    const fine = doc({ "sheet.w": value });
+    assert.notEqual(positions(fine), positions(flat), `sheet.w ${value} must move a hole`);
+    assert.notEqual(patternSignature(fine), patternSignature(flat), `sheet.w ${value} must change the signature`);
+  }
 });
 
 test("triEquilateral only changes the signature when it changes the height", () => {
