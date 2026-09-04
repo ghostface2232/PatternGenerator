@@ -117,19 +117,13 @@ function validateRemovedHoles(raw) {
   return [...seen];
 }
 
-// Rebuild a complete, in-range document from arbitrary parsed JSON. Total by
-// construction: anything it cannot make sense of becomes the default document
-// rather than an exception thrown from inside a render.
+// Rebuild a complete, in-range document from arbitrary parsed JSON. Every shape
+// JSON.parse can produce is handled without throwing; exotic host objects
+// (throwing getters, proxies) are not, deliberately. Every caller already turns
+// a throw into something useful — "Could not open X", or falling back to the
+// autosaved document — and swallowing it here would replace the user's document
+// with a blank one and say nothing.
 export function validateDocument(raw) {
-  try {
-    return buildValidDocument(raw);
-  } catch (err) {
-    console.warn("Unreadable document, falling back to the defaults:", err);
-    return createDocument();
-  }
-}
-
-function buildValidDocument(raw) {
   const d = createDocument();
   const r = obj(raw);
   const margins = obj(obj(r.boundary).margins);

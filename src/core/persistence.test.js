@@ -183,15 +183,7 @@ test("validation drops unknown keys", () => {
   assert.equal(doc.hole.shape, "Pill");
 });
 
-test("validation is total: an input it cannot read becomes the default document", () => {
-  const hostile = {
-    get hole() {
-      throw new Error("boom");
-    },
-  };
-  const doc = validateDocument(hostile);
-  assert.equal(doc.hole.shape, createDocument().hole.shape);
-  assert.equal(doc.sheet.w, createDocument().sheet.w);
+test("no shape JSON can produce makes validation throw", () => {
   const inputs = [
     ["null", null],
     ["undefined", undefined],
@@ -201,9 +193,27 @@ test("validation is total: an input it cannot read becomes the default document"
     ["null-prototype object", Object.create(null)],
     ["array where an object belongs", { hole: [] }],
     ["deeply nested junk", JSON.parse("[".repeat(200) + "]".repeat(200))],
+    ["every branch replaced by an array", { sheet: [], hole: [], layout: [], boundary: [], variation: [], taper: [] }],
+    ["every branch replaced by a string", { sheet: "x", hole: "x", layout: "x", boundary: "x", variation: "x" }],
   ];
   for (const [label, input] of inputs) {
     assert.doesNotThrow(() => validateDocument(input), label);
-    assert.equal(validateDocument(input).schemaVersion, createDocument().schemaVersion, label);
+    const doc = validateDocument(input);
+    assert.equal(doc.schemaVersion, createDocument().schemaVersion, label);
+    assert.doesNotThrow(() => computePattern(doc), `${label} → pipeline`);
   }
+});
+
+// A document the validator cannot read is reported, not silently swapped for a
+// blank one: openFile alerts, openRecent alerts, a share link falls back to the
+// autosaved document, and loadCurrent degrades to a fresh document.
+test("an unreadable document surfaces as an error rather than a silent default", () => {
+  const hostile = {
+    sheet: {},
+    get hole() {
+      throw new Error("boom");
+    },
+  };
+  assert.throws(() => validateDocument(hostile), /boom/);
+  assert.throws(() => deserializeDocument(JSON.stringify({ sheet: 1 })), /not a Perf Pattern/);
 });

@@ -303,3 +303,30 @@ test("a partly closed pattern reports the open holes' extremes, not the closed o
   );
   assert.equal(stats.dExit, open.reduce((s, v) => s + v, 0) / open.length);
 });
+
+test("culled holes are not counted as removed ones", () => {
+  // The `- culledHoleCount` term: without it a document with culling and no
+  // removals at all would report every culled hole as removed by hand.
+  const culling = {
+    "variation.enabled": true,
+    "variation.minScale": 0.2,
+    "variation.maxScale": 1,
+    "variation.cullBelow": 1.5,
+  };
+  const culledOnly = computePattern(doc(culling));
+  assert.ok(culledOnly.stats.culledHoleCount > 0, "expected the size floor to cull something");
+  assert.equal(culledOnly.stats.removedHoleCount, 0);
+  assert.equal(culledOnly.stats.hasRemovedHoles, false);
+
+  const withRemoval = computePattern(doc({ ...culling, removedHoles: [51] }));
+  assert.equal(withRemoval.stats.removedHoleCount, 1);
+  assert.equal(withRemoval.stats.activeHoleCount, culledOnly.stats.activeHoleCount - 1);
+
+  // A hole that is both removed and culled counts once, as a removal.
+  const culledIndex = culledOnly.holes.findIndex(h => h.culled);
+  assert.ok(culledIndex >= 0);
+  const both = computePattern(doc({ ...culling, removedHoles: [culledIndex] }));
+  assert.equal(both.stats.removedHoleCount, 1);
+  assert.equal(both.stats.culledHoleCount, culledOnly.stats.culledHoleCount - 1);
+  assert.equal(both.stats.activeHoleCount, culledOnly.stats.activeHoleCount);
+});

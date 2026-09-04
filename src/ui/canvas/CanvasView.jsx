@@ -346,7 +346,7 @@ export function CanvasView() {
             )}
             {holeRemovalMode && (
               <Badge color={dark ? "#7c3aed" : "#6d28d9"}>
-                HOLE REMOVAL MODE{removedSet.size > 0 ? ` (${removedSet.size} removed)` : ""}
+                HOLE REMOVAL MODE{stats.removedHoleCount > 0 ? ` (${stats.removedHoleCount} removed)` : ""}
               </Badge>
             )}
             {variation.enabled && variationEditMode && (

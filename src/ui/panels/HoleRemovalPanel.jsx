@@ -4,7 +4,7 @@ import { MONO } from "../theme.js";
 import { Section } from "./Section.jsx";
 
 export function HoleRemovalPanel() {
-  const { theme, ui, stats, actions } = useEditor();
+  const { theme, ui, doc, stats, actions } = useEditor();
   const { dark } = theme;
   const row = (label, value, color, bg) => (
     <div
@@ -33,9 +33,16 @@ export function HoleRemovalPanel() {
             Click holes on the canvas to remove/restore them. OAR recalculates automatically.
           </div>
         )}
-        {stats.removedHoleCount > 0 && (
+        {doc.removedHoles.length > 0 && (
           <>
             {row("Removed", `${stats.removedHoleCount} holes`, theme.warn, theme.warnBg)}
+            {stats.removedHoleCount < doc.removedHoles.length &&
+              row(
+                "From another pattern",
+                `${doc.removedHoles.length - stats.removedHoleCount} holes`,
+                theme.textSecondary,
+                "transparent"
+              )}
             {row("Active", `${stats.activeHoleCount} holes`, theme.accent, theme.accentBgSoft)}
             <button
               onClick={actions.clearRemovedHoles}

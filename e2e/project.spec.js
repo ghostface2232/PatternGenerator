@@ -243,6 +243,28 @@ test("reshaping a hole keeps removals: corner radius and taper never move one", 
   await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeVisible();
 });
 
+test("removals from another pattern read consistently and can still be cleared", async ({ browser }) => {
+  // A document whose removals index a pattern it no longer describes: nothing is
+  // actually removed, and the badge, the panel and the count must all say so —
+  // while the way to clear the leftovers stays reachable.
+  const stale = {
+    schemaVersion: 1,
+    name: "Stale",
+    sheet: { w: 200, h: 200 },
+    hole: { shape: "Circle" },
+    removedHoles: [900001, 900002, 900003],
+  };
+  const { context, page } = await coldStart(browser, "/", stale);
+  await expect(stat(page, "stat-holes")).toHaveText("739");
+  await page.getByRole("switch", { name: "Click to Remove" }).click();
+  await expect(page.getByText("HOLE REMOVAL MODE", { exact: false })).toHaveText("HOLE REMOVAL MODE");
+  await expect(page.getByText("From another pattern")).toBeVisible();
+  await page.getByRole("button", { name: "Restore All Holes" }).click();
+  await expect(page.getByText("From another pattern")).toBeHidden();
+  await expect(stat(page, "stat-holes")).toHaveText("739");
+  await context.close();
+});
+
 test("a dropped file never navigates the tab away, and a document file opens", async ({ page }) => {
   let dismissed = null;
   page.on("dialog", d => {
