@@ -363,18 +363,33 @@ test("null, undefined and NaN encode differently in the signature", () => {
   assert.equal(new Set(signatures).size, 3, "null, undefined and NaN must encode differently");
   assert.notEqual(generateHoles(buildParams(withNull, deriveGeometry(withNull))).length, 0);
   assert.equal(generateHoles(buildParams(withUndefined, deriveGeometry(withUndefined))).length, 0);
+
+  // Same hazard one step out, and the reason the value goes through String()
+  // rather than JSON.stringify: JSON writes NaN and Infinity both as null,
+  // wherever they sit. They place differently — 739 holes against 571.
+  const nan = patchIn(base, { "boundary.cornerRadius": NaN });
+  const inf = patchIn(base, { "boundary.cornerRadius": Infinity });
+  assert.notEqual(
+    generateHoles(buildParams(nan, deriveGeometry(nan))).length,
+    generateHoles(buildParams(inf, deriveGeometry(inf))).length
+  );
+  assert.notEqual(patternSignature(nan), patternSignature(inf), "NaN and Infinity must encode differently");
 });
 
 test("the type tag, field position and quoting each carry their weight", () => {
-  // Three ways an encoding of the same values could collapse two documents into
-  // one signature. Each is paired with the placement it would wrongly preserve
-  // removals across, so none of them can be satisfied by encoding alone.
-  // None of the three inputs survives validateDocument — it coerces the numeric
-  // string and enum-picks the two radial fields — so these are properties the
-  // encoding should hold on its own, not hazards reachable from the app today.
+  // Ways an encoding of the same values could collapse two documents into one
+  // signature. Each is paired with the placement it would wrongly preserve
+  // removals across, so none can be satisfied by encoding alone.
+  // Only the sheet swap is reachable from the app — two slider drags. The other
+  // three are stopped by validateDocument, which coerces the numeric string and
+  // enum-picks the radial fields; they are properties the encoding should hold
+  // on its own rather than hazards standing open today.
   const base = createDocument();
-  // Hashed, not compared whole: a mismatch otherwise prints both hole lists.
-  const place = d => createHash("sha1").update(JSON.stringify(generateHoles(buildParams(d, deriveGeometry(d))))).digest("hex"); // prettier-ignore
+  // Hashed, not compared whole: a mismatch otherwise prints two 30 KB hole lists.
+  const place = d =>
+    createHash("sha1")
+      .update(JSON.stringify(generateHoles(buildParams(d, deriveGeometry(d)))))
+      .digest("hex");
   const differ = (a, b, what) => {
     assert.notEqual(place(a), place(b), `${what}: placement must differ for this to be worth signing`);
     assert.notEqual(patternSignature(a), patternSignature(b), what);
@@ -390,18 +405,25 @@ test("the type tag, field position and quoting each carry their weight", () => {
   );
 
   // Field position. An encoding that sorted or pooled the fields would sign a
-  // portrait sheet and a landscape one alike.
+  // portrait sheet and a landscape one alike. Both swaps are needed: these two
+  // are numbers, so pooling only the string fields would slip past them.
+  const radial = patchIn(base, { "layout.type": "Radial" });
   differ(
     patchIn(base, { "sheet.w": 200, "sheet.h": 300 }),
     patchIn(base, { "sheet.w": 300, "sheet.h": 200 }),
-    "two fields must not be interchangeable"
+    "two numeric fields must not be interchangeable"
+  );
+  differ(
+    patchIn(radial, { "layout.radial.mode": "Full", "layout.radial.layout": "Concentric" }),
+    patchIn(radial, { "layout.radial.mode": "Concentric", "layout.radial.layout": "Full" }),
+    "two string fields must not be interchangeable"
   );
 
   // Quoting. Joining type-tagged fields on a separator let a string param carry
-  // that separator and shift the fields around it. Radial, or the two fields
-  // below never reach the placement arithmetic and there is nothing to preserve.
+  // that separator and shift the fields around it. Radial again: otherwise the
+  // two fields below never reach the placement arithmetic and both documents
+  // generate the same 739 holes, leaving nothing for a signature to preserve.
   const NUL = String.fromCharCode(0);
-  const radial = patchIn(base, { "layout.type": "Radial" });
   differ(
     patchIn(radial, { "layout.radial.mode": "Full", "layout.radial.layout": `Concentric${NUL}string:Sunflower` }),
     patchIn(radial, { "layout.radial.mode": `Full${NUL}string:Concentric`, "layout.radial.layout": "Sunflower" }),
