@@ -1,7 +1,12 @@
 // Colour and typography tokens for the two themes. Components take a `theme`
 // object (from useTheme / getTheme) rather than branching on `dark` themselves.
 
-export const MONO = "'JetBrains Mono', monospace";
+// The fallback in the middle is the local monospace wearing JetBrains Mono's
+// vertical metrics (see the @font-face in GlobalStyles). Without it the sidebar
+// jumps 10 px the moment the web font lands — under the user's cursor, on a
+// 4 px slider track. The bare generic stays last for a browser too old for
+// metric overrides, which then simply behaves as it did before.
+export const MONO = "'JetBrains Mono', 'JetBrains Mono Metrics', monospace";
 
 const DARK = {
   dark: true,

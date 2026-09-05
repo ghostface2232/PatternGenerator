@@ -13,16 +13,16 @@ async function setSlider(page, label, value) {
 const stat = (page, id) => page.getByTestId(id);
 
 // One press-release gesture on a slider track, a fraction of the way along it.
-// The press must be aimed by whatever the layout is at the moment it lands, not
-// by a box captured before an earlier step. The interface is laid out in a web
-// font fetched at run time, and the reflow when it arrives drops the Hole
-// Diameter track 10 px, while the control forgives about 6 px of vertical error
-// (the 12 px thumb overhanging a 4 px track). So a stale y lands on empty panel
-// and the gesture is lost in silence. Hence the locator: it re-measures, waits
+// The press is aimed by whatever the layout is at the moment it lands, never by
+// a box captured before an earlier step: this control forgives about 6 px of
+// vertical error (a 12 px thumb overhanging a 4 px track), so a stale y lands on
+// empty panel and the gesture is lost in silence rather than failing. That is
+// how this file's two-gesture test failed in CI, when the web font landing
+// between two clicks dropped the whole panel 10 px. The metric-matched fallback
+// in ui/theme.js has since taken that reflow out of the app — verified, the old
+// stale-coordinate form now survives a font swap mid-test — but the locator is
+// what makes the press independent of any reflow at all: it re-measures, waits
 // for the box to hold still, and checks the point really hits the control.
-// The fraction is still read from a box measured a round trip earlier, which is
-// sound only because the sidebar is a fixed 440 px and the reflow moves nothing
-// horizontally — measured, x and width identical either side of the swap.
 async function clickSliderAt(slider, fraction) {
   const { width, height } = await slider.boundingBox();
   await slider.click({ position: { x: width * fraction, y: height / 2 } });
