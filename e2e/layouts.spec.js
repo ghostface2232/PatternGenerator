@@ -41,11 +41,11 @@ test.beforeEach(async ({ page }) => {
   await expect(stat(page, "stat-holes")).toBeVisible();
 });
 
-for (const type of ["Cross-hatch", "Scatter", "Spiral", "Fibonacci", "Path", "Voronoi"]) {
+for (const type of ["Cross-hatch", "Scatter", "Spiral", "Fibonacci", "Path", "Voronoi", "Flow Lines"]) {
   test(`${type} draws a pattern and exports it`, async ({ page }) => {
     await choose(page, "Type", type);
     const count = await holes(page);
-    expect(count).toBeGreaterThan(type === "Path" ? 20 : 100);
+    expect(count).toBeGreaterThan(type === "Path" || type === "Flow Lines" ? 20 : 100);
     const oar = parseFloat(await stat(page, "stat-oar").textContent());
     // One curve's worth of holes covers a couple of percent of the sheet, where
     // an area fill covers tens.
@@ -61,7 +61,8 @@ for (const type of ["Cross-hatch", "Scatter", "Spiral", "Fibonacci", "Path", "Vo
     const svg = Buffer.concat(chunks).toString("utf8");
     expect(svg).toContain('width="200mm" height="200mm"');
     // Circles unless the mode gives every hole an outline of its own.
-    expect(svg.match(type === "Voronoi" ? /<path /g : /<circle /g)).toHaveLength(count);
+    const element = type === "Voronoi" || type === "Flow Lines" ? /<path /g : /<circle /g;
+    expect(svg.match(element)).toHaveLength(count);
   });
 }
 
@@ -371,4 +372,45 @@ test("voronoi and scatter share one seed, so switching modes keeps the arrangeme
   await page.getByTitle("Undo (Ctrl+Z)").click();
   await expect(page.getByLabel("Scatter Seed", { exact: true })).toHaveValue("1");
   expect(await holes(page)).toBe(points);
+});
+
+test("flow lines follow the direction they are given and keep the edge gap", async ({ page }) => {
+  await choose(page, "Type", "Flow Lines");
+  const across = await holes(page);
+  expect(across).toBeGreaterThan(10);
+  // The mode's claim: whatever the field does, the metal between two slots is
+  // the edge gap.
+  expect(await ligament(page)).toBeCloseTo(3, 5);
+  await setSlider(page, "Edge Gap", 6);
+  expect(await ligament(page)).toBeCloseTo(6, 5);
+  await setSlider(page, "Edge Gap", 3);
+
+  // Turning the flow re-lays every line. On an oblong panel that changes how
+  // many fit; on a square one both directions would fit the same number, which
+  // is a symmetry rather than an answer.
+  await setSlider(page, "Panel Height", 120);
+  const oblong = await holes(page);
+  await setSlider(page, "Flow Direction", 90);
+  const down = await holes(page);
+  expect(down).not.toBe(oblong);
+  // A half turn is the same lines walked the other way, so the pattern is the
+  // one it already was.
+  await setSlider(page, "Flow Direction", -90);
+  await expect.poll(() => holes(page)).toBe(down);
+
+  await expect(page.getByText(/cuts a slot along each streamline/)).toBeVisible();
+});
+
+test("Flow Lines is the mode where an image may not drive the angle channel", async ({ page }) => {
+  // The angle field IS the flow direction here, so a picture would decide where
+  // the metal goes — and a picture is not in the document. Everywhere else it
+  // only turns holes, so it is offered.
+  await enableFields(page);
+  await chooseChannel(page, "Angle");
+  const image = page.getByRole("button", { name: "Add image controller", exact: true });
+  await expect(image).toBeEnabled();
+  await choose(page, "Type", "Flow Lines");
+  await expect(page.getByRole("button", { name: "Add image controller", exact: true })).toHaveCount(0);
+  await chooseChannel(page, "Size");
+  await expect(page.getByRole("button", { name: "Add image controller", exact: true })).toBeEnabled();
 });

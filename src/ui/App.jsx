@@ -4,6 +4,7 @@ import { cloneVariation, createDocument, setIn } from "../core/document.js";
 import {
   buildParams,
   compileDocumentField,
+  fieldContext,
   compilePlacement,
   computeStats,
   decorateHoles,
@@ -28,11 +29,11 @@ import {
   serializeDocument,
   touchRecent,
 } from "../core/persistence.js";
-import { generateHoles } from "../layouts/index.js";
+import { generateHoles, layoutPlacementChannels } from "../layouts/index.js";
 import { addPathVertex, newPath, removePathVertex } from "../layouts/path-gizmo.js";
 import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
-import { EDITABLE_CHANNELS, IMAGE_CHANNELS, MAX_CONTROLLERS, createController } from "../fields/controllers.js";
+import { EDITABLE_CHANNELS, MAX_CONTROLLERS, createController, imageChannels } from "../fields/controllers.js";
 import { readImageFile, splitImageMaps, useImageMaps } from "./useImageMaps.js";
 import { generateSVGParts } from "../export/svg.js";
 import { renderPNGBlob } from "../export/png.js";
@@ -178,7 +179,10 @@ export default function App() {
     () => splitImageMaps(decodedImages, doc.assets),
     [decodedImages, doc.assets]
   );
-  const field = useMemo(() => compileDocumentField(fields, { imageMaps }), [fields, imageMaps]);
+  const field = useMemo(
+    () => compileDocumentField(fields, fieldContext(layout.type, imageMaps)),
+    [fields, imageMaps, layout.type]
+  );
   const holeDoc = useMemo(() => ({ ...patternDoc, variation, fields }), [patternDoc, variation, fields]);
   const holes = useMemo(
     () => decorateHoles(baseHoles, holeDoc, geometry, field),
@@ -534,7 +538,8 @@ export default function App() {
       // is inert by construction. The rail and the panel disable the button for
       // the same reason; this covers the file dropped on the page, which does not
       // go through either.
-      const channel = kind === "image" && !IMAGE_CHANNELS.includes(activeChannel) ? IMAGE_CHANNELS[0] : activeChannel;
+      const allowed = imageChannels(layoutPlacementChannels(doc.layout.type));
+      const channel = kind === "image" && !allowed.includes(activeChannel) ? allowed[0] : activeChannel;
       const controller = createController({ channel, kind, area: perfArea, existing: current.controllers });
       if (geometry) controller.geometry = geometry;
       if (channel !== activeChannel) setActiveChannel(channel);

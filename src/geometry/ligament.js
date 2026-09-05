@@ -2,7 +2,41 @@
 // two holes). Both use a coarse spatial hash so only nearby holes are compared.
 import { PERF_MODE_HOLE_LIMIT } from "../core/constants.js";
 import { forEachNeighbourPair } from "./spatial-hash.js";
-import { calcShapeGap, checkShapeOverlap, holeVertices } from "./shapes.js";
+import { calcShapeGap, checkShapeOverlap, getShape, holeOutline, holeVertices } from "./shapes.js";
+import { segmentClearance } from "./stroke.js";
+
+// A hole that is a curve rather than a blob — a Flow Lines slot — breaks the
+// assumption both searches below rest on: that a hole's bounding box locates it.
+// A slot's box can be the whole panel, so every pair looks like a neighbour and
+// none of them can be rejected by a bounding circle.
+//
+// The fix is to search the SEGMENTS instead. Each is short (the integration step)
+// and local, so one grid over them finds the same neighbours the point search
+// finds for ordinary holes, at the same cost — and the clearance between two
+// slots is by definition the clearance between their closest pair of segments.
+// Pairs from the same slot are skipped: a line is not its own ligament.
+function forEachSegmentPair(holes, shape, nominalSpacing, visit) {
+  const segmentsOf = getShape(shape).segments;
+  if (!segmentsOf) return false;
+  const segments = [];
+  let longest = 0,
+    widest = 0;
+  holes.forEach((hole, index) => {
+    for (const segment of segmentsOf(hole, holeOutline(hole))) {
+      longest = Math.max(longest, Math.hypot(segment.bx - segment.ax, segment.by - segment.ay));
+      widest = Math.max(widest, segment.r);
+      segments.push({ ...segment, hole: index, x: (segment.ax + segment.bx) / 2, y: (segment.ay + segment.by) / 2 });
+    }
+  });
+  if (segments.length < 2) return true;
+  // Midpoints are what the grid holds, so two segments whose ends nearly touch
+  // are up to one segment plus both widths plus the gap apart at their middles.
+  const cellSize = Math.max(0.001, longest + 2 * widest + Math.max(0, nominalSpacing));
+  forEachNeighbourPair(segments, cellSize, (i, j) => {
+    if (segments[i].hole !== segments[j].hole) visit(segments[i], segments[j]);
+  });
+  return true;
+}
 
 // A radius about each hole's own origin that contains the whole of it, so that
 // `distance − reachᵢ − reachⱼ` is a lower bound on the clearance between two
@@ -61,9 +95,16 @@ function neighbourDistanceFloor(holes) {
 }
 
 // Indices (into `holes`) of every hole that overlaps at least one neighbour.
-export function findOverlaps(holes, shape) {
+export function findOverlaps(holes, shape, nominalSpacing = 0) {
   const overlaps = new Set();
   if (holes.length > PERF_MODE_HOLE_LIMIT) return overlaps;
+  const segmented = forEachSegmentPair(holes, shape, nominalSpacing, (p, q) => {
+    if (segmentClearance(p, q) < -0.001) {
+      overlaps.add(p.hole);
+      overlaps.add(q.hole);
+    }
+  });
+  if (segmented) return overlaps;
   const gridSize = Math.max(0.001, ...holes.map(h => Math.max(h.w, h.h)));
   const reach = holeReaches(holes, shape);
   forEachNeighbourPair(holes, gridSize, (i, j) => {
@@ -83,6 +124,11 @@ export function findOverlaps(holes, shape) {
 export function calcMinLigament(holes, shape, nominalSpacing = 0) {
   if (holes.length < 2 || holes.length > PERF_MODE_HOLE_LIMIT) return null;
   let minGap = Infinity;
+  const segmented = forEachSegmentPair(holes, shape, nominalSpacing, (p, q) => {
+    const g = segmentClearance(p, q);
+    if (g < minGap) minGap = g;
+  });
+  if (segmented) return minGap === Infinity ? null : Math.max(0, minGap);
   const maxExtent = Math.max(0.001, ...holes.map(h => Math.max(h.w, h.h)));
   const gridSize = Math.max(maxExtent * 2, nominalSpacing * 1.5, neighbourDistanceFloor(holes) * 2);
   const reach = holeReaches(holes, shape);

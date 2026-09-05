@@ -5,9 +5,10 @@ import { Section, hintStyle } from "./Section.jsx";
 
 export function PatternPanel() {
   const { doc, api, theme, actions, geometry } = useEditor();
-  // Voronoi cuts each hole to its own cell, so the shape dropdown below is not
-  // driving anything while it is selected — and saying so is better than leaving
-  // someone to work out why changing it does nothing.
+  // Voronoi cuts each hole to its own cell and Flow Lines cuts a slot along each
+  // streamline, so in those two the shape dropdown below is not driving anything
+  // — and saying so is better than leaving someone to work out why changing it
+  // does nothing.
   const imposedShape = geometry.holeShape !== doc.hole.shape;
   const morph = geometry.holeShape === MORPH_SHAPE;
   const mix = doc.hole.shapeMix;
@@ -39,8 +40,9 @@ export function PatternPanel() {
       {imposedShape && (
         <div style={{ marginTop: 10 }}>
           <div style={hintStyle(theme)}>
-            {doc.layout.type} gives every hole its own cell outline, so the hole shape is not used. The hole size sets
-            how big a cell is, and the edge gap sets the metal left between two of them.
+            {doc.layout.type === "Voronoi"
+              ? "Voronoi gives every hole its own cell outline, so the hole shape is not used. The hole size sets how big a cell is, and the edge gap sets the metal left between two of them."
+              : "Flow Lines cuts a slot along each streamline, so the hole shape is not used. The hole size sets how wide a slot is, and the edge gap sets the metal left between two of them."}
           </div>
         </div>
       )}

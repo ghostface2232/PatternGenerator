@@ -60,6 +60,13 @@ const MIGRATIONS = {
   // so validateDocument fills it from createDocument()'s default — an empty list
   // of curves, which the layout only reads when Path is the mode.
   3: doc => ({ ...doc, schemaVersion: 4 }),
+  // 4 → 5: the Voronoi and Flow Lines layouts. Voronoi needed no new block — it
+  // sows its cell sites from `layout.scatter.seed`, which v4 already carries —
+  // and Flow Lines adds `layout.flow` for the direction its lines head in where
+  // no controller says otherwise. A v4 document can name neither mode, so
+  // validateDocument filling the block from the default reads its pattern back
+  // unchanged.
+  4: doc => ({ ...doc, schemaVersion: 5 }),
 };
 
 // ─── Validation ───────────────────────────────────────────────────────
@@ -360,6 +367,7 @@ export function validateDocument(raw) {
         smooth: bool(obj(layout.path).smooth, d.layout.path.smooth),
         alignToTangent: bool(obj(layout.path).alignToTangent, d.layout.path.alignToTangent),
       },
+      flow: { angle: num(obj(layout.flow).angle, d.layout.flow.angle, "layout.flow.angle") },
       radial: {
         edgeGap: num(radial.edgeGap, d.layout.radial.edgeGap, "layout.radial.gap"),
         circumGap: num(radial.circumGap, d.layout.radial.circumGap, "layout.radial.gap"),

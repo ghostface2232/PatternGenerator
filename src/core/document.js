@@ -3,7 +3,7 @@
 // Bump DOC_SCHEMA_VERSION and add a migration in persistence when the shape changes.
 import { DEFAULT_VARIATION } from "../fields/variation-engine.js";
 
-export const DOC_SCHEMA_VERSION = 4;
+export const DOC_SCHEMA_VERSION = 5;
 
 export const cloneVariation = variation => ({
   ...variation,
@@ -58,6 +58,10 @@ export function createDocument() {
       // area so the mode shows something the moment it is picked; the panel's
       // Add Path seeds an editable copy of that same curve.
       path: { paths: [], smooth: true, alignToTangent: true },
+      // Flow Lines: the direction the streamlines head in where no angle
+      // controller says otherwise. 0° runs them left to right, so the mode shows
+      // a pattern the moment it is picked rather than waiting for a field.
+      flow: { angle: 0 },
       radial: {
         edgeGap: 5,
         circumGap: 5,

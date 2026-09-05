@@ -2,6 +2,7 @@
 // gathers everything into a `scene` object and calls drawScene() in an effect.
 // Returns the view transform so pointer handlers can map client → sheet space.
 import { holeExitOutline, holeOutline, traceHolePath } from "../geometry/shapes.js";
+import { strokeMaxWidth } from "../geometry/stroke.js";
 import { tracePerfBoundary } from "../geometry/boundary.js";
 import { evaluateVariationField } from "../fields/variation-engine.js";
 import { computeGizmo } from "../fields/gizmo.js";
@@ -147,7 +148,12 @@ export function drawScene(canvas, scene) {
     ctx.fillStyle = holeColor;
     holes.forEach((h, i) => {
       if (removedSet.has(i) || h.culled) return;
-      ctx.fillRect(h.x - h.w * 0.35, h.y - h.h * 0.35, h.w * 0.7, h.h * 0.7);
+      // A hole that carries its own outline is not centred in its bounding box,
+      // so the cheap stand-in is a square about its own origin — a Voronoi
+      // cell's site is inside its cell, and its narrower dimension fits there.
+      const w = h.poly ? Math.min(h.w, h.h) : h.w;
+      const height = h.poly ? Math.min(h.w, h.h) : h.h;
+      ctx.fillRect(h.x - w * 0.35, h.y - height * 0.35, w * 0.7, height * 0.7);
     });
   } else {
     // `overlaps` indexes the active (non-removed, non-culled) list; map back to `holes`.
@@ -162,7 +168,10 @@ export function drawScene(canvas, scene) {
 
     holes.forEach((h, i) => {
       const isRemoved = removedSet.has(i);
-      const r = Math.max(h.w, h.h) / 2;
+      // How big to draw the marks placed AT a hole — the removed cross, the
+      // highlight. That is the hole's own extent, except for a slot, whose
+      // extent is the panel and whose width is what a mark should match.
+      const r = h.stroke ? Math.max(0.15, strokeMaxWidth(h.stroke) / 2) : Math.max(h.w, h.h) / 2;
       if (h.culled && !isRemoved) {
         // Culled by the size floor: gone from the real pattern. Show a faint ghost only while editing.
         if (variation.enabled && variationEditMode && showHud) {

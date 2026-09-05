@@ -10,12 +10,20 @@
 // w = horizontal extent, h = vertical extent, both in mm. Rotation is a per-hole
 // `angle` (radians) applied by the callers below, so shape code stays canonical.
 //
-// `n` is the per-hole OUTLINE parameter, and only two shapes read it: the
+// `n` is the per-hole OUTLINE parameter, and only three shapes read it: the
 // superellipse exponent, which the `shape` field channel morphs per hole
-// (fields/controllers.js), and the cell polygon, which the Voronoi layout hands
-// to each hole individually. Every other shape ignores the argument. Callers get
-// it from `holeOutline(hole)` rather than reaching for either field by name, and
-// `gap` reads it off the hole objects it is handed.
+// (fields/controllers.js); the cell polygon, which the Voronoi layout hands to
+// each hole individually; and the centreline plus widths of a Flow Lines slot.
+// Every other shape ignores the argument. Callers get it from `holeOutline(hole)`
+// rather than reaching for any of the three fields by name, and `gap` reads it
+// off the hole objects it is handed.
+//
+// Two entries carry an optional operation beyond the five, because for them the
+// generic answer is not merely slower but wrong:
+//
+//   verts(hole, w, h, n)          absolute outline, for a shape no w × h box bounds
+//   visibleArea(hole, n, inside)  area inside the boundary, for a shape whose
+//                                 bounding box is most of the panel
 import {
   basePolyVerts,
   convexPolyGap,
@@ -28,6 +36,7 @@ import {
   unitToward,
 } from "./polygon.js";
 import { hexEdgeReach, hexVertices } from "./hexagon.js";
+import { strokeArea, strokeContains, strokeGap, strokeOutline, strokeSegments, strokeVisibleArea } from "./stroke.js"; // prettier-ignore
 import { isInsideRoundedRect } from "./rounded-rect.js";
 import { superArea, superContains, superellipseGap, superellipseVerts } from "./superellipse.js";
 
@@ -397,10 +406,44 @@ const Superellipse = {
   rotates: true,
 };
 
-// `Polygon` is deliberately absent from HOLE_SHAPES in core/constants.js: it is
-// not a shape anyone picks, it is the shape a layout imposes. Voronoi is the
-// only mode that produces it, and `effectiveHoleShape` in core/pipeline.js is
-// the one place that decides so.
+// The last two are deliberately absent from HOLE_SHAPES in core/constants.js:
+// they are not shapes anyone picks, they are the shapes a layout imposes —
+// `Polygon` by Voronoi, `Stroke` by Flow Lines — and `effectiveHoleShape` in
+// core/pipeline.js is the one place that decides so.
+// ─── Stroke (a slot along a curve) ────────────────────────────────────
+// The Flow Lines layout's hole: a centreline and a half-width at every vertex
+// of it, so one slot can taper along its length. The two things it does not
+// share with every other entry here are in `segments` and `visibleArea`, and
+// both come from the same fact — a slot may run the width of the panel, so its
+// bounding box says nothing about where it is. See geometry/stroke.js.
+const Stroke = {
+  area(w, h, holeRadius, stroke) {
+    return strokeArea(stroke);
+  },
+  trace(ctx, cx, cy, w, h, holeRadius, stroke) {
+    const outline = strokeOutline(stroke);
+    if (!outline.length) return;
+    ctx.moveTo(cx + outline[0][0], cy + outline[0][1]);
+    for (let i = 1; i < outline.length; i++) ctx.lineTo(cx + outline[i][0], cy + outline[i][1]);
+    ctx.closePath();
+  },
+  svg(x, y, w, h, holeRadius, stroke) {
+    const outline = strokeOutline(stroke);
+    if (!outline.length) return `<path d=""`;
+    const d = outline.map(([vx, vy]) => `${f3(x + vx)} ${f3(y + vy)}`).join(" L ");
+    return `<path d="M ${d} Z"`;
+  },
+  contains(x, y, w, h, holeRadius, stroke) {
+    return strokeContains(x, y, stroke);
+  },
+  gap(h1, h2) {
+    return strokeGap(h1, h1.stroke, h2, h2.stroke);
+  },
+  segments: (hole, stroke) => strokeSegments(hole, stroke),
+  visibleArea: (hole, stroke, exactArea, inside) => strokeVisibleArea(hole, stroke, exactArea, inside),
+  rotates: false,
+};
+
 export const SHAPES = {
   Circle,
   Rectangle,
@@ -410,6 +453,7 @@ export const SHAPES = {
   Triangle: polyShape("Triangle"),
   Superellipse,
   Polygon,
+  Stroke,
 };
 
 export const getShape = name => SHAPES[name] || SHAPES.Circle;
@@ -417,8 +461,8 @@ export const getShape = name => SHAPES[name] || SHAPES.Circle;
 // The per-hole outline parameter, entry profile and exit profile. One accessor
 // each, so every drawing, hit-testing and export path hands the shape whatever
 // that shape reads without knowing which one it has.
-export const holeOutline = hole => hole.poly ?? hole.superN;
-export const holeExitOutline = hole => hole.exitPoly ?? hole.superN;
+export const holeOutline = hole => hole.poly ?? hole.stroke ?? hole.superN;
+export const holeExitOutline = hole => hole.exitPoly ?? hole.exitStroke ?? hole.superN;
 
 // Absolute outline vertices of a polygon-shaped hole, or null for the shapes
 // that are not polygons. Callers use it to bound a hole exactly rather than

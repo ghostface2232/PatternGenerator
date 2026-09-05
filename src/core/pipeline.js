@@ -12,11 +12,12 @@ import { CUSTOM_SIZE_SHAPES, DOC_LIMITS, MORPH_SHAPE, PERF_MODE_HOLE_LIMIT } fro
 import { clamp, DEG } from "./math.js";
 import { basePolyVerts, insetConvexPoly, maxCornerRadius, polyBBox, triInradius } from "../geometry/polygon.js";
 import { calcHoleArea, getShape } from "../geometry/shapes.js";
+import { strokeBBox, strokeMaxWidth } from "../geometry/stroke.js";
 import { superNFromMix } from "../geometry/superellipse.js";
 import { estimateVisibleHoleArea, perfBoundsArea, perfBoundsFromParams } from "../geometry/boundary.js";
 import { calcMinLigament, findOverlaps } from "../geometry/ligament.js";
 import { calcCellOAR } from "../geometry/oar.js";
-import { LAYOUTS, generateHoles, layoutFamily, layoutReadsSpacing, layoutSpacingModel, tilingFlags } from "../layouts/index.js"; // prettier-ignore
+import { LAYOUTS, generateHoles, layoutFamily, layoutPlacementChannels, layoutReadsSpacing, layoutSpacingModel, tilingFlags } from "../layouts/index.js"; // prettier-ignore
 import { gridLattice } from "../layouts/grid.js";
 import { MIN_CROSS_SIN } from "../layouts/crosshatch.js";
 import { getRadialShapeExtents, getRadialShapeOuterRadius } from "../layouts/radial-engine.js";
@@ -30,7 +31,8 @@ import { CHANNEL_INFO, compileControllers, compiledDrivesChannel, evaluateCompil
 // the generator, the statistics, the canvas, the exporters and the two panels
 // that grey out a channel the shape cannot show — a disagreement between any two
 // of those is a hole measured as one thing and drawn as another.
-export const effectiveHoleShape = doc => (doc.layout.type === "Voronoi" ? "Polygon" : doc.hole.shape);
+const IMPOSED_SHAPES = { Voronoi: "Polygon", "Flow Lines": "Stroke" };
+export const effectiveHoleShape = doc => IMPOSED_SHAPES[doc.layout.type] ?? doc.hole.shape;
 
 export function deriveGeometry(doc) {
   const { hole, layout, sheet, boundary, taper } = doc;
@@ -62,6 +64,7 @@ export function deriveGeometry(doc) {
   const usesFreeSpacing = layoutSpacingModel(patternType) === "free";
   const isCrosshatch = family === "crosshatch";
   const isPath = family === "path";
+  const isFlow = family === "flow";
   const honeyPitchX = isHexHoneycomb ? (effW * Math.sqrt(3)) / 2 + layout.edgeGapX : pitchX;
   const honeyPitchY = isHexHoneycomb ? (honeyPitchX * Math.sqrt(3)) / 2 : pitchY;
   const triIn = triInradius(effW, effH);
@@ -163,12 +166,14 @@ export function deriveGeometry(doc) {
     usesFreeSpacing,
     isCrosshatch,
     isPath,
+    isFlow,
     hasUnitCell: LAYOUTS[patternType]?.theoretical === true,
     crossAngleA,
     crossAngleB,
     crossSin,
     crossDegenerate,
     crossCellArea,
+    flowAngle: layout.flow.angle,
     freeDiameter,
     freeSpacingX,
     freeSpacingY,
@@ -235,6 +240,11 @@ export function buildParams(doc, g) {
     // gap — a big hole with a narrow gap, a small one with a wide gap — and they
     // are different patterns, so the split has to be signed, not just the sum.
     cellGap: Math.max(0, layout.edgeGapX),
+    // Flow Lines: the heading its streamlines take where no angle controller
+    // bends them. The separation between two lines is `pitchX` and the width of
+    // one is `holeW`, both already above — the mode measures itself from the
+    // hole and the edge gap exactly as the grid family does.
+    flowAngle: g.flowAngle,
     thickness: taper.enabled ? taper.thickness : 0,
     taperAngle: taper.enabled ? taper.angle : 0,
     taperDirection: taper.direction,
@@ -255,6 +265,15 @@ export function compileDocumentField(fields, ctx = {}) {
   if (!fields?.enabled || !fields.controllers?.length) return NO_FIELD;
   return compileControllers(fields.controllers, ctx);
 }
+
+// The ctx `compileDocumentField` needs: the decoded image maps the UI holds,
+// plus which channels this mode places by — an image may not drive one of those,
+// and which they are depends on the mode. Takes the layout type rather than the
+// document so a React memo can key on the one value that changes the answer.
+export const fieldContext = (layoutType, imageMaps) => ({
+  imageMaps,
+  placementChannels: layoutPlacementChannels(layoutType),
+});
 
 // ─── The spacing channel ──────────────────────────────────────────────
 // The one field channel that decides where a hole goes rather than what it looks
@@ -325,13 +344,40 @@ export function compileSpacing(fields) {
 // a field the signature covered but the layout ignored used to clear the user's
 // hole removals for nothing.
 export function compilePlacement(doc) {
-  const spacing = layoutReadsSpacing(doc.hole.shape, doc.layout.type) ? compileSpacing(doc.fields) : null;
+  const channels = layoutPlacementChannels(doc.layout.type);
+  const spacing =
+    channels.includes("spacing") && layoutReadsSpacing(doc.hole.shape, doc.layout.type)
+      ? compileSpacing(doc.fields)
+      : null;
+  const angle = channels.includes("angle") ? compileChannelField(doc.fields, "angle") : null;
   const path = doc.layout.type === "Path" ? doc.layout.path : null;
-  if (!spacing && !path) return null;
+  if (!spacing && !angle && !path) return null;
   return {
     spacing,
+    angle,
     path,
-    signature: JSON.stringify([spacing?.signature ?? "", path ?? null]),
+    signature: JSON.stringify([spacing?.signature ?? "", angle?.signature ?? "", path ?? null]),
+  };
+}
+
+// A channel compiled for a layout to read directly, rather than for
+// decorateHoles to draw with. Same shape as `compileSpacing` above minus the
+// bounds nothing needs here, and the same two refusals: no controller on the
+// channel, or none that moves it off its neutral value, compiles to null so the
+// mode runs the arithmetic it always ran.
+//
+// Image controllers are absent by construction — `compileControllers` is called
+// with no decoded bitmaps, so one compiles away — and the editor will not let a
+// picture onto a placement channel in the first place (imageChannels).
+export function compileChannelField(fields, channel) {
+  if (!fields?.enabled || !fields.controllers?.length) return null;
+  if (!fields.controllers.some(c => c.channel === channel)) return null;
+  const compiled = compileControllers(fields.controllers).filter(entry => entry.channel === channel);
+  if (!compiledDrivesChannel(compiled, channel)) return null;
+  const base = CHANNEL_INFO[channel].base;
+  return {
+    sample: (x, y) => evaluateCompiled(compiled, channel, x, y, base),
+    signature: JSON.stringify(compiled),
   };
 }
 
@@ -365,7 +411,12 @@ export function activeFieldChannels(doc, field = NO_FIELD) {
   const shape = effectiveHoleShape(doc);
   return {
     size: compiledDrivesChannel(field, "size"),
-    angle: compiledDrivesChannel(field, "angle") && getShape(shape).rotates,
+    // A shape that is not drawn rotated still answers yes where the LAYOUT reads
+    // the channel: in Flow Lines the angle field is the direction the lines run
+    // in, so it changes the pattern completely without turning a single hole.
+    angle:
+      compiledDrivesChannel(field, "angle") &&
+      (getShape(shape).rotates || layoutPlacementChannels(doc.layout.type).includes("angle")),
     // The shape channel blends against the document's own mix, so that — not
     // CHANNEL_INFO's constant — is the neutral value a controller must differ
     // from to be doing anything.
@@ -375,6 +426,71 @@ export function activeFieldChannels(doc, field = NO_FIELD) {
 }
 
 export const anyFieldChannel = active => active.size || active.angle || active.shape || active.spacing;
+
+// How a hole is resized, for the two modes that hand one its own geometry.
+//
+// An ordinary hole is a w × h box scaled about its centre, and the taper takes
+// the same inset off every side of it. Neither statement survives a hole that is
+// a shape in its own right, so each of those gets the operation that means the
+// same thing for it:
+//
+//   a Voronoi cell    scales about its own site, and the taper ERODES it — every
+//                     edge moved inward by half the inset, which is exactly what
+//                     a tapered wall does to a convex outline
+//   a Flow Lines slot keeps its centreline and takes its width from the field at
+//                     each vertex, so one slot narrows and widens along its
+//                     length; the taper thins it by half the inset a side
+//
+// `minSize` is what the variation cull compares against, and it is the reason
+// this is not simply the bounding box: the smallest dimension of a slot is its
+// width, not the length of the panel it crosses.
+function decorateOutline(base, { scale, scaleAt, effW, effH, taperActive, taperInset }) {
+  if (base.poly) {
+    const poly = base.poly.map(([px, py]) => [px * scale, py * scale]);
+    const exitPoly = taperActive ? insetConvexPoly(poly, taperInset / 2) : poly;
+    const box = polyBBox(poly),
+      exitBox = polyBBox(exitPoly);
+    const w = Math.max(0.01, box.right - box.left),
+      h = Math.max(0.01, box.bottom - box.top);
+    return {
+      outline: { poly, exitPoly },
+      entry: poly,
+      exit: exitPoly,
+      w,
+      h,
+      exitW: exitBox.right - exitBox.left,
+      exitH: exitBox.bottom - exitBox.top,
+      minSize: Math.min(w, h),
+      closed: exitPoly.length < 3,
+    };
+  }
+  if (base.stroke) {
+    const pts = base.stroke.pts;
+    const halfW = pts.map(([dx, dy]) => Math.max(0, (effW / 2) * scaleAt(base.x + dx, base.y + dy)));
+    const stroke = { pts, halfW };
+    const exitStroke = taperActive ? { pts, halfW: halfW.map(value => Math.max(0, value - taperInset / 2)) } : stroke;
+    const box = strokeBBox(stroke),
+      exitBox = strokeBBox(exitStroke);
+    return {
+      outline: { stroke, exitStroke },
+      entry: stroke,
+      exit: exitStroke,
+      w: Math.max(0.01, box.right - box.left),
+      h: Math.max(0.01, box.bottom - box.top),
+      exitW: Math.max(0, exitBox.right - exitBox.left),
+      exitH: Math.max(0, exitBox.bottom - exitBox.top),
+      // The widest point of the slot: a line is one hole and cannot be culled in
+      // the middle, so it goes only when the whole of it is below the floor.
+      minSize: strokeMaxWidth(stroke),
+      closed: strokeMaxWidth(exitStroke) <= 0,
+    };
+  }
+  const w = Math.max(0.01, effW * scale),
+    h = Math.max(0.01, effH * scale);
+  const exitW = taperActive ? Math.max(0, w - taperInset) : w;
+  const exitH = taperActive ? Math.max(0, h - taperInset) : h;
+  return { outline: null, entry: null, exit: null, w, h, exitW, exitH, minSize: Math.min(w, h), closed: exitW <= 0 || exitH <= 0 }; // prettier-ignore
+}
 
 // Apply size variation, the field channels, taper exit sizes and the size-floor
 // cull to raw centres. `field` is the output of compileDocumentField.
@@ -393,26 +509,24 @@ export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
     // Controllers are placed in sheet millimetres, so they are sampled at the
     // hole's real position — not at the normalised (nx, ny) the variation field
     // uses, which would move every controller when a margin changes.
-    const scale = variationScaleAt(nx, ny, variation, index + 1) * (hasSize ? evaluateCompiled(field, "size", base.x, base.y) : 1); // prettier-ignore
+    //
+    // As a function of the point rather than a single number, because a Flow
+    // Lines slot is not at one point: it reads the size field at every vertex of
+    // its own centreline, so a gradient tapers one slot along its length instead
+    // of setting a width for the whole of it from wherever its middle happens to
+    // be. Called at the hole's origin, it is exactly the value it always was.
+    const scaleAt = (px, py) => {
+      const vx = perfW > 0 ? clamp((px - margins.left) / perfW, 0, 1) : 0.5;
+      const vy = perfH > 0 ? clamp((py - margins.top) / perfH, 0, 1) : 0.5;
+      return variationScaleAt(vx, vy, variation, index + 1) * (hasSize ? evaluateCompiled(field, "size", px, py) : 1);
+    };
+    const scale = scaleAt(base.x, base.y);
     const angle = hasAngle ? (base.angle || 0) + evaluateCompiled(field, "angle", base.x, base.y) * DEG : base.angle;
     const superN = hasShape ? superNFromMix(evaluateCompiled(field, "shape", base.x, base.y, baseMix)) : baseSuperN;
-    // A hole that arrived carrying its own outline — today only a Voronoi cell —
-    // is sized as a polygon rather than as a w × h box: the size channel and the
-    // variation field shrink the cell about its own site, and the taper erodes
-    // it inward by half the inset on every edge, which for a convex polygon is
-    // exactly what a tapered wall does. w and h become that outline's bounding
-    // box so the size floor, the search grids and the sampling boxes downstream
-    // still have a number to read.
-    const poly = base.poly ? base.poly.map(([px, py]) => [px * scale, py * scale]) : null;
-    const exitPoly = poly && taperActive ? insetConvexPoly(poly, taperInset / 2) : poly;
-    const box = poly ? polyBBox(poly) : null;
-    const exitBox = exitPoly ? polyBBox(exitPoly) : null;
-    const w = poly ? Math.max(0.01, box.right - box.left) : Math.max(0.01, effW * scale);
-    const h = poly ? Math.max(0.01, box.bottom - box.top) : Math.max(0.01, effH * scale);
-    const culled = variation.enabled && variation.cullBelow > 0 && Math.min(w, h) < variation.cullBelow;
+    const size = decorateOutline(base, { scale, scaleAt, effW, effH, taperActive, taperInset });
+    const { w, h, exitW, exitH } = size;
+    const culled = variation.enabled && variation.cullBelow > 0 && size.minSize < variation.cullBelow;
     const scaledRadius = Math.min(holeRadius * scale, w / 2, h / 2);
-    const exitW = poly ? exitBox.right - exitBox.left : taperActive ? Math.max(0, w - taperInset) : w;
-    const exitH = poly ? exitBox.bottom - exitBox.top : taperActive ? Math.max(0, h - taperInset) : h;
     const exitHoleRadius = Math.max(0, Math.min(scaledRadius - taperInset / 2, exitW / 2, exitH / 2));
     return {
       ...base,
@@ -422,16 +536,16 @@ export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
       scale,
       angle,
       superN,
-      ...(poly ? { poly, exitPoly } : null),
+      ...size.outline,
       w,
       h,
       holeRadius: scaledRadius,
-      area: calcHoleArea(holeShape, w, h, scaledRadius, poly ?? superN),
+      area: calcHoleArea(holeShape, w, h, scaledRadius, size.entry ?? superN),
       exitW,
       exitH,
       exitHoleRadius,
-      exitArea: exitW > 0 && exitH > 0 ? calcHoleArea(holeShape, exitW, exitH, exitHoleRadius, exitPoly ?? superN) : 0,
-      isClosed: taperActive && (exitW <= 0 || exitH <= 0),
+      exitArea: size.closed ? 0 : calcHoleArea(holeShape, exitW, exitH, exitHoleRadius, size.exit ?? superN),
+      isClosed: taperActive && size.closed,
     };
   });
 }
@@ -582,11 +696,11 @@ export function computePattern(doc, ctx = {}) {
   const params = buildParams(doc, g);
   const placement = compilePlacement(doc);
   const baseHoles = generateHoles(params, placement);
-  const field = compileDocumentField(doc.fields, ctx);
+  const field = compileDocumentField(doc.fields, { ...fieldContext(doc.layout.type, ctx.imageMaps), ...ctx });
   const holes = decorateHoles(baseHoles, doc, g, field);
   const removedSet = new Set(doc.removedHoles);
   const activeHoles = filterActive(holes, removedSet);
-  const overlaps = findOverlaps(activeHoles, g.holeShape);
+  const overlaps = findOverlaps(activeHoles, g.holeShape, g.nominalSpacing);
   const stats = computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps, field });
   return { geometry: g, params, baseHoles, holes, activeHoles, removedSet, overlaps, stats, field, placement };
 }
@@ -649,6 +763,7 @@ export const PLACEMENT_PARAMS = [
   "freeSpacingX",
   "freeSpacingY",
   "cellGap",
+  "flowAngle",
 ];
 
 // Value signature of everything that decides where holes land. Removed-hole

@@ -304,7 +304,7 @@ test("a v1 document upgrades to the current schema with every later block inert"
   delete v1.layout.scatter;
   delete v1.layout.path;
   const upgraded = migrateDocument(v1);
-  assert.equal(upgraded.schemaVersion, 4);
+  assert.equal(upgraded.schemaVersion, 5);
   assert.deepEqual(upgraded.fields, { enabled: false, controllers: [] });
   assert.deepEqual(upgraded.assets, {});
   assert.equal(upgraded.hole.shapeMix, fresh.hole.shapeMix);

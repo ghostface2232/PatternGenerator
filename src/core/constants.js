@@ -20,6 +20,7 @@ export const PATTERN_TYPES = [
   "Fibonacci",
   "Path",
   "Voronoi",
+  "Flow Lines",
 ];
 // The shapes the dropdown offers. The SHAPES registry in geometry/shapes.js has
 // one more — `Polygon`, the per-hole outline the Voronoi layout imposes — which
@@ -102,6 +103,9 @@ export const DOC_LIMITS = {
   // like a controller's they are bounded by the largest sheet rather than by the
   // current one.
   "layout.path.coord": [-2000, 2000],
+  // The Flow Lines base direction: a full turn, since a flow has a heading and
+  // not merely an axis.
+  "layout.flow.angle": [-180, 180],
   "taper.thickness": [0, 10],
   "taper.angle": [0, 15],
   "variation.minScale": [0.01, 2],

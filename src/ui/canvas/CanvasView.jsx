@@ -11,6 +11,7 @@ import {
   gizmoUsesPosition,
   hitTestGizmo,
 } from "../../fields/gizmo.js";
+import { isPointInsideHole } from "../../geometry/shapes.js";
 import { resolveSyncedGeometry } from "../../fields/controllers.js";
 import { controllerBodyDistance, hitTestController, moveControllerHandle } from "../../fields/controller-gizmo.js";
 import { hitTestPath, movePathVertex, pathBodyDistance } from "../../layouts/path-gizmo.js";
@@ -513,18 +514,29 @@ export function CanvasView() {
         {
           const sheet = clientToSheet(e.clientX, e.clientY);
           if (sheet) {
-            let closestIdx = -1,
-              closestDist = Infinity;
+            let insideIdx = -1,
+              nearestIdx = -1,
+              nearestDist = Infinity;
             holes.forEach((h, i) => {
               if (h.culled) return; // already gone from the pattern
+              // Landing inside the hole picks it, whatever shape it is. For a
+              // Flow Lines slot that is the ONLY meaningful test — its origin is
+              // the middle of a line that may run the width of the panel, so the
+              // fallback below would pick whichever line's middle happened to be
+              // nearest rather than the one under the cursor.
+              if (insideIdx < 0 && isPointInsideHole(sheet.x, sheet.y, h, geometry.holeShape)) insideIdx = i;
+              if (h.stroke) return;
+              // Otherwise the nearest hole within reach, so a click that just
+              // misses a small hole still removes it.
               const d = Math.hypot(h.x - sheet.x, h.y - sheet.y);
               const hitRadius = Math.max(1.5, Math.max(h.w, h.h) * 0.75);
-              if (d < hitRadius && d < closestDist) {
-                closestDist = d;
-                closestIdx = i;
+              if (d < hitRadius && d < nearestDist) {
+                nearestDist = d;
+                nearestIdx = i;
               }
             });
-            if (closestIdx >= 0) actions.toggleRemovedHole(closestIdx);
+            const picked = insideIdx >= 0 ? insideIdx : nearestIdx;
+            if (picked >= 0) actions.toggleRemovedHole(picked);
           }
         }
       }
@@ -533,6 +545,7 @@ export function CanvasView() {
     [
       holeRemovalMode,
       holes,
+      geometry.holeShape,
       history,
       clientToSheet,
       actions,

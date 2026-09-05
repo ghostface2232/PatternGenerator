@@ -26,6 +26,7 @@ import { generateSpiralHoles } from "./spiral.js";
 import { generateFibonacciHoles } from "./fibonacci.js";
 import { generatePathHoles } from "./path.js";
 import { generateVoronoiHoles } from "./voronoi.js";
+import { generateFlowLines } from "./flowlines.js";
 
 // One entry per mode the Type dropdown offers, in that order.
 //
@@ -53,7 +54,25 @@ export const LAYOUTS = {
   Fibonacci: { family: "free", spacingModel: "free", spacing: true, theoretical: false },
   Path: { family: "path", spacingModel: "free", spacing: true, theoretical: false },
   Voronoi: { family: "voronoi", spacingModel: "free", spacing: true, theoretical: false },
+  // Flow Lines measures its line separation the way the grid family measures a
+  // pitch — the slot's own width plus the edge gap — because that is what it is:
+  // the metal between two neighbouring lines is exactly the edge gap.
+  "Flow Lines": { family: "flow", spacingModel: "grid", spacing: true, theoretical: false },
 };
+
+// The channels a mode reads while PLACING holes rather than while drawing them.
+// Spacing everywhere it is read at all; the angle channel as well in Flow Lines,
+// where it is the direction field the lines follow.
+//
+// The distinction is not cosmetic. A channel on this list decides where the
+// metal is, so it has to be signed by patternSignature (or `removedHoles` would
+// address a list that has since moved) and it may not be driven by an image (a
+// picture decodes asynchronously and does not travel in a share link, so the
+// document alone would no longer determine the pattern). Both of those follow
+// from this one list — see compilePlacement in core/pipeline.js and
+// imageChannels in fields/controllers.js.
+export const layoutPlacementChannels = patternType =>
+  patternType === "Flow Lines" ? ["spacing", "angle"] : ["spacing"];
 
 export const layoutFamily = patternType => LAYOUTS[patternType]?.family ?? "grid";
 export const layoutSpacingModel = patternType => LAYOUTS[patternType]?.spacingModel ?? "grid";
@@ -125,6 +144,7 @@ export function generateHoles(params, placement = null) {
     freeSpacingX,
     freeSpacingY,
     cellGap,
+    flowAngle,
   } = params;
   const hw = (holeW || diameter) / 2,
     hh = (holeH || diameter) / 2;
@@ -241,6 +261,21 @@ export function generateHoles(params, placement = null) {
       minDist: freeSpacingX,
       gap: cellGap,
       seed: scatterSeed,
+      spacing: field,
+    });
+  }
+
+  if (patternType === "Flow Lines") {
+    // Like Voronoi, not wrapped in `clipToBoundary`: a line is not a point, and
+    // the integrator already stops half a slot width inside the boundary — which
+    // is stricter than the centre test, not looser.
+    return generateFlowLines({
+      bounds,
+      cornerRadius,
+      width: hw * 2,
+      separation: pitchX,
+      baseAngle: flowAngle,
+      angle: placement?.angle ?? null,
       spacing: field,
     });
   }

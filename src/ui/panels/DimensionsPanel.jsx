@@ -19,7 +19,7 @@ export function DimensionsPanel() {
   // can draw, rather than filling part of the sheet and leaving the rest blank.
   // Refusing is only the better answer if it says so: an empty canvas with no
   // explanation is worse than either.
-  const tooFine = (g.isCrosshatch || g.usesFreeSpacing) && stats.holeCount === 0 && !g.crossDegenerate;
+  const tooFine = (g.isCrosshatch || g.usesFreeSpacing || g.isFlow) && stats.holeCount === 0 && !g.crossDegenerate;
   // Voronoi draws each hole as its own cell, so the controls that shape the
   // chosen hole — its orientation and its corner radius — have nothing to act
   // on. The size sliders stay: they still set how big a cell is.
@@ -353,6 +353,23 @@ export function DimensionsPanel() {
         </>
       )}
 
+      {/* Flow Lines: the heading the streamlines take where no angle controller
+          bends them. Everything else about the mode is the hole size (the slot
+          width) and the edge gap (the metal between two slots), which the size
+          and spacing controls below already are. */}
+      {g.isFlow && (
+        <SliderRow
+          label="Flow Direction"
+          value={layout.flow.angle}
+          min={-180}
+          max={180}
+          step={1}
+          onChange={v => api.set("layout.flow.angle", v)}
+          unit="°"
+          dark={dark}
+        />
+      )}
+
       {/* Scatter and Voronoi are the layouts that draw random numbers, so the
           seed is part of the document: the same seed places the same holes
           everywhere. They share one seed because they share one point set —
@@ -556,6 +573,24 @@ export function DimensionsPanel() {
                   : layout.type === "Voronoi"
                     ? `Voronoi cells · ${layout.edgeGapX.toFixed(2)} mm of metal between any two`
                     : "Golden angle · Fermat spiral"}
+          </div>
+        </>
+      ) : g.isFlow ? (
+        <>
+          <SliderRow
+            label="Edge Gap"
+            value={layout.edgeGapX}
+            min={0}
+            max={50}
+            step={0.1}
+            onChange={actions.setEdgeGapX}
+            unit="mm"
+            dark={dark}
+          />
+          <PitchInfo label="line separation" value={g.pitchX} dark={dark} />
+          <div style={noteStyle(theme)}>
+            Streamlines · {layout.edgeGapX.toFixed(2)} mm of metal between any two
+            <span style={faint}>slot {g.effW.toFixed(2)} mm wide</span>
           </div>
         </>
       ) : g.isCrosshatch ? (

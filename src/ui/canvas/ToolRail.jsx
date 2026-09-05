@@ -1,8 +1,8 @@
 import { Circle, Image as ImageIcon, Minus, Spline, Waypoints } from "lucide-react";
 import { MORPH_SHAPE } from "../../core/constants.js";
-import { CHANNEL_INFO, EDITABLE_CHANNELS, IMAGE_CHANNELS, MAX_CONTROLLERS } from "../../fields/controllers.js";
+import { CHANNEL_INFO, EDITABLE_CHANNELS, MAX_CONTROLLERS, imageChannels } from "../../fields/controllers.js";
 import { effectiveHoleShape } from "../../core/pipeline.js";
-import { layoutReadsSpacing } from "../../layouts/index.js";
+import { layoutPlacementChannels, layoutReadsSpacing } from "../../layouts/index.js";
 import { useEditor } from "../EditorContext.jsx";
 import { MONO } from "../theme.js";
 
@@ -45,8 +45,10 @@ export function ToolRail() {
       : doc.layout.type === "Radial"
         ? `${CHANNEL_INFO.spacing.label} channel — Radial does not read it`
         : `${CHANNEL_INFO.spacing.label} channel — ${shape} on ${doc.layout.type} is an exact tiling, which does not read it`;
-  // An image cannot drive spacing (see IMAGE_CHANNELS in fields/controllers.js).
-  const kindDisabled = kind => full || (kind === "image" && !IMAGE_CHANNELS.includes(activeChannel));
+  // An image cannot drive a channel this mode places by (see imageChannels in
+  // fields/controllers.js).
+  const allowsImage = imageChannels(layoutPlacementChannels(doc.layout.type));
+  const kindDisabled = kind => full || (kind === "image" && !allowsImage.includes(activeChannel));
 
   const cell = (active, disabled) => ({
     width: 30,

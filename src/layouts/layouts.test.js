@@ -5,18 +5,20 @@ import { createDocument, patchIn } from "../core/document.js";
 import { buildParams, compilePlacement, compileSpacing, computePattern, deriveGeometry } from "../core/pipeline.js";
 import { validateDocument } from "../core/persistence.js";
 import { generateSVGString } from "../export/svg.js";
-import { LAYOUTS, generateHoles, layoutReadsSpacing, tilingFlags } from "./index.js";
+import { LAYOUTS, generateHoles, layoutPlacementChannels, layoutReadsSpacing, tilingFlags } from "./index.js";
 import { MIN_CROSS_SIN } from "./crosshatch.js";
 import { MAX_SCATTER_HOLES } from "./scatter.js";
 import { generateSpiralHoles } from "./spiral.js";
 import { generateFibonacciHoles } from "./fibonacci.js";
 import { holeVertices } from "../geometry/shapes.js";
-import { compileControllers } from "../fields/controllers.js";
+import { compileControllers, imageChannels } from "../fields/controllers.js";
 import { DOC_LIMITS, MAX_PATHS, MAX_PATH_POINTS } from "../core/constants.js";
 import { patternSignature } from "../core/pipeline.js";
 import { addPathVertex, hitTestPath, movePathVertex, newPath, removePathVertex } from "./path-gizmo.js";
 
 const doc = (patch = {}) => patchIn(createDocument(), patch);
+const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const computeStatsArea = holes => holes.reduce((sum, h) => sum + h.area, 0);
 const place = d => generateHoles(buildParams(d, deriveGeometry(d)), compilePlacement(d));
 const positions = d => JSON.stringify(place(d));
 // A spacing controller at the middle of the default 200×200 sheet.
@@ -38,14 +40,14 @@ const spacingController = (patch = {}) => ({
 const withSpacing = (patch, controller = {}) =>
   doc({ ...patch, "fields.enabled": true, "fields.controllers": [spacingController(controller)] });
 
-test("the registry and the document's vocabulary describe the same eleven modes", () => {
+test("the registry and the document's vocabulary describe the same twelve modes", () => {
   // The document may hold any name from PATTERN_TYPES and the registry decides
   // what each one means, so a mode in one and not the other is either a type the
   // dropdown offers and nothing can generate, or a generator nothing can reach.
   assert.deepEqual(Object.keys(LAYOUTS), PATTERN_TYPES);
-  assert.equal(PATTERN_TYPES.length, 11);
+  assert.equal(PATTERN_TYPES.length, 12);
   for (const type of PATTERN_TYPES) {
-    assert.ok(["grid", "radial", "crosshatch", "free", "path", "voronoi"].includes(LAYOUTS[type].family), type);
+    assert.ok(["grid", "radial", "crosshatch", "free", "path", "voronoi", "flow"].includes(LAYOUTS[type].family), type); // prettier-ignore
     assert.ok(["grid", "radial", "free"].includes(LAYOUTS[type].spacingModel), type);
   }
   // And validation accepts every one of them rather than falling back.
@@ -58,9 +60,10 @@ test("every mode fills the sheet, stays inside the boundary and exports", () => 
   for (const type of PATTERN_TYPES) {
     const d = doc({ "layout.type": type });
     const { activeHoles, stats, params } = computePattern(d);
-    // Path strings its holes along one curve rather than filling an area, so it
-    // is the one mode whose default document is counted in dozens.
-    const floor = type === "Path" ? 20 : 100;
+    // Path strings its holes along one curve rather than filling an area, and a
+    // Flow Lines hole is a whole slot across the panel, so the two are counted in
+    // dozens where an area fill is counted in hundreds.
+    const floor = type === "Path" || type === "Flow Lines" ? 20 : 100;
     assert.ok(activeHoles.length > floor, `${type}: only ${activeHoles.length} holes`);
     // One curve's worth of holes covers a couple of percent of the sheet, where
     // an area fill covers tens.
@@ -80,7 +83,7 @@ test("every mode fills the sheet, stays inside the boundary and exports", () => 
     );
     // Circles unless the mode imposes its own outline, in which case every
     // hole is a path of its own.
-    const element = type === "Voronoi" ? /<path /g : /<circle /g;
+    const element = type === "Voronoi" || type === "Flow Lines" ? /<path /g : /<circle /g;
     assert.equal(generateSVGString(activeHoles, params).match(element).length, activeHoles.length, type);
   }
 });
@@ -215,7 +218,13 @@ test("the boundary corner radius clips every mode", () => {
   for (const type of PATTERN_TYPES) {
     const square = computePattern(doc({ "layout.type": type })).activeHoles.length;
     const rounded = computePattern(doc({ "layout.type": type, "boundary.cornerRadius": 100 }));
-    if (type !== "Path") {
+    // Path is the exception: its default curve keeps well inside the circle, so
+    // there is nothing in the corners to lose. Flow Lines loses area rather than
+    // lines — a circular boundary shortens every one of them instead of removing
+    // whole ones — so it is measured on the area it cuts.
+    if (type === "Flow Lines") {
+      assert.ok(rounded.stats.totalHoleArea < computePattern(doc({ "layout.type": type })).stats.totalHoleArea);
+    } else if (type !== "Path") {
       assert.ok(rounded.activeHoles.length < square, `${type}: a full-radius boundary must drop the corners`);
     }
     // Voronoi is the mode whose holes are not points: a cell is clipped to the
@@ -223,10 +232,13 @@ test("the boundary corner radius clips every mode", () => {
     // every corner of the hole it draws is inside. Checking the centre would
     // pass a mode that had drawn half a cell past the edge and fail this one for
     // drawing nothing wrong at all, so the check follows the outline.
+    const escaped = (x, y) => Math.hypot(x - 100, y - 100) > 100 + 1e-6;
     const outside =
       type === "Voronoi"
-        ? h => holeVertices(h, "Polygon").some(([x, y]) => Math.hypot(x - 100, y - 100) > 100 + 1e-6)
-        : h => Math.hypot(h.x - 100, h.y - 100) > 100 + 1e-6;
+        ? h => holeVertices(h, "Polygon").some(([x, y]) => escaped(x, y))
+        : type === "Flow Lines"
+          ? h => h.stroke.pts.some(([dx, dy]) => escaped(h.x + dx, h.y + dy))
+          : h => escaped(h.x, h.y);
     assert.ok(!rounded.activeHoles.some(outside), `${type}: a hole survived outside the circle`);
   }
   const corners = {
@@ -258,9 +270,15 @@ test("which modes read the spacing channel, and which say so", () => {
 
 test("a spacing controller thins and crowds the modes that read it", () => {
   for (const type of PATTERN_TYPES) {
+    // A Flow Lines hole is a streamline, not a point, so a controller reaching
+    // over part of the sheet changes how far each line gets as well as how many
+    // there are, and the count answers both questions at once. Over a field that
+    // is the same everywhere it answers only the one asked here, which is what
+    // the mode has to get right: a separation of half is twice as many lines.
+    const uniform = type === "Flow Lines" ? { radius: 2000, falloff: "hard" } : {};
     const base = computePattern(doc({ "layout.type": type })).activeHoles.length;
-    const spread = computePattern(withSpacing({ "layout.type": type }, { target: 2.5 })).activeHoles.length;
-    const packed = computePattern(withSpacing({ "layout.type": type }, { target: 0.5 })).activeHoles.length;
+    const spread = computePattern(withSpacing({ "layout.type": type }, { target: 2.5, ...uniform })).activeHoles.length;
+    const packed = computePattern(withSpacing({ "layout.type": type }, { target: 0.5, ...uniform })).activeHoles.length;
     if (LAYOUTS[type].spacing) {
       assert.ok(spread < base, `${type}: ${spread} holes at 2.5× against ${base}`);
       assert.ok(packed > base, `${type}: ${packed} holes at 0.5× against ${base}`);
@@ -848,4 +866,155 @@ test("a voronoi cell shrinks under the size channel and erodes under the taper",
   assert.ok(tapered.stats.totalExitHoleArea < tapered.stats.totalHoleArea);
   assert.ok(tapered.stats.totalExitHoleArea > tapered.stats.totalHoleArea * 0.4);
   assert.ok(tapered.activeHoles.every(h => h.exitW <= h.w + 1e-9 && h.exitH <= h.h + 1e-9));
+});
+
+// ─── Flow Lines ───────────────────────────────────────────────────────
+
+// A slot's vertices in sheet millimetres.
+const centreline = hole => hole.stroke.pts.map(([dx, dy]) => [hole.x + dx, hole.y + dy]);
+
+test("flow lines leave exactly the edge gap between any two slots", () => {
+  // The mode's claim, and the reason its lines stop where they do: a separation
+  // is the slot's width plus the edge gap, so lines a separation apart leave the
+  // edge gap of metal. It has to hold where the field bends them together too —
+  // that is the case a point-sampled proximity test got wrong by 0.17 mm.
+  const bent = {
+    "fields.enabled": true,
+    "fields.controllers": [spacingController({ channel: "angle", target: 90, radius: 90 })],
+  };
+  for (const patch of [{}, { "layout.edgeGapX": 1 }, { "layout.edgeGapX": 8 }, bent]) {
+    const d = doc({ "layout.type": "Flow Lines", ...patch });
+    const { activeHoles, stats, overlaps } = computePattern(d);
+    const gap = d.layout.edgeGapX;
+    assert.ok(activeHoles.length > 10, `${JSON.stringify(patch)}: only ${activeHoles.length} lines`);
+    assert.equal(overlaps.size, 0, `${JSON.stringify(patch)}: slots overlap`);
+    assert.ok(stats.minLigament >= gap - 1e-6, `${JSON.stringify(patch)}: ligament ${stats.minLigament}`);
+    assert.ok(stats.minLigament <= gap + 1e-6, `${JSON.stringify(patch)}: ligament ${stats.minLigament}`);
+  }
+});
+
+test("a flow line keeps its whole width inside the boundary", () => {
+  // Not just its centreline: the slot is half a width either side of it, and a
+  // pattern that ran off the panel edge would be cut off the part.
+  const d = doc({ "layout.type": "Flow Lines", "boundary.margins.left": 12, "boundary.cornerRadius": 40 });
+  const { activeHoles, geometry } = computePattern(d);
+  const half = geometry.effW / 2;
+  for (const hole of activeHoles) {
+    for (const [x, y] of centreline(hole)) {
+      assert.ok(x >= 12 + half - 1e-6 && x <= 200 - half + 1e-6, `centreline at x ${x}`);
+      assert.ok(y >= half - 1e-6 && y <= 200 - half + 1e-6, `centreline at y ${y}`);
+      // Inside the rounded corner too, by the same margin.
+      const cx = clampTo(x, 12 + 40, 200 - 40),
+        cy = clampTo(y, 40, 200 - 40);
+      assert.ok(Math.hypot(x - cx, y - cy) <= 40 - half + 1e-6, `centreline into the corner at ${x},${y}`);
+    }
+  }
+});
+
+test("the flow direction is the layout's angle plus the angle channel", () => {
+  // With no controller the lines run at exactly the angle asked for.
+  for (const degrees of [0, 30, -90]) {
+    const { activeHoles } = computePattern(doc({ "layout.type": "Flow Lines", "layout.flow.angle": degrees }));
+    const line = centreline(activeHoles[0]);
+    const heading = (Math.atan2(line[1][1] - line[0][1], line[1][0] - line[0][0]) * 180) / Math.PI;
+    // Either way along the same line: a direction and its reverse draw one slot.
+    const off = Math.abs(((heading - degrees + 540) % 360) - 180);
+    assert.ok(Math.min(off, 180 - off) < 1e-6, `asked ${degrees}°, ran at ${heading}°`);
+  }
+  // And a controller turns the lines under it without turning the rest.
+  const turned = computePattern(
+    withSpacing({ "layout.type": "Flow Lines" }, { channel: "angle", target: 90, radius: 40, falloff: "hard" })
+  );
+  const steep = turned.activeHoles.filter(h => Math.hypot(h.x - 100, h.y - 100) < 25);
+  assert.ok(steep.length > 0, "no line under the controller");
+  assert.ok(
+    steep.some(hole => {
+      const line = centreline(hole);
+      return Math.abs(line[line.length - 1][1] - line[0][1]) > Math.abs(line[line.length - 1][0] - line[0][0]);
+    }),
+    "a 90° controller must run at least one line down the sheet rather than across it"
+  );
+});
+
+test("the angle channel moves holes in Flow Lines and only there", () => {
+  // Which is exactly why it is signed there and only there: `removedHoles`
+  // indices address one generated list, and in this mode an angle controller
+  // generates a different one.
+  const controller = { channel: "angle", target: 60 };
+  for (const type of PATTERN_TYPES) {
+    const plain = doc({ "layout.type": type });
+    const bent = withSpacing({ "layout.type": type }, controller);
+    const moves = type === "Flow Lines";
+    assert.equal(positions(plain) !== positions(bent), moves, `${type}: angle controller`);
+    assert.equal(patternSignature(plain) !== patternSignature(bent), moves, `${type}: signature`);
+  }
+});
+
+test("an image cannot drive a channel its mode places by", () => {
+  // A picture decodes asynchronously and is dropped from share links, so it may
+  // never decide where a hole goes. Spacing everywhere; the angle channel too,
+  // but only in the mode that steers by it.
+  assert.deepEqual(imageChannels(layoutPlacementChannels("Straight")), ["size", "angle", "shape"]);
+  assert.deepEqual(imageChannels(layoutPlacementChannels("Flow Lines")), ["size", "shape"]);
+  // And a document that names one anyway — hand-edited, or switched into this
+  // mode after the controller was drawn — compiles without it.
+  const image = {
+    id: "i1",
+    channel: "angle",
+    kind: "image",
+    enabled: true,
+    geometry: { points: [] },
+    target: 90,
+    radius: 50,
+    falloff: "hard",
+    oneSided: 0,
+    strength: 1,
+    syncWith: null,
+    image: { assetId: "a1", placement: { x: 0, y: 0, w: 200, h: 200, rotation: 0 }, gamma: 1, level: 0, invert: false },
+  };
+  const maps = { a1: { width: 2, height: 2, data: new Float32Array([1, 1, 1, 1]) } };
+  const ctx = { imageMaps: maps, placementChannels: layoutPlacementChannels("Flow Lines") };
+  assert.equal(compileControllers([image], ctx).length, 0);
+  assert.equal(compileControllers([image], { imageMaps: maps }).length, 1, "and drives it in the modes that do not");
+});
+
+test("the size channel varies a slot's width along its own length", () => {
+  // The width is read at every vertex, not once at the middle of the line, so
+  // one slot can be wide where the field is and narrow where it is not.
+  const { activeHoles } = computePattern(
+    withSpacing({ "layout.type": "Flow Lines" }, { channel: "size", target: 2.5, radius: 50, falloff: "smooth" })
+  );
+  const crossing = activeHoles.find(hole => {
+    const xs = centreline(hole).map(([x]) => x);
+    return Math.min(...xs) < 60 && Math.max(...xs) > 140 && Math.abs(hole.y - 100) < 10;
+  });
+  assert.ok(crossing, "no line crosses the controller");
+  const widths = crossing.stroke.halfW;
+  const middle = widths[Math.floor(widths.length / 2)];
+  assert.ok(middle > widths[0] * 2, `${middle} mm at the middle against ${widths[0]} at the end`);
+  // And the slot is measured as what it is: wider in the middle than a plain one.
+  const plain = computePattern(doc({ "layout.type": "Flow Lines" }));
+  assert.ok(computeStatsArea(activeHoles) > computeStatsArea(plain.activeHoles));
+});
+
+test("flow lines refuse a separation they cannot draw, and taper like any other hole", () => {
+  // A metre square at half-millimetre separations is past the vertex cap, and
+  // the mode places nothing rather than covering a corner of the panel.
+  const tooFine = doc({
+    "layout.type": "Flow Lines",
+    "hole.diameter": 0.5,
+    "layout.edgeGapX": 0,
+    "sheet.w": 1000,
+    "sheet.h": 1000,
+  });
+  assert.equal(place(tooFine).length, 0);
+
+  const tapered = computePattern(
+    doc({ "layout.type": "Flow Lines", "taper.enabled": true, "taper.thickness": 1, "taper.angle": 10 })
+  );
+  const inset = 2 * 1 * Math.tan((10 * Math.PI) / 180);
+  for (const hole of tapered.activeHoles) {
+    assert.ok(hole.exitStroke.halfW.every((w, i) => Math.abs(w - (hole.stroke.halfW[i] - inset / 2)) < 1e-9));
+  }
+  assert.ok(tapered.stats.totalExitHoleArea < tapered.stats.totalHoleArea);
 });

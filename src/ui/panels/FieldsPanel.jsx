@@ -5,12 +5,12 @@ import {
   CHANNEL_INFO,
   EDITABLE_CHANNELS,
   FALLOFFS,
-  IMAGE_CHANNELS,
+  imageChannels,
   MAX_CONTROLLERS,
   MAX_POLYLINE_POINTS,
 } from "../../fields/controllers.js";
 import { effectiveHoleShape } from "../../core/pipeline.js";
-import { layoutReadsSpacing } from "../../layouts/index.js";
+import { layoutPlacementChannels, layoutReadsSpacing } from "../../layouts/index.js";
 import { addPolylinePoint, removePolylinePoint } from "../../fields/controller-gizmo.js";
 import { useEditor } from "../EditorContext.jsx";
 import { Select, SliderRow, Toggle } from "../controls/index.js";
@@ -20,10 +20,10 @@ import { Section } from "./Section.jsx";
 
 const KIND_ICON = { point: Circle, line: Minus, curve: Spline, polyline: Waypoints, image: ImageIcon };
 const KINDS = ["point", "line", "curve", "polyline", "image"];
-// An image cannot drive spacing — its brightness map is decoded asynchronously
-// and left out of share links, so it may not decide where a hole goes. See
-// IMAGE_CHANNELS in fields/controllers.js.
-const kindsFor = channel => (IMAGE_CHANNELS.includes(channel) ? KINDS : KINDS.filter(kind => kind !== "image"));
+// An image cannot drive a channel the mode places by — its brightness map is
+// decoded asynchronously and left out of share links, so it may not decide where
+// a hole goes. See imageChannels in fields/controllers.js.
+const kindsFor = (channel, allowed) => (allowed.includes(channel) ? KINDS : KINDS.filter(kind => kind !== "image"));
 
 export function FieldsPanel() {
   const { doc, theme, ui, actions, selectedController: selected } = useEditor();
@@ -45,7 +45,7 @@ export function FieldsPanel() {
   const shape = effectiveHoleShape(doc);
   const shapeInert = activeChannel === "shape" && shape !== MORPH_SHAPE;
   const spacingInert = activeChannel === "spacing" && !layoutReadsSpacing(shape, doc.layout.type);
-  const kinds = kindsFor(activeChannel);
+  const kinds = kindsFor(activeChannel, imageChannels(layoutPlacementChannels(doc.layout.type)));
 
   // Selected state has to reach assistive tech, not just the eye: every chip
   // below is a button whose only "on" cue is its colour.
