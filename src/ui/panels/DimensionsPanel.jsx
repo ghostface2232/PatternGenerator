@@ -1,9 +1,9 @@
-import { MoveVertical, Shuffle, SquarePen, X } from "lucide-react";
+import { MoveVertical, Shuffle, SquarePen, Waypoints, X } from "lucide-react";
 import { DIAMOND_ORIENTATIONS, MAX_PATHS, MAX_PATH_POINTS, RADIAL_LAYOUTS, RADIAL_MODES } from "../../core/constants.js"; // prettier-ignore
 import { useEditor } from "../EditorContext.jsx";
 import { Dropdown, LinkButton, PitchInfo, SegRow, SliderRow, Toggle } from "../controls/index.js";
 import { MONO } from "../theme.js";
-import { Section, hintStyle, noteStyle, subLabelStyle } from "./Section.jsx";
+import { Section, groupLabelStyle, hintStyle, noteStyle, subLabelStyle } from "./Section.jsx";
 
 export function DimensionsPanel() {
   const { doc, api, theme, ui, geometry: g, stats, actions } = useEditor();
@@ -157,7 +157,7 @@ export function DimensionsPanel() {
         </>
       ) : (
         <SliderRow
-          label="Hole Diameter"
+          label={g.isFlow ? "Slot Width" : imposedShape ? "Cell Size" : "Hole Diameter"}
           value={hole.diameter}
           min={0.5}
           max={20}
@@ -251,6 +251,7 @@ export function DimensionsPanel() {
           here — the same division as the polyline field controller. */}
       {g.isPath && (
         <>
+          <div style={groupLabelStyle(theme)}>Paths</div>
           <button
             onClick={actions.togglePathEditMode}
             aria-label="Edit path curves on the canvas"
@@ -276,7 +277,8 @@ export function DimensionsPanel() {
           </button>
           {layout.path.paths.length === 0 ? (
             <div style={hintStyle(theme)}>
-              No curve drawn yet, so the holes follow a default S across the panel. Add a path to take hold of it.
+              No path of your own yet — the holes are following the default one outlined on the canvas. Add a path to
+              take hold of it.
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
@@ -353,7 +355,7 @@ export function DimensionsPanel() {
             ))}
           </div>
           {[
-            ["Smooth curve", layout.path.smooth, v => api.set("layout.path.smooth", v)],
+            ["Smooth the path through its points", layout.path.smooth, v => api.set("layout.path.smooth", v)],
             ["Turn holes along the path", layout.path.alignToTangent, v => api.set("layout.path.alignToTangent", v)],
             ["Close this path into a loop", layout.path.paths[ui.selectedPath]?.closed ?? false, () => actions.togglePathClosed(ui.selectedPath), layout.path.paths.length === 0], // prettier-ignore
           ].map(([label, value, onChange, disabled]) => (
@@ -399,7 +401,7 @@ export function DimensionsPanel() {
       {(layout.type === "Scatter" || layout.type === "Voronoi") && (
         <>
           <SliderRow
-            label="Scatter Seed"
+            label={g.isVoronoi ? "Cell Seed" : "Scatter Seed"}
             value={layout.scatter.seed}
             min={0}
             max={99999}
@@ -409,7 +411,7 @@ export function DimensionsPanel() {
           />
           <button
             onClick={actions.reseedScatter}
-            aria-label="Shuffle the scatter seed"
+            aria-label={g.isVoronoi ? "Shuffle the cell seed" : "Shuffle the scatter seed"}
             title="Try another arrangement at the same density"
             style={{
               width: "100%",
@@ -561,9 +563,9 @@ export function DimensionsPanel() {
           <PitchInfo
             label={
               layout.type === "Spiral" || layout.type === "Path"
-                ? "step along the curve"
+                ? "step along the path"
                 : layout.type === "Voronoi"
-                  ? "min site spacing"
+                  ? "min cell spacing"
                   : "min centre spacing"
             }
             value={g.freeSpacingX}
@@ -590,7 +592,7 @@ export function DimensionsPanel() {
               : layout.type === "Spiral"
                 ? "Archimedean spiral · equal steps along the arm"
                 : layout.type === "Path"
-                  ? "Equal steps along each curve · drag the vertices on the canvas"
+                  ? "Equal steps along each path · drag its points on the canvas"
                   : layout.type === "Voronoi"
                     ? `Voronoi cells · ${layout.edgeGapX.toFixed(2)} mm of metal between any two`
                     : "Golden angle · Fermat spiral"}
@@ -613,6 +615,33 @@ export function DimensionsPanel() {
             Streamlines · {layout.edgeGapX.toFixed(2)} mm of metal between any two
             <span style={faint}>slot {g.effW.toFixed(2)} mm wide</span>
           </div>
+          <div style={hintStyle(theme)}>
+            Every line runs at the Flow Direction above. An Angle controller bends them around it — that field is what
+            the lines follow.
+          </div>
+          <button
+            onClick={actions.addFlowDirection}
+            aria-label="Add an angle controller to steer the flow"
+            title="Drops a point controller on the Angle channel, ready to drag"
+            style={{
+              width: "100%",
+              height: 31,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 5,
+              border: `1px solid ${theme.border}`,
+              borderRadius: 4,
+              background: theme.controlBg,
+              color: theme.textPrimary,
+              fontSize: 10,
+              cursor: "pointer",
+              fontFamily: MONO,
+              marginBottom: 12,
+            }}
+          >
+            <Waypoints size={11} /> Steer the Flow
+          </button>
         </>
       ) : g.isCrosshatch ? (
         <>

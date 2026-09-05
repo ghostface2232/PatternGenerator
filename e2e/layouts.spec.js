@@ -290,7 +290,7 @@ test("an image dropped while Spacing is selected lands on a channel it can drive
 test("Path hands over its default curve without moving the pattern", async ({ page }) => {
   await choose(page, "Type", "Path");
   const implicit = await holes(page);
-  await expect(page.getByText(/No curve drawn yet/)).toBeVisible();
+  await expect(page.getByText(/No path of your own yet/)).toBeVisible();
 
   // Add Path makes the curve the layout was already drawing editable, so the
   // pattern must not jump when it does.
@@ -365,9 +365,14 @@ test("voronoi and scatter share one seed, so switching modes keeps the arrangeme
   const reshuffled = await holes(page);
 
   await choose(page, "Type", "Voronoi");
-  // The same seed, carried over, and one cell per scattered point.
-  await expect(page.getByLabel("Scatter Seed", { exact: true })).toHaveValue(shuffled);
+  // One document field, but named for whichever mode is asking: a panel that
+  // says "Scatter Seed" in Voronoi is telling you about a mode you are not in.
+  await expect(page.getByLabel("Scatter Seed", { exact: true })).toHaveCount(0);
+  const cellSeed = page.getByLabel("Cell Seed", { exact: true });
+  await expect(cellSeed).toHaveValue(shuffled);
   expect(await holes(page)).toBe(reshuffled);
+  // Back past the mode change and the shuffle: the field is one field, so the
+  // label follows the mode back too.
   await page.getByTitle("Undo (Ctrl+Z)").click();
   await page.getByTitle("Undo (Ctrl+Z)").click();
   await expect(page.getByLabel("Scatter Seed", { exact: true })).toHaveValue("1");
@@ -464,4 +469,26 @@ test("leaving Path mode leaves its canvas editor with it", async ({ page }) => {
   await choose(page, "Type", "Path");
   await expect(page.getByText(/EDIT PATH/)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Edit path curves on the canvas", exact: true })).toHaveAttribute("aria-pressed", "false"); // prettier-ignore
+});
+
+test("Flow Lines hands over its own direction field in one click", async ({ page }) => {
+  // The direction IS the angle field, and a document with none draws straight
+  // slots — a mode that looks inert until you have worked out that its input
+  // lives in another panel. The button puts that input on the canvas.
+  await choose(page, "Type", "Flow Lines");
+  const straight = await holes(page);
+  await page.getByRole("button", { name: "Add an angle controller to steer the flow", exact: true }).click();
+
+  // On the angle channel, selected, with the canvas in field-editing mode.
+  await expect(page.getByRole("button", { name: "Angle field channel", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+  await expect(page.getByRole("button", { name: "Select angle point controller 1", exact: true })).toBeVisible();
+  await expect(page.getByText(/ANGLE FIELD/)).toBeVisible();
+  // And it steers: the lines are no longer the ones it drew before.
+  await expect.poll(() => holes(page)).not.toBe(straight);
+  // One undo step, so the click is as reversible as any other edit.
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect.poll(() => holes(page)).toBe(straight);
 });

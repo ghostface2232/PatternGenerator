@@ -37,3 +37,12 @@ export function Section({ title, right, children, theme, last = false, collapsed
 export const hintStyle = theme => ({ fontSize: 9, color: theme.textSecondary, marginBottom: 14, lineHeight: 1.5 });
 export const noteStyle = theme => ({ fontSize: 10, color: theme.textSecondary, marginBottom: 8, padding: "2px 0" });
 export const subLabelStyle = theme => ({ fontSize: 10, color: theme.textSecondary, flex: 1 });
+// The heading over a group of controls inside a section — the fields panel has
+// used this shape since Phase 2; it lives here so the Path block matches it.
+export const groupLabelStyle = theme => ({
+  fontSize: 9,
+  textTransform: "uppercase",
+  letterSpacing: 0.8,
+  color: theme.textSecondary,
+  marginBottom: 6,
+});

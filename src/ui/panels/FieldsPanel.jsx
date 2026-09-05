@@ -16,7 +16,7 @@ import { useEditor } from "../EditorContext.jsx";
 import { Select, SliderRow, Toggle } from "../controls/index.js";
 import { readImageFile } from "../useImageMaps.js";
 import { MONO } from "../theme.js";
-import { Section } from "./Section.jsx";
+import { Section, groupLabelStyle } from "./Section.jsx";
 
 const KIND_ICON = { point: Circle, line: Minus, curve: Spline, polyline: Waypoints, image: ImageIcon };
 const KINDS = ["point", "line", "curve", "polyline", "image"];
@@ -61,13 +61,7 @@ export function FieldsPanel() {
     padding: "6px 2px",
     ...extra,
   });
-  const groupLabel = {
-    fontSize: 9,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-    color: theme.textSecondary,
-    marginBottom: 6,
-  };
+  const groupLabel = groupLabelStyle(theme);
   const iconBtn = (extra = {}) => ({
     width: 28,
     height: 28,

@@ -9,7 +9,7 @@ import { computeGizmo } from "../fields/gizmo.js";
 import { channelBase, evaluateCompiled, resolveSyncedGeometry } from "../fields/controllers.js";
 import { controllerHandles, controllerPolyline } from "../fields/controller-gizmo.js";
 import { placementCorners } from "../fields/image-map.js";
-import { flattenPath } from "../layouts/path.js";
+import { defaultPathPoints, flattenPath } from "../layouts/path.js";
 import { computeView } from "./view.js";
 
 export function drawScene(canvas, scene) {
@@ -262,8 +262,19 @@ export function drawScene(canvas, scene) {
   if (variation.enabled && variationEditMode && selectedVariationLayer && showHud) {
     drawGizmo(ctx, selectedVariationLayer, { marginLeft, marginTop, perfW, perfH }, sheetW, sheetH, baseScale, dark);
   }
-  if (pathEditMode && showHud) {
-    drawPaths(ctx, { pathBlock, selectedPath, baseScale, dark });
+  if (geometry.isPath && showHud) {
+    // Drawn whenever the mode is Path, not only while editing it: the curve is
+    // what the holes are strung along, and a mode whose one input is invisible
+    // until you press a button in a panel is a mode you have to be told about.
+    // Handles still belong to the edit mode.
+    drawPaths(ctx, {
+      pathBlock,
+      selectedPath,
+      editing: pathEditMode,
+      bounds: { xMin: marginLeft, xMax: marginLeft + perfW, yMin: marginTop, yMax: marginTop + perfH },
+      baseScale,
+      dark,
+    });
   }
   if (showFieldOverlay) {
     // Over the holes, not under them: at 35% open area a third of the sheet is
@@ -449,32 +460,39 @@ function drawControllers(
 // controller's own path stays fully opaque either way.
 const bandAlpha = radius => 0.1 * Math.max(0.22, Math.min(1, 40 / Math.max(1, radius || 1)));
 
-// The Path layout's curves and their draggable vertices. Drawn only while the
-// mode is being edited: the holes already show where the curve runs, and an
-// outline over them the rest of the time is one more thing between the eye and
-// the pattern.
-function drawPaths(ctx, { pathBlock, selectedPath, baseScale, dark }) {
-  const paths = pathBlock?.paths || [];
-  if (!paths.length) return;
+// The Path layout's curves and their draggable vertices.
+//
+// The curve itself is drawn whenever the mode is on, including the default one
+// the layout falls back to when the document holds none — so "no path of your
+// own yet" is something you can SEE, outlined under the holes, rather than
+// something a panel has to tell you. The handles are the edit mode's, and they
+// go on top of the holes, because a handle you cannot see is not a handle.
+function drawPaths(ctx, { pathBlock, selectedPath, editing, bounds, baseScale, dark }) {
+  const own = pathBlock?.paths || [];
+  const paths = own.length ? own : [{ points: defaultPathPoints(bounds), closed: false, ghost: true }];
   const px = 1 / baseScale;
   const accent = dark ? "#f97316" : "#c2410c";
   const faint = dark ? "rgba(249,115,22,0.35)" : "rgba(194,65,12,0.3)";
+  // The sheet is light in both themes — it is metal, not chrome — so the guide
+  // takes its contrast from the sheet rather than from the app's palette. A 35%
+  // bright orange over light grey is a line you have to be told is there.
+  const guide = "rgba(180,60,10,0.75)";
   paths.forEach((path, index) => {
-    const active = index === selectedPath;
+    const active = editing && !path.ghost && index === selectedPath;
     const poly = flattenPath(path.points, { closed: path.closed, smooth: pathBlock.smooth !== false });
     if (poly.length >= 2) {
       ctx.beginPath();
       ctx.moveTo(poly[0].x, poly[0].y);
       for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
-      ctx.strokeStyle = active ? accent : faint;
-      ctx.lineWidth = (active ? 1.6 : 1.1) * px;
+      ctx.strokeStyle = active ? accent : editing ? faint : guide;
+      ctx.lineWidth = (active ? 1.6 : 1.3) * px;
       ctx.setLineDash([4 * px, 3 * px]);
       ctx.stroke();
       ctx.setLineDash([]);
     }
     // The chord through the vertices, so a smoothed curve still shows what the
     // handles actually control.
-    if (pathBlock.smooth !== false && path.points.length > 1) {
+    if (editing && pathBlock.smooth !== false && path.points.length > 1) {
       ctx.beginPath();
       ctx.moveTo(path.points[0].x, path.points[0].y);
       for (let i = 1; i < path.points.length; i++) ctx.lineTo(path.points[i].x, path.points[i].y);
@@ -484,13 +502,17 @@ function drawPaths(ctx, { pathBlock, selectedPath, baseScale, dark }) {
       ctx.stroke();
     }
     if (!active) return;
+    // Light fill, accent ring — the vector-editor handle, and the one treatment
+    // that reads against both the sheet and the holes it sits over. Filled with
+    // the accent instead, a handle over a black hole was a dark dot on a dark
+    // dot.
     for (const point of path.points) {
       ctx.beginPath();
-      ctx.arc(point.x, point.y, 4.5 * px, 0, Math.PI * 2);
-      ctx.fillStyle = accent;
+      ctx.arc(point.x, point.y, 5 * px, 0, Math.PI * 2);
+      ctx.fillStyle = dark ? "#f8fafc" : "#ffffff";
       ctx.fill();
-      ctx.strokeStyle = dark ? "#0f0f11" : "#ffffff";
-      ctx.lineWidth = 1.2 * px;
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 2 * px;
       ctx.stroke();
     }
   });

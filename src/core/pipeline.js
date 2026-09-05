@@ -38,10 +38,17 @@ export function deriveGeometry(doc) {
   const { hole, layout, sheet, boundary, taper } = doc;
   const { margins } = boundary;
   const patternType = layout.type;
-  const hasCustomSize = CUSTOM_SIZE_SHAPES.includes(hole.shape);
+  // A mode that imposes its own hole shape sizes it from ONE number. The shape
+  // dropdown is not driving anything there, so neither are its width and height
+  // — and in Flow Lines the height drove nothing at all, which is a slider that
+  // moves and does nothing. `Circle` stands in as the sizing shape because it is
+  // the one whose size IS a single number, and for the default document (which
+  // is a Circle) nothing changes.
+  const sizeShape = IMPOSED_SHAPES[patternType] ? "Circle" : hole.shape;
+  const hasCustomSize = CUSTOM_SIZE_SHAPES.includes(sizeShape);
   const effW = hasCustomSize ? hole.w : hole.diameter;
   const effH =
-    hole.shape === "Triangle" && hole.triEquilateral
+    sizeShape === "Triangle" && hole.triEquilateral
       ? (hole.w * Math.sqrt(3)) / 2
       : hasCustomSize
         ? hole.h
@@ -65,6 +72,7 @@ export function deriveGeometry(doc) {
   const isCrosshatch = family === "crosshatch";
   const isPath = family === "path";
   const isFlow = family === "flow";
+  const isVoronoi = family === "voronoi";
   const honeyPitchX = isHexHoneycomb ? (effW * Math.sqrt(3)) / 2 + layout.edgeGapX : pitchX;
   const honeyPitchY = isHexHoneycomb ? (honeyPitchX * Math.sqrt(3)) / 2 : pitchY;
   const triIn = triInradius(effW, effH);
@@ -73,8 +81,8 @@ export function deriveGeometry(doc) {
   const diaCellK = (diaIn + layout.edgeGapX / 2) / diaIn;
 
   const radial = layout.radial;
-  const radialExtents = getRadialShapeExtents(hole.shape, effW, effH, hole.diamondOrient);
-  const radialOuterRadius = getRadialShapeOuterRadius(hole.shape, effW, effH);
+  const radialExtents = getRadialShapeExtents(sizeShape, effW, effH, hole.diamondOrient);
+  const radialOuterRadius = getRadialShapeOuterRadius(sizeShape, effW, effH);
   const ringSpacing =
     radial.layout === "Concentric" ? hole.diameter + radial.edgeGap : radialExtents.radial + radial.edgeGap;
   const circumSpacing =
@@ -167,6 +175,7 @@ export function deriveGeometry(doc) {
     isCrosshatch,
     isPath,
     isFlow,
+    isVoronoi,
     hasUnitCell: LAYOUTS[patternType]?.theoretical === true,
     crossAngleA,
     crossAngleB,

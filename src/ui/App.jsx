@@ -539,7 +539,11 @@ export default function App() {
     const selectController = setSelectedId;
     // `geometry` overrides the default placement when the controller is being
     // drawn on the canvas rather than dropped from the panel.
-    const addController = (kind, geometry = null) => {
+    // `geometry` overrides where it is placed; `onChannel` overrides which
+    // channel it drives, for the one caller that knows better than the panel's
+    // current selection — Flow Lines asking for the angle controller its own
+    // direction field needs.
+    const addController = (kind, geometry = null, onChannel = null) => {
       const current = api.ref.current.fields;
       if (current.controllers.length >= MAX_CONTROLLERS) {
         // Nothing more can be placed, so stop promising that a click will place
@@ -554,10 +558,14 @@ export default function App() {
       // the same reason; this covers the file dropped on the page, which does not
       // go through either.
       const allowed = imageChannels(layoutPlacementChannels(doc.layout.type));
-      const channel = kind === "image" && !allowed.includes(activeChannel) ? allowed[0] : activeChannel;
+      const wanted = onChannel ?? activeChannel;
+      const channel = kind === "image" && !allowed.includes(wanted) ? allowed[0] : wanted;
       const controller = createController({ channel, kind, area: perfArea, existing: current.controllers });
       if (geometry) controller.geometry = geometry;
-      if (channel !== activeChannel) setActiveChannel(channel);
+      if (channel !== activeChannel) {
+        setActiveChannel(channel);
+        setSelectedId(null);
+      }
       api.update(d => ({
         ...d,
         fields: { ...d.fields, enabled: true, controllers: [...d.fields.controllers, controller] },
@@ -566,6 +574,11 @@ export default function App() {
       enterFieldEditMode(true);
       return controller.id;
     };
+    // Flow Lines' direction IS the angle field, and a document with no angle
+    // controller draws straight slots — a mode that looks like it does nothing
+    // until you have read that its input lives in another panel. One button puts
+    // that input on the canvas, on the right channel, ready to drag.
+    const addFlowDirection = () => addController("point", null, "angle");
     const updateController = (id, patch, live = false) =>
       api.update(
         d => mapControllers(d, c => (c.id === id ? { ...c, ...patch } : c)),
@@ -709,6 +722,7 @@ export default function App() {
       selectChannel,
       selectController,
       addController,
+      addFlowDirection,
       updateController,
       removeController,
       clearControllers,
