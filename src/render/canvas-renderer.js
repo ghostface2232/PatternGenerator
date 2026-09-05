@@ -1,7 +1,7 @@
 // Pure canvas drawing of the current scene. No React, no state: the component
 // gathers everything into a `scene` object and calls drawScene() in an effect.
 // Returns the view transform so pointer handlers can map client → sheet space.
-import { traceHolePath } from "../geometry/shapes.js";
+import { holeExitOutline, holeOutline, traceHolePath } from "../geometry/shapes.js";
 import { tracePerfBoundary } from "../geometry/boundary.js";
 import { evaluateVariationField } from "../fields/variation-engine.js";
 import { computeGizmo } from "../fields/gizmo.js";
@@ -179,7 +179,7 @@ export function drawScene(canvas, scene) {
       if (isRemoved) {
         if (!showHud) return; // HUD hidden: removed holes vanish entirely
         ctx.beginPath();
-        traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, h.superN);
+        traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, holeOutline(h));
         ctx.strokeStyle = dark ? "rgba(255,100,100,0.25)" : "rgba(200,50,50,0.2)";
         ctx.lineWidth = 0.4;
         ctx.setLineDash([1, 1]);
@@ -201,7 +201,7 @@ export function drawScene(canvas, scene) {
       const isOverlap = activeOverlapSet.has(i);
       const isClosed = h.isClosed;
       ctx.beginPath();
-      traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, h.superN);
+      traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, holeOutline(h));
       ctx.fillStyle = isClosed
         ? dark
           ? "rgba(220,50,50,0.55)"
@@ -230,13 +230,13 @@ export function drawScene(canvas, scene) {
       // Taper ring: fill gap between entry and exit shapes
       if (showTaperRings && h.exitW > 0 && h.exitH > 0 && !isClosed) {
         ctx.beginPath();
-        traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, h.superN);
+        traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, holeOutline(h));
         ctx.save();
         ctx.clip();
         ctx.fillStyle = dark ? "rgba(80,85,95,0.6)" : "rgba(160,165,175,0.5)";
         ctx.fillRect(h.x - h.w, h.y - h.h, h.w * 2, h.h * 2);
         ctx.beginPath();
-        traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius, h.superN);
+        traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius, holeExitOutline(h));
         ctx.fillStyle = holeColor;
         ctx.fill();
         ctx.restore();

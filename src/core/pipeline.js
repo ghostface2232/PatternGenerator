@@ -10,7 +10,7 @@
 //   computeStats(...)                OAR (theoretical or counted), ligament, overlaps
 import { CUSTOM_SIZE_SHAPES, DOC_LIMITS, MORPH_SHAPE, PERF_MODE_HOLE_LIMIT } from "./constants.js";
 import { clamp, DEG } from "./math.js";
-import { basePolyVerts, maxCornerRadius, triInradius } from "../geometry/polygon.js";
+import { basePolyVerts, insetConvexPoly, maxCornerRadius, polyBBox, triInradius } from "../geometry/polygon.js";
 import { calcHoleArea, getShape } from "../geometry/shapes.js";
 import { superNFromMix } from "../geometry/superellipse.js";
 import { estimateVisibleHoleArea, perfBoundsArea, perfBoundsFromParams } from "../geometry/boundary.js";
@@ -22,6 +22,15 @@ import { MIN_CROSS_SIN } from "../layouts/crosshatch.js";
 import { getRadialShapeExtents, getRadialShapeOuterRadius } from "../layouts/radial-engine.js";
 import { evaluateVariationField, variationScaleAt } from "../fields/variation-engine.js";
 import { CHANNEL_INFO, compileControllers, compiledDrivesChannel, evaluateCompiled } from "../fields/controllers.js";
+
+// The shape a hole is actually DRAWN as, which is the document's choice in every
+// mode but one: Voronoi gives each hole its own cell polygon, so the shape
+// dropdown has nothing to say about it and the `Polygon` entry in the SHAPES
+// registry takes over. One function, because the answer has to be the same for
+// the generator, the statistics, the canvas, the exporters and the two panels
+// that grey out a channel the shape cannot show — a disagreement between any two
+// of those is a hole measured as one thing and drawn as another.
+export const effectiveHoleShape = doc => (doc.layout.type === "Voronoi" ? "Polygon" : doc.hole.shape);
 
 export function deriveGeometry(doc) {
   const { hole, layout, sheet, boundary, taper } = doc;
@@ -134,6 +143,11 @@ export function deriveGeometry(doc) {
 
   return {
     hasCustomSize,
+    // The shape the holes are drawn as. `hole.shape` above still sizes them —
+    // in Voronoi the width and height sliders set how big a cell is, since the
+    // sites are sown at the circumscribed diameter plus the gap like every other
+    // free-form mode.
+    holeShape: effectiveHoleShape(doc),
     effW,
     effH,
     pitchX,
@@ -187,7 +201,7 @@ export function buildParams(doc, g) {
   const { margins } = boundary;
   return {
     diameter: hole.diameter,
-    holeShape: hole.shape,
+    holeShape: g.holeShape,
     holeW: g.effW,
     holeH: g.effH,
     holeRadius: hole.cornerRadius,
@@ -215,6 +229,12 @@ export function buildParams(doc, g) {
     scatterSeed: layout.scatter.seed,
     freeSpacingX: g.freeSpacingX,
     freeSpacingY: g.freeSpacingY,
+    // The ligament a Voronoi cell is inset to leave, which is the edge gap
+    // itself and not the pitch it is folded into above. Two documents with the
+    // same `freeSpacingX` can split it differently between the hole size and the
+    // gap — a big hole with a narrow gap, a small one with a wide gap — and they
+    // are different patterns, so the split has to be signed, not just the sum.
+    cellGap: Math.max(0, layout.edgeGapX),
     thickness: taper.enabled ? taper.thickness : 0,
     taperAngle: taper.enabled ? taper.angle : 0,
     taperDirection: taper.direction,
@@ -339,7 +359,10 @@ export function compilePlacement(doc) {
 // Radial do not (see layoutReadsSpacing), and a controller they ignore must not
 // move the readout either.
 export function activeFieldChannels(doc, field = NO_FIELD) {
-  const shape = doc.hole.shape;
+  // The effective shape, so that a mode which replaces it answers for it: a
+  // Voronoi cell is a polygon nothing rotates and nothing morphs, whatever the
+  // dropdown still says, and an angle or morph controller over one is inert.
+  const shape = effectiveHoleShape(doc);
   return {
     size: compiledDrivesChannel(field, "size"),
     angle: compiledDrivesChannel(field, "angle") && getShape(shape).rotates,
@@ -358,9 +381,9 @@ export const anyFieldChannel = active => active.size || active.angle || active.s
 export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
   const { variation, hole, boundary } = doc;
   const { margins } = boundary;
-  const { effW, effH, perfW, perfH, taperActive, taperInset } = g;
+  const { effW, effH, perfW, perfH, taperActive, taperInset, holeShape } = g;
   const holeRadius = hole.cornerRadius;
-  const morphs = hole.shape === MORPH_SHAPE;
+  const morphs = holeShape === MORPH_SHAPE;
   const baseMix = hole.shapeMix ?? 0.5;
   const baseSuperN = morphs ? superNFromMix(baseMix) : undefined;
   const { size: hasSize, angle: hasAngle, shape: hasShape } = activeFieldChannels(doc, field);
@@ -373,12 +396,23 @@ export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
     const scale = variationScaleAt(nx, ny, variation, index + 1) * (hasSize ? evaluateCompiled(field, "size", base.x, base.y) : 1); // prettier-ignore
     const angle = hasAngle ? (base.angle || 0) + evaluateCompiled(field, "angle", base.x, base.y) * DEG : base.angle;
     const superN = hasShape ? superNFromMix(evaluateCompiled(field, "shape", base.x, base.y, baseMix)) : baseSuperN;
-    const w = Math.max(0.01, effW * scale);
-    const h = Math.max(0.01, effH * scale);
+    // A hole that arrived carrying its own outline — today only a Voronoi cell —
+    // is sized as a polygon rather than as a w × h box: the size channel and the
+    // variation field shrink the cell about its own site, and the taper erodes
+    // it inward by half the inset on every edge, which for a convex polygon is
+    // exactly what a tapered wall does. w and h become that outline's bounding
+    // box so the size floor, the search grids and the sampling boxes downstream
+    // still have a number to read.
+    const poly = base.poly ? base.poly.map(([px, py]) => [px * scale, py * scale]) : null;
+    const exitPoly = poly && taperActive ? insetConvexPoly(poly, taperInset / 2) : poly;
+    const box = poly ? polyBBox(poly) : null;
+    const exitBox = exitPoly ? polyBBox(exitPoly) : null;
+    const w = poly ? Math.max(0.01, box.right - box.left) : Math.max(0.01, effW * scale);
+    const h = poly ? Math.max(0.01, box.bottom - box.top) : Math.max(0.01, effH * scale);
     const culled = variation.enabled && variation.cullBelow > 0 && Math.min(w, h) < variation.cullBelow;
     const scaledRadius = Math.min(holeRadius * scale, w / 2, h / 2);
-    const exitW = taperActive ? Math.max(0, w - taperInset) : w;
-    const exitH = taperActive ? Math.max(0, h - taperInset) : h;
+    const exitW = poly ? exitBox.right - exitBox.left : taperActive ? Math.max(0, w - taperInset) : w;
+    const exitH = poly ? exitBox.bottom - exitBox.top : taperActive ? Math.max(0, h - taperInset) : h;
     const exitHoleRadius = Math.max(0, Math.min(scaledRadius - taperInset / 2, exitW / 2, exitH / 2));
     return {
       ...base,
@@ -388,14 +422,15 @@ export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
       scale,
       angle,
       superN,
+      ...(poly ? { poly, exitPoly } : null),
       w,
       h,
       holeRadius: scaledRadius,
-      area: calcHoleArea(hole.shape, w, h, scaledRadius, superN),
+      area: calcHoleArea(holeShape, w, h, scaledRadius, poly ?? superN),
       exitW,
       exitH,
       exitHoleRadius,
-      exitArea: exitW > 0 && exitH > 0 ? calcHoleArea(hole.shape, exitW, exitH, exitHoleRadius, superN) : 0,
+      exitArea: exitW > 0 && exitH > 0 ? calcHoleArea(holeShape, exitW, exitH, exitHoleRadius, exitPoly ?? superN) : 0,
       isClosed: taperActive && (exitW <= 0 || exitH <= 0),
     };
   });
@@ -407,7 +442,7 @@ export function filterActive(holes, removedSet) {
 
 export function computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps, field = NO_FIELD }) {
   const { hole, sheet, boundary, variation } = doc;
-  const shape = hole.shape;
+  const shape = g.holeShape;
   const baseSuperN = shape === MORPH_SHAPE ? superNFromMix(hole.shapeMix ?? 0.5) : undefined;
   const { effW, effH, taperActive, taperInset } = g;
   const perfBounds = perfBoundsFromParams(params);
@@ -551,7 +586,7 @@ export function computePattern(doc, ctx = {}) {
   const holes = decorateHoles(baseHoles, doc, g, field);
   const removedSet = new Set(doc.removedHoles);
   const activeHoles = filterActive(holes, removedSet);
-  const overlaps = findOverlaps(activeHoles, doc.hole.shape);
+  const overlaps = findOverlaps(activeHoles, g.holeShape);
   const stats = computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps, field });
   return { geometry: g, params, baseHoles, holes, activeHoles, removedSet, overlaps, stats, field, placement };
 }
@@ -613,6 +648,7 @@ export const PLACEMENT_PARAMS = [
   "scatterSeed",
   "freeSpacingX",
   "freeSpacingY",
+  "cellGap",
 ];
 
 // Value signature of everything that decides where holes land. Removed-hole

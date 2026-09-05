@@ -1,11 +1,15 @@
 import { DIN_PRESETS, HOLE_SHAPES, MORPH_SHAPE, PATTERN_TYPES } from "../../core/constants.js";
 import { useEditor } from "../EditorContext.jsx";
 import { Dropdown, SliderRow } from "../controls/index.js";
-import { Section } from "./Section.jsx";
+import { Section, hintStyle } from "./Section.jsx";
 
 export function PatternPanel() {
-  const { doc, api, theme, actions } = useEditor();
-  const morph = doc.hole.shape === MORPH_SHAPE;
+  const { doc, api, theme, actions, geometry } = useEditor();
+  // Voronoi cuts each hole to its own cell, so the shape dropdown below is not
+  // driving anything while it is selected — and saying so is better than leaving
+  // someone to work out why changing it does nothing.
+  const imposedShape = geometry.holeShape !== doc.hole.shape;
+  const morph = geometry.holeShape === MORPH_SHAPE;
   const mix = doc.hole.shapeMix;
   return (
     <Section title="Pattern & Hole" theme={theme}>
@@ -32,6 +36,14 @@ export function PatternPanel() {
           theme={theme}
         />
       </div>
+      {imposedShape && (
+        <div style={{ marginTop: 10 }}>
+          <div style={hintStyle(theme)}>
+            {doc.layout.type} gives every hole its own cell outline, so the hole shape is not used. The hole size sets
+            how big a cell is, and the edge gap sets the metal left between two of them.
+          </div>
+        </div>
+      )}
       {/* The superellipse is the one shape with a free parameter, and the same
           one the `shape` field channel morphs — this slider sets where a hole
           with no controller over it sits. */}

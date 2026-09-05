@@ -601,6 +601,7 @@ test("no module let, var or ambient global in generateHoles' import closure", ()
     "src/layouts/radial-engine.js",
     "src/layouts/scatter.js",
     "src/layouts/spiral.js",
+    "src/layouts/voronoi.js",
   ]);
 
   for (const [href, src] of closure) {

@@ -76,3 +76,43 @@ test("SVG elements carry mm coordinates and a rotation transform when needed", (
     /^ {4}<rect x="-2\.000" y="-1\.000" width="4\.000" height="2\.000" rx="0\.500" ry="0\.500" fill="#000" +transform="rotate\(45\.00 0\.000 0\.000\)"\/>\n$/
   );
 });
+
+// ─── Polygon: the one outline a layout imposes rather than a document choosing ───
+
+test("the polygon shape reads its outline off the hole", () => {
+  // A 10 mm square cell, its site 1 mm off centre — which is what a Voronoi site
+  // is, and the reason none of this can go through the w × h box.
+  const square = [
+    [-4, -6],
+    [6, -6],
+    [6, 4],
+    [-4, 4],
+  ];
+  const cell = hole(20, 20, 10, 10, { poly: square });
+  near(calcHoleArea("Polygon", 10, 10, 0, square), 100);
+  assert.equal(isPointInsideHole(25, 23, cell, "Polygon"), true);
+  assert.equal(isPointInsideHole(27, 20, cell, "Polygon"), false, "outside the cell, inside the w × h box");
+  // An angle nothing draws must not turn the hit test either.
+  assert.equal(isPointInsideHole(25, 23, { ...cell, angle: Math.PI / 2 }, "Polygon"), true);
+
+  // The clearance is the polygon one, measured between the outlines in place.
+  const right = hole(33, 20, 10, 10, { poly: square });
+  near(calcShapeGap(cell, right, "Polygon"), 3, 1e-9);
+  assert.equal(checkShapeOverlap(cell, right, "Polygon"), false);
+  assert.equal(checkShapeOverlap(cell, hole(25, 20, 10, 10, { poly: square }), "Polygon"), true);
+
+  // A hole with no outline draws nothing and bridges nothing, rather than
+  // throwing or reading as a zero-width overlap with its neighbour.
+  const empty = hole(0, 0, 1, 1);
+  near(calcHoleArea("Polygon", 1, 1, 0, undefined), 0);
+  assert.equal(isPointInsideHole(0, 0, empty, "Polygon"), false);
+  assert.equal(calcShapeGap(empty, cell, "Polygon"), Infinity);
+  assert.match(holeSVGElement(0, 0, "Polygon", 1, 1, 'fill="#000"', "", 0, 0), /^ {4}<path d="" fill="#000" \/>\n$/);
+});
+
+test("the polygon shape is not a shape a document may name", () => {
+  // It is imposed by a layout, never chosen: a document that named it would be
+  // asking for holes with no outline to draw.
+  assert.ok(SHAPES.Polygon, "the registry has it");
+  assert.equal(HOLE_SHAPES.includes("Polygon"), false, "the dropdown does not offer it");
+});

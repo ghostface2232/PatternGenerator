@@ -20,6 +20,10 @@ export function DimensionsPanel() {
   // Refusing is only the better answer if it says so: an empty canvas with no
   // explanation is worse than either.
   const tooFine = (g.isCrosshatch || g.usesFreeSpacing) && stats.holeCount === 0 && !g.crossDegenerate;
+  // Voronoi draws each hole as its own cell, so the controls that shape the
+  // chosen hole — its orientation and its corner radius — have nothing to act
+  // on. The size sliders stay: they still set how big a cell is.
+  const imposedShape = g.holeShape !== hole.shape;
 
   return (
     <Section title="Dimensions" theme={theme}>
@@ -40,7 +44,7 @@ export function DimensionsPanel() {
           ◆ Staggered 60° interlocks diamonds into a rhombus lattice — a seamless fit at 0 gap.
         </div>
       )}
-      {hole.shape === "Diamond" && (
+      {hole.shape === "Diamond" && !imposedShape && (
         <SegRow
           label="Diamond Orientation"
           options={DIAMOND_ORIENTATIONS}
@@ -105,7 +109,7 @@ export function DimensionsPanel() {
               dark={dark}
             />
           )}
-          {hole.shape === "Rectangle" && (
+          {hole.shape === "Rectangle" && !imposedShape && (
             <SliderRow
               label="Hole Corner R"
               value={hole.cornerRadius}
@@ -117,7 +121,7 @@ export function DimensionsPanel() {
               dark={dark}
             />
           )}
-          {(hole.shape === "Diamond" || hole.shape === "Triangle") && (
+          {(hole.shape === "Diamond" || hole.shape === "Triangle") && !imposedShape && (
             <SliderRow
               label="Hole Corner R"
               value={hole.cornerRadius}
@@ -142,12 +146,28 @@ export function DimensionsPanel() {
           dark={dark}
         />
       )}
-      {hole.shape === "Hexagon" && (
+      {hole.shape === "Hexagon" && !imposedShape && (
         <SliderRow
           label="Hole Corner R"
           value={hole.cornerRadius}
           min={0}
           max={(Math.sqrt(3) * hole.diameter) / 4}
+          step={0.1}
+          onChange={v => api.set("hole.cornerRadius", v)}
+          unit="mm"
+          dark={dark}
+        />
+      )}
+      {/* A Voronoi cell has no corner radius of its own to inherit, so this is
+          the one control the mode adds to the hole block. Each cell clamps it to
+          what its own corners can take, so a value past that simply rounds them
+          as far as they go. */}
+      {layout.type === "Voronoi" && (
+        <SliderRow
+          label="Cell Corner R"
+          value={hole.cornerRadius}
+          min={0}
+          max={10}
           step={0.1}
           onChange={v => api.set("hole.cornerRadius", v)}
           unit="mm"
@@ -333,9 +353,12 @@ export function DimensionsPanel() {
         </>
       )}
 
-      {/* Scatter is the one layout that draws random numbers, so its seed is part
-          of the document: the same seed places the same holes everywhere. */}
-      {layout.type === "Scatter" && (
+      {/* Scatter and Voronoi are the layouts that draw random numbers, so the
+          seed is part of the document: the same seed places the same holes
+          everywhere. They share one seed because they share one point set —
+          Voronoi cells are the Scatter points' cells — so switching between the
+          two modes keeps the arrangement rather than reshuffling it. */}
+      {(layout.type === "Scatter" || layout.type === "Voronoi") && (
         <>
           <SliderRow
             label="Scatter Seed"
@@ -488,7 +511,7 @@ export function DimensionsPanel() {
             </div>
           )}
           <SliderRow
-            label={layout.type === "Spiral" ? "Along Gap" : layout.type === "Path" ? "Along Gap" : "Edge Gap"}
+            label={layout.type === "Spiral" || layout.type === "Path" ? "Along Gap" : "Edge Gap"}
             value={layout.edgeGapX}
             min={0}
             max={50}
@@ -498,7 +521,13 @@ export function DimensionsPanel() {
             dark={dark}
           />
           <PitchInfo
-            label={layout.type === "Spiral" || layout.type === "Path" ? "step along the curve" : "min centre spacing"}
+            label={
+              layout.type === "Spiral" || layout.type === "Path"
+                ? "step along the curve"
+                : layout.type === "Voronoi"
+                  ? "min site spacing"
+                  : "min centre spacing"
+            }
             value={g.freeSpacingX}
             dark={dark}
           />
@@ -524,7 +553,9 @@ export function DimensionsPanel() {
                 ? "Archimedean spiral · equal steps along the arm"
                 : layout.type === "Path"
                   ? "Equal steps along each curve · drag the vertices on the canvas"
-                  : "Golden angle · Fermat spiral"}
+                  : layout.type === "Voronoi"
+                    ? `Voronoi cells · ${layout.edgeGapX.toFixed(2)} mm of metal between any two`
+                    : "Golden angle · Fermat spiral"}
           </div>
         </>
       ) : g.isCrosshatch ? (

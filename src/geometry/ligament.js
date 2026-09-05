@@ -2,7 +2,30 @@
 // two holes). Both use a coarse spatial hash so only nearby holes are compared.
 import { PERF_MODE_HOLE_LIMIT } from "../core/constants.js";
 import { forEachNeighbourPair } from "./spatial-hash.js";
-import { calcShapeGap, checkShapeOverlap } from "./shapes.js";
+import { calcShapeGap, checkShapeOverlap, holeVertices } from "./shapes.js";
+
+// A radius about each hole's own origin that contains the whole of it, so that
+// `distance − reachᵢ − reachⱼ` is a lower bound on the clearance between two
+// holes, computable in one hypot.
+//
+// Both searches below are grids of candidate pairs refined by an exact test, and
+// the exact test is the expensive half — for a polygon it is every vertex of one
+// against every edge of the other, twice over. The Voronoi cells are where that
+// bites: their outlines carry a dozen vertices each, the grid has to be sized
+// for the largest cell on the sheet, and most of the pairs it then visits are
+// nowhere near touching. The bound rejects those without measuring them.
+//
+// A hole with no polygon outline falls back to the half-diagonal of its w × h
+// box, which contains every shape here at any rotation.
+function holeReaches(holes, shape) {
+  return holes.map(hole => {
+    const verts = holeVertices(hole, shape);
+    if (!verts?.length) return Math.hypot(hole.w, hole.h) / 2;
+    let reach = 0;
+    for (const [x, y] of verts) reach = Math.max(reach, Math.hypot(x - hole.x, y - hole.y));
+    return reach;
+  });
+}
 
 // How far apart the holes actually are, from the holes themselves. The layout
 // modes each report a nominal pitch, but Scatter, Spiral and Fibonacci can be
@@ -42,8 +65,12 @@ export function findOverlaps(holes, shape) {
   const overlaps = new Set();
   if (holes.length > PERF_MODE_HOLE_LIMIT) return overlaps;
   const gridSize = Math.max(0.001, ...holes.map(h => Math.max(h.w, h.h)));
+  const reach = holeReaches(holes, shape);
   forEachNeighbourPair(holes, gridSize, (i, j) => {
-    if (checkShapeOverlap(holes[i], holes[j], shape)) {
+    const a = holes[i],
+      b = holes[j];
+    if (Math.hypot(b.x - a.x, b.y - a.y) - reach[i] - reach[j] > 0) return;
+    if (checkShapeOverlap(a, b, shape)) {
       overlaps.add(i);
       overlaps.add(j);
     }
@@ -58,8 +85,15 @@ export function calcMinLigament(holes, shape, nominalSpacing = 0) {
   let minGap = Infinity;
   const maxExtent = Math.max(0.001, ...holes.map(h => Math.max(h.w, h.h)));
   const gridSize = Math.max(maxExtent * 2, nominalSpacing * 1.5, neighbourDistanceFloor(holes) * 2);
+  const reach = holeReaches(holes, shape);
   forEachNeighbourPair(holes, gridSize, (i, j) => {
-    const g = calcShapeGap(holes[i], holes[j], shape);
+    const a = holes[i],
+      b = holes[j];
+    // Only pairs that could still beat the narrowest bridge found so far are
+    // measured exactly. The bound is a lower one, so a pair it skips was never
+    // the answer — the result is the same figure, reached without the work.
+    if (Math.hypot(b.x - a.x, b.y - a.y) - reach[i] - reach[j] >= minGap) return;
+    const g = calcShapeGap(a, b, shape);
     if (g < minGap) minGap = g;
   });
   return minGap === Infinity ? null : Math.max(0, minGap);

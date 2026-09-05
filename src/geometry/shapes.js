@@ -10,10 +10,12 @@
 // w = horizontal extent, h = vertical extent, both in mm. Rotation is a per-hole
 // `angle` (radians) applied by the callers below, so shape code stays canonical.
 //
-// `n` is the superellipse exponent, and only Superellipse reads it: it is the one
-// shape whose outline varies per hole, because the `shape` field channel morphs
-// it (fields/controllers.js). Every other shape ignores the argument, and `gap`
-// reads `superN` off the hole objects it is handed rather than taking it apart.
+// `n` is the per-hole OUTLINE parameter, and only two shapes read it: the
+// superellipse exponent, which the `shape` field channel morphs per hole
+// (fields/controllers.js), and the cell polygon, which the Voronoi layout hands
+// to each hole individually. Every other shape ignores the argument. Callers get
+// it from `holeOutline(hole)` rather than reaching for either field by name, and
+// `gap` reads it off the hole objects it is handed.
 import {
   basePolyVerts,
   convexPolyGap,
@@ -273,9 +275,56 @@ const polyShape = name => ({
       holePolyVerts(name, h2.x, h2.y, h2.w, h2.h, h2.angle)
     );
   },
+  verts: (hole, w, h) => holePolyVerts(name, hole.x, hole.y, w, h, hole.angle),
   rotates: true,
   polygon: true,
 });
+
+// ─── Polygon (one outline per hole) ───────────────────────────────────
+// The shape whose outline is not a function of w, h and a corner radius at all:
+// the Voronoi layout gives every hole its own cell, already inset by half the
+// ligament, in coordinates relative to that hole's site. `w` and `h` are that
+// outline's bounding box, kept only because the generic machinery around it —
+// the search grid in ligament.js, the sampling box in boundary.js, the size
+// floor the variation cull reads — needs some measure of how big a hole is.
+//
+// Convex by construction (a Voronoi cell clipped by half-planes is), which is
+// what lets it borrow the same containment and clearance code the Diamond and
+// Triangle use. A concave outline would silently read as its convex hull here.
+const NO_POLY = [];
+const outlineOf = value => (Array.isArray(value) && value.length >= 3 ? value : NO_POLY);
+const absolutePoly = (verts, hole) => verts.map(([x, y]) => [hole.x + x, hole.y + y]);
+
+const Polygon = {
+  area(w, h, holeRadius, poly) {
+    const verts = outlineOf(poly);
+    return verts.length ? roundedPolyArea(verts, holeRadius) : 0;
+  },
+  trace(ctx, cx, cy, w, h, holeRadius, poly) {
+    const verts = outlineOf(poly);
+    if (verts.length) tracePolyPath(ctx, cx, cy, verts, holeRadius);
+  },
+  svg(x, y, w, h, holeRadius, poly) {
+    const verts = outlineOf(poly);
+    return `<path d="${verts.length ? roundedPolySVGPath(x, y, verts, holeRadius) : ""}"`;
+  },
+  contains(x, y, w, h, holeRadius, poly) {
+    const verts = outlineOf(poly);
+    return verts.length > 0 && isInsideRoundedPoly(x, y, verts, holeRadius);
+  },
+  gap(h1, h2) {
+    const a = outlineOf(h1.poly),
+      b = outlineOf(h2.poly);
+    // No outline is not "these two touch": a hole with nothing to draw cannot
+    // be the narrowest bridge on the sheet, and Infinity is what leaves the
+    // minimum to the pairs that do have one.
+    if (!a.length || !b.length) return Infinity;
+    return convexPolyGap(absolutePoly(a, h1), absolutePoly(b, h2));
+  },
+  verts: (hole, w, h, poly) => absolutePoly(outlineOf(poly), hole),
+  rotates: false,
+  polygon: true,
+};
 
 // ─── Circle ───────────────────────────────────────────────────────────
 const Circle = {
@@ -348,6 +397,10 @@ const Superellipse = {
   rotates: true,
 };
 
+// `Polygon` is deliberately absent from HOLE_SHAPES in core/constants.js: it is
+// not a shape anyone picks, it is the shape a layout imposes. Voronoi is the
+// only mode that produces it, and `effectiveHoleShape` in core/pipeline.js is
+// the one place that decides so.
 export const SHAPES = {
   Circle,
   Rectangle,
@@ -356,9 +409,28 @@ export const SHAPES = {
   Diamond: polyShape("Diamond"),
   Triangle: polyShape("Triangle"),
   Superellipse,
+  Polygon,
 };
 
 export const getShape = name => SHAPES[name] || SHAPES.Circle;
+
+// The per-hole outline parameter, entry profile and exit profile. One accessor
+// each, so every drawing, hit-testing and export path hands the shape whatever
+// that shape reads without knowing which one it has.
+export const holeOutline = hole => hole.poly ?? hole.superN;
+export const holeExitOutline = hole => hole.exitPoly ?? hole.superN;
+
+// Absolute outline vertices of a polygon-shaped hole, or null for the shapes
+// that are not polygons. Callers use it to bound a hole exactly rather than
+// through the rotated w × h box, which no polygon fills and which the Voronoi
+// cell — not even centred on its own site — would badly misplace.
+export function holeVertices(hole, shape, useExit = false) {
+  const def = getShape(shape);
+  if (!def.polygon) return null;
+  const w = useExit ? hole.exitW : hole.w;
+  const h = useExit ? hole.exitH : hole.h;
+  return def.verts(hole, w, h, useExit ? holeExitOutline(hole) : holeOutline(hole));
+}
 
 // ─── Shape-agnostic entry points (the API the rest of the app uses) ───
 export function calcHoleArea(shape, w, h, holeRadius, n) {
@@ -395,14 +467,19 @@ export function isPointInsideHole(px, py, hole, shape, useExit = false) {
   const h = useExit ? hole.exitH : hole.h;
   const radius = useExit ? hole.exitHoleRadius : hole.holeRadius;
   if (w <= 0 || h <= 0) return false;
-  const angle = hole.angle || 0;
+  const def = getShape(shape);
+  // Only the shapes that are actually drawn rotated are un-rotated here. The
+  // rest carry an angle that nothing draws — Circle by symmetry, a Voronoi cell
+  // because its outline is already in sheet directions — and turning the query
+  // point by it would test the wrong place.
+  const angle = def.rotates ? hole.angle || 0 : 0;
   const cos = Math.cos(-angle),
     sin = Math.sin(-angle);
   const dx = px - hole.x,
     dy = py - hole.y;
   const x = dx * cos - dy * sin,
     y = dx * sin + dy * cos;
-  return getShape(shape).contains(x, y, w, h, radius, hole.superN);
+  return def.contains(x, y, w, h, radius, useExit ? holeExitOutline(hole) : holeOutline(hole));
 }
 
 // Signed clearance between two holes of the same shape (< 0 when they overlap).

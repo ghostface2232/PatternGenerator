@@ -25,6 +25,7 @@ import { generateScatterHoles } from "./scatter.js";
 import { generateSpiralHoles } from "./spiral.js";
 import { generateFibonacciHoles } from "./fibonacci.js";
 import { generatePathHoles } from "./path.js";
+import { generateVoronoiHoles } from "./voronoi.js";
 
 // One entry per mode the Type dropdown offers, in that order.
 //
@@ -51,6 +52,7 @@ export const LAYOUTS = {
   Spiral: { family: "free", spacingModel: "free", spacing: true, theoretical: false },
   Fibonacci: { family: "free", spacingModel: "free", spacing: true, theoretical: false },
   Path: { family: "path", spacingModel: "free", spacing: true, theoretical: false },
+  Voronoi: { family: "voronoi", spacingModel: "free", spacing: true, theoretical: false },
 };
 
 export const layoutFamily = patternType => LAYOUTS[patternType]?.family ?? "grid";
@@ -122,6 +124,7 @@ export function generateHoles(params, placement = null) {
     scatterSeed,
     freeSpacingX,
     freeSpacingY,
+    cellGap,
   } = params;
   const hw = (holeW || diameter) / 2,
     hh = (holeH || diameter) / 2;
@@ -225,6 +228,21 @@ export function generateHoles(params, placement = null) {
         holeAngle: flatTheta,
       })
     );
+  }
+
+  if (patternType === "Voronoi") {
+    // Not wrapped in `clipToBoundary`: the cells are clipped against the rounded
+    // boundary as POLYGONS, edge by edge, so none of them crosses it. Filtering
+    // by centre afterwards would drop a cell whose site fell in a rounded corner
+    // even though the part of it inside the boundary is a perfectly good hole.
+    return generateVoronoiHoles({
+      bounds,
+      cornerRadius,
+      minDist: freeSpacingX,
+      gap: cellGap,
+      seed: scatterSeed,
+      spacing: field,
+    });
   }
 
   // Explicit rather than a fallthrough. A mode added to PATTERN_TYPES and to

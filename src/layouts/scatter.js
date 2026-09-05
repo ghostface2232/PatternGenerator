@@ -38,8 +38,9 @@ export const MAX_SCATTER_HOLES = 250_000;
 // Discs of radius r/2 pack at most π/(2√3) of the plane, so no dart-throwing can
 // place more than this many centres per unit area at minimum distance r. The
 // bound is what the refusal above is measured against; Bridson in practice lands
-// around 0.7/r², well under it.
-const MAX_PACKING_DENSITY = 1.16;
+// around 0.7/r², well under it. The Voronoi layout draws its sites from this same
+// sampler and measures its own, lower cap against the same bound.
+export const MAX_PACKING_DENSITY = 1.16;
 
 export function generateScatterHoles({ bounds, minDist, seed, spacing, holeAngle = 0 }) {
   const { xMin, xMax, yMin, yMax } = bounds;

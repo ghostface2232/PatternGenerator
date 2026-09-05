@@ -3,8 +3,7 @@
 // inscribed circle in Radial "Circle" fill mode. Everything that needs to know
 // "is this point perforated?" goes through here so preview, stats and exports agree.
 import { isInsideRoundedRect, roundedRectArea } from "./rounded-rect.js";
-import { holePolyVerts } from "./polygon.js";
-import { getShape, isPointInsideHole } from "./shapes.js";
+import { holeVertices, isPointInsideHole } from "./shapes.js";
 
 // Normalised description of the boundary from generator params.
 export function perfBoundsFromParams(params) {
@@ -84,11 +83,13 @@ export function estimateVisibleHoleArea(hole, shape, bounds, useExit = false) {
   const exactArea = useExit ? hole.exitArea : hole.area;
   if (w <= 0 || h <= 0) return 0;
   const angle = hole.angle || 0;
+  const polyVerts = holeVertices(hole, shape, useExit);
   let left, right, top, bottom;
-  if (getShape(shape).polygon) {
-    // Polygon shapes are not centred in their w×h box (triangle origin = incenter),
-    // so take the exact bounding box of the rotated vertices.
-    const verts = holePolyVerts(shape, hole.x, hole.y, w, h, angle);
+  if (polyVerts?.length) {
+    // Polygon shapes are not centred in their w×h box (triangle origin = incenter,
+    // Voronoi cell = wherever its site fell), so take the exact bounding box of
+    // the vertices themselves.
+    const verts = polyVerts;
     left = Math.min(...verts.map(v => v[0]));
     right = Math.max(...verts.map(v => v[0]));
     top = Math.min(...verts.map(v => v[1]));

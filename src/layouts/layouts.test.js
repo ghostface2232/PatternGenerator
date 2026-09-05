@@ -10,6 +10,7 @@ import { MIN_CROSS_SIN } from "./crosshatch.js";
 import { MAX_SCATTER_HOLES } from "./scatter.js";
 import { generateSpiralHoles } from "./spiral.js";
 import { generateFibonacciHoles } from "./fibonacci.js";
+import { holeVertices } from "../geometry/shapes.js";
 import { compileControllers } from "../fields/controllers.js";
 import { DOC_LIMITS, MAX_PATHS, MAX_PATH_POINTS } from "../core/constants.js";
 import { patternSignature } from "../core/pipeline.js";
@@ -37,14 +38,14 @@ const spacingController = (patch = {}) => ({
 const withSpacing = (patch, controller = {}) =>
   doc({ ...patch, "fields.enabled": true, "fields.controllers": [spacingController(controller)] });
 
-test("the registry and the document's vocabulary describe the same ten modes", () => {
+test("the registry and the document's vocabulary describe the same eleven modes", () => {
   // The document may hold any name from PATTERN_TYPES and the registry decides
   // what each one means, so a mode in one and not the other is either a type the
   // dropdown offers and nothing can generate, or a generator nothing can reach.
   assert.deepEqual(Object.keys(LAYOUTS), PATTERN_TYPES);
-  assert.equal(PATTERN_TYPES.length, 10);
+  assert.equal(PATTERN_TYPES.length, 11);
   for (const type of PATTERN_TYPES) {
-    assert.ok(["grid", "radial", "crosshatch", "free", "path"].includes(LAYOUTS[type].family), type);
+    assert.ok(["grid", "radial", "crosshatch", "free", "path", "voronoi"].includes(LAYOUTS[type].family), type);
     assert.ok(["grid", "radial", "free"].includes(LAYOUTS[type].spacingModel), type);
   }
   // And validation accepts every one of them rather than falling back.
@@ -77,7 +78,10 @@ test("every mode fills the sheet, stays inside the boundary and exports", () => 
       activeHoles.every(h => h.x >= -pad && h.x <= 200 + pad && h.y >= -pad && h.y <= 200 + pad),
       `${type}: a hole escaped the sheet`
     );
-    assert.equal(generateSVGString(activeHoles, params).match(/<circle /g).length, activeHoles.length, type);
+    // Circles unless the mode imposes its own outline, in which case every
+    // hole is a path of its own.
+    const element = type === "Voronoi" ? /<path /g : /<circle /g;
+    assert.equal(generateSVGString(activeHoles, params).match(element).length, activeHoles.length, type);
   }
 });
 
@@ -214,10 +218,16 @@ test("the boundary corner radius clips every mode", () => {
     if (type !== "Path") {
       assert.ok(rounded.activeHoles.length < square, `${type}: a full-radius boundary must drop the corners`);
     }
-    assert.ok(
-      rounded.activeHoles.every(h => Math.hypot(h.x - 100, h.y - 100) <= 100 + 1e-6),
-      `${type}: a hole survived outside the circle`
-    );
+    // Voronoi is the mode whose holes are not points: a cell is clipped to the
+    // boundary as a polygon, so its SITE may well sit outside the circle while
+    // every corner of the hole it draws is inside. Checking the centre would
+    // pass a mode that had drawn half a cell past the edge and fail this one for
+    // drawing nothing wrong at all, so the check follows the outline.
+    const outside =
+      type === "Voronoi"
+        ? h => holeVertices(h, "Polygon").some(([x, y]) => Math.hypot(x - 100, y - 100) > 100 + 1e-6)
+        : h => Math.hypot(h.x - 100, h.y - 100) > 100 + 1e-6;
+    assert.ok(!rounded.activeHoles.some(outside), `${type}: a hole survived outside the circle`);
   }
   const corners = {
     "layout.type": "Path",
@@ -717,4 +727,125 @@ test("a path refuses a step it cannot draw rather than covering part of a curve"
   const holes = place(single);
   assert.ok(holes.length > 10000, `${holes.length} holes`);
   assert.ok(Math.min(...holes.map(h => h.y)) < 60 && Math.max(...holes.map(h => h.y)) > 140);
+});
+
+// ─── Voronoi ──────────────────────────────────────────────────────────
+
+test("voronoi cells leave exactly the edge gap between any two of them", () => {
+  // The one property the mode exists for: no lattice at all, and still a
+  // constant ligament, because two neighbouring cells share a Voronoi edge and
+  // each pulls back by half the gap from it.
+  for (const gap of [1, 3, 8]) {
+    const { activeHoles, stats, overlaps } = computePattern(doc({ "layout.type": "Voronoi", "layout.edgeGapX": gap }));
+    assert.ok(activeHoles.length > 100, `gap ${gap}: only ${activeHoles.length} cells`);
+    assert.equal(overlaps.size, 0, `gap ${gap}: cells overlap`);
+    assert.ok(stats.minLigament >= gap - 1e-6, `gap ${gap}: ligament ${stats.minLigament}`);
+    // And it is the gap, not merely at least it: somewhere on a sheet of
+    // hundreds of cells two of them face each other across a full shared edge.
+    assert.ok(stats.minLigament <= gap + 0.01, `gap ${gap}: ligament ${stats.minLigament}`);
+  }
+});
+
+test("voronoi cells tile the panel, inside the boundary and without gaps of their own", () => {
+  const { activeHoles, stats, params } = computePattern(
+    doc({ "layout.type": "Voronoi", "layout.edgeGapX": 2, "boundary.margins.top": 10 })
+  );
+  const gap = 2;
+  for (const cell of activeHoles) {
+    for (const [x, y] of holeVertices(cell, "Polygon")) {
+      assert.ok(x >= gap / 2 - 1e-6 && x <= 200 - gap / 2 + 1e-6, `cell vertex at x ${x}`);
+      assert.ok(y >= 10 + gap / 2 - 1e-6 && y <= 200 - gap / 2 + 1e-6, `cell vertex at y ${y}`);
+    }
+  }
+  // A tessellation minus its ligaments: what is left is most of the panel, and
+  // the statistics have to say so rather than reporting a lattice's cell.
+  assert.equal(stats.useCountedOAR, true);
+  assert.ok(stats.displayOAR > 50 && stats.displayOAR < 90, `OAR ${stats.displayOAR}`);
+  assert.equal(params.holeShape, "Polygon", "the layout imposes the shape");
+});
+
+test("the voronoi and scatter modes share one point set, and one seed", () => {
+  const at = (type, seed) => computePattern(doc({ "layout.type": type, "layout.scatter.seed": seed }));
+  const cells = at("Voronoi", 7);
+  const points = at("Scatter", 7);
+  // Every cell sits on a scattered hole. Not merely the same count: switching
+  // between the two modes has to keep the arrangement, which is the whole reason
+  // they share a seed rather than carrying one each.
+  const sites = new Set(points.baseHoles.map(h => `${h.x},${h.y}`));
+  assert.ok(cells.baseHoles.length > 100);
+  assert.ok(
+    cells.baseHoles.every(h => sites.has(`${h.x},${h.y}`)),
+    "a cell was built on a site the scatter never placed"
+  );
+  // A different seed is a different arrangement at the same density.
+  const other = at("Voronoi", 8);
+  assert.notEqual(JSON.stringify(cells.baseHoles), JSON.stringify(other.baseHoles));
+  assert.ok(Math.abs(cells.baseHoles.length - other.baseHoles.length) < cells.baseHoles.length * 0.15);
+});
+
+test("a voronoi document signs the gap as well as the pitch", () => {
+  // freeSpacingX folds the hole size and the edge gap into one number, and the
+  // two split it differently: a 6 mm hole at a 2 mm gap and a 5 mm hole at a
+  // 3 mm gap sow their sites identically and cut very different cells. Signing
+  // only the sum would leave `removedHoles` pointing at the wrong holes across
+  // that edit — and the two patterns are genuinely different, so the signature
+  // has to move.
+  const wide = doc({ "layout.type": "Voronoi", "hole.diameter": 6, "layout.edgeGapX": 2 });
+  const tight = doc({ "layout.type": "Voronoi", "hole.diameter": 5, "layout.edgeGapX": 3 });
+  assert.equal(deriveGeometry(wide).freeSpacingX, deriveGeometry(tight).freeSpacingX, "same site spacing");
+  assert.notEqual(positions(wide), positions(tight), "different cells");
+  assert.notEqual(patternSignature(wide), patternSignature(tight));
+});
+
+test("a spacing field varies the size of the cells, not just where the sites fall", () => {
+  const { activeHoles } = computePattern(
+    withSpacing({ "layout.type": "Voronoi" }, { target: 2.5, radius: 60, falloff: "hard" })
+  );
+  const near = activeHoles.filter(h => Math.hypot(h.x - 100, h.y - 100) < 40);
+  const far = activeHoles.filter(h => Math.hypot(h.x - 100, h.y - 100) > 90);
+  assert.ok(near.length > 5 && far.length > 5);
+  const mean = list => list.reduce((sum, h) => sum + h.area, 0) / list.length;
+  assert.ok(mean(near) > mean(far) * 2, `${mean(near)} mm² inside vs ${mean(far)} mm² outside`);
+});
+
+test("voronoi refuses a cell count it cannot draw, and rounds its corners when asked", () => {
+  // A metre square of half-millimetre cells is past the cap, and the mode places
+  // nothing rather than filling a disc in the middle of a blank sheet.
+  const tooFine = doc({
+    "layout.type": "Voronoi",
+    "hole.diameter": 0.5,
+    "layout.edgeGapX": 0,
+    "sheet.w": 1000,
+    "sheet.h": 1000,
+  });
+  assert.equal(place(tooFine).length, 0);
+
+  // The corner radius is the cell's own, clamped per cell to what its corners
+  // can take, so it takes area off every one of them without closing any.
+  const sharp = computePattern(doc({ "layout.type": "Voronoi" }));
+  const round = computePattern(doc({ "layout.type": "Voronoi", "hole.cornerRadius": 2 }));
+  assert.equal(sharp.activeHoles.length, round.activeHoles.length);
+  assert.ok(round.stats.totalHoleArea < sharp.stats.totalHoleArea * 0.99);
+  assert.ok(round.stats.totalHoleArea > sharp.stats.totalHoleArea * 0.7);
+});
+
+test("a voronoi cell shrinks under the size channel and erodes under the taper", () => {
+  const base = computePattern(doc({ "layout.type": "Voronoi" }));
+  // Half-size cells cover a quarter of the area and leave far more metal, but
+  // there are exactly as many of them: the size channel redraws holes, it never
+  // moves or removes them.
+  const small = computePattern(
+    doc({ "layout.type": "Voronoi", "variation.enabled": true, "variation.minScale": 0.5, "variation.maxScale": 0.5 })
+  );
+  assert.equal(small.activeHoles.length, base.activeHoles.length);
+  assert.ok(Math.abs(small.stats.totalHoleArea / base.stats.totalHoleArea - 0.25) < 0.02);
+
+  // The taper erodes the cell inward on every edge, so the exit face is smaller
+  // than the entry face by more than nothing and less than everything.
+  const tapered = computePattern(
+    doc({ "layout.type": "Voronoi", "taper.enabled": true, "taper.thickness": 2, "taper.angle": 10 })
+  );
+  assert.ok(tapered.stats.totalExitHoleArea < tapered.stats.totalHoleArea);
+  assert.ok(tapered.stats.totalExitHoleArea > tapered.stats.totalHoleArea * 0.4);
+  assert.ok(tapered.activeHoles.every(h => h.exitW <= h.w + 1e-9 && h.exitH <= h.h + 1e-9));
 });

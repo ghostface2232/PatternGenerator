@@ -186,7 +186,9 @@ export default function App() {
   );
   const removedSet = useMemo(() => new Set(doc.removedHoles), [doc.removedHoles]);
   const activeHoles = useMemo(() => filterActive(holes, removedSet), [holes, removedSet]);
-  const overlaps = useMemo(() => findOverlaps(activeHoles, hole.shape), [activeHoles, hole.shape]);
+  // `geometry.holeShape`, not `hole.shape`: Voronoi draws each hole as its own
+  // cell, and two cells are compared as the polygons they are.
+  const overlaps = useMemo(() => findOverlaps(activeHoles, geometry.holeShape), [activeHoles, geometry.holeShape]);
   const stats = useMemo(
     () => computeStats({ doc: holeDoc, g: geometry, params, holes, activeHoles, removedSet, overlaps, field }),
     [holeDoc, geometry, params, holes, activeHoles, removedSet, overlaps, field]

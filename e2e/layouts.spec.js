@@ -41,7 +41,7 @@ test.beforeEach(async ({ page }) => {
   await expect(stat(page, "stat-holes")).toBeVisible();
 });
 
-for (const type of ["Cross-hatch", "Scatter", "Spiral", "Fibonacci", "Path"]) {
+for (const type of ["Cross-hatch", "Scatter", "Spiral", "Fibonacci", "Path", "Voronoi"]) {
   test(`${type} draws a pattern and exports it`, async ({ page }) => {
     await choose(page, "Type", type);
     const count = await holes(page);
@@ -60,7 +60,8 @@ for (const type of ["Cross-hatch", "Scatter", "Spiral", "Fibonacci", "Path"]) {
     for await (const chunk of stream) chunks.push(chunk);
     const svg = Buffer.concat(chunks).toString("utf8");
     expect(svg).toContain('width="200mm" height="200mm"');
-    expect(svg.match(/<circle /g)).toHaveLength(count);
+    // Circles unless the mode gives every hole an outline of its own.
+    expect(svg.match(type === "Voronoi" ? /<path /g : /<circle /g)).toHaveLength(count);
   });
 }
 
@@ -332,4 +333,42 @@ test("the path edit mode takes the canvas from the other three", async ({ page }
   await enableFields(page);
   await page.getByRole("button", { name: "Edit field controllers on the canvas", exact: true }).click();
   await expect(edit).toHaveAttribute("aria-pressed", "false");
+});
+
+test("voronoi cuts cells with a constant ligament, and says the hole shape is not used", async ({ page }) => {
+  await choose(page, "Type", "Voronoi");
+  const cells = await holes(page);
+  expect(cells).toBeGreaterThan(100);
+  // The mode's whole claim: no lattice, and still exactly the edge gap of metal
+  // between any two cells.
+  expect(await ligament(page)).toBeCloseTo(3, 2);
+  await setSlider(page, "Edge Gap", 6);
+  expect(await ligament(page)).toBeCloseTo(6, 2);
+  // A wider ligament off the same panel is fewer, smaller cells.
+  expect(await holes(page)).toBeLessThan(cells);
+
+  // The shape dropdown still works, and still says so — it just is not driving
+  // anything while the layout is cutting its own outlines.
+  await expect(page.getByText(/gives every hole its own cell outline/)).toBeVisible();
+  await choose(page, "Hole Shape", "Hexagon");
+  await expect(page.getByText(/gives every hole its own cell outline/)).toBeVisible();
+  await expect(page.getByLabel("Cell Corner R", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Hole Corner R", { exact: true })).toHaveCount(0);
+});
+
+test("voronoi and scatter share one seed, so switching modes keeps the arrangement", async ({ page }) => {
+  await choose(page, "Type", "Scatter");
+  const points = await holes(page);
+  await page.getByRole("button", { name: "Shuffle the scatter seed", exact: true }).click();
+  const shuffled = await page.getByLabel("Scatter Seed", { exact: true }).inputValue();
+  const reshuffled = await holes(page);
+
+  await choose(page, "Type", "Voronoi");
+  // The same seed, carried over, and one cell per scattered point.
+  await expect(page.getByLabel("Scatter Seed", { exact: true })).toHaveValue(shuffled);
+  expect(await holes(page)).toBe(reshuffled);
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect(page.getByLabel("Scatter Seed", { exact: true })).toHaveValue("1");
+  expect(await holes(page)).toBe(points);
 });
