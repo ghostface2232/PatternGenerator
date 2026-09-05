@@ -2,8 +2,8 @@
 // scaled to millimetres, simplified to the roadmap's 0.05 mm and cut down to
 // the document's caps. Pure; the file reading and the question to the user
 // about an unknown scale are the UI's.
-import { MAX_BOUNDARY_POINTS, MAX_BOUNDARY_RINGS } from "../core/constants.js";
-import { normalizeRings, ringsBBox, simplifyRing } from "./rings.js";
+import { MAX_BOUNDARY_POINTS, MAX_BOUNDARY_RINGS, MAX_CUSTOM_POINTS, MAX_CUSTOM_RINGS } from "../core/constants.js";
+import { normalizeRings, ringsBBox, simplifyRing, unitRings } from "./rings.js";
 import { parseSVGOutline } from "./svg-path.js";
 import { signedPolyArea } from "./polygon.js";
 
@@ -61,4 +61,35 @@ export function svgToRings(text, { scale, centre = null, ...caps } = {}) {
     rings = rings.map(ring => ring.map(([x, y]) => [x + dx, y + dy]));
   }
   return fitRings(rings, caps);
+}
+
+// The file's outlines as one custom HOLE shape: rings fitted to the unit
+// square (bounding box exactly, proportions remembered in `aspect`), simplified
+// at a share of the outline's own size since a hole has no size yet. The
+// shape's name is the file's, without its extension.
+export function svgToUnitShape(text, fileName = "", caps = {}) {
+  const parsed = parseSVGOutline(text, 1e-3 * outlineSize(parseSVGOutline(text, 1).shapes));
+  const rings = parsed.shapes.flatMap(shape => shape.rings);
+  const size = outlineSize(parsed.shapes);
+  const fitted = fitRings(rings, {
+    maxRings: caps.maxRings ?? MAX_CUSTOM_RINGS,
+    maxPoints: caps.maxPoints ?? MAX_CUSTOM_POINTS,
+    tolerance: 0.002 * size,
+  });
+  const unit = unitRings(fitted);
+  return {
+    kind: "svg",
+    name: String(fileName || "outline")
+      .replace(/\.svg$/i, "")
+      .slice(0, 60),
+    rings: unit.rings,
+    aspect: unit.aspect,
+    lockAspect: true,
+    layers: [],
+  };
+}
+
+function outlineSize(shapes) {
+  const box = ringsBBox(shapes.flatMap(shape => shape.rings));
+  return Math.max(1e-9, box.right - box.left, box.bottom - box.top);
 }

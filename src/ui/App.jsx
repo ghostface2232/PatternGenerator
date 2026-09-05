@@ -33,7 +33,7 @@ import { generateHoles, layoutPlacementChannels } from "../layouts/index.js";
 import { addPathVertex, newPath, removePathVertex } from "../layouts/path-gizmo.js";
 import { createCutout } from "../geometry/boundary.js";
 import { defaultBoundaryRings, insertBoundaryVertex, nearestBoundaryEdge, removeBoundaryVertex } from "../geometry/boundary-gizmo.js"; // prettier-ignore
-import { inspectSVG, svgToRings } from "../geometry/svg-import.js";
+import { inspectSVG, svgToRings, svgToUnitShape } from "../geometry/svg-import.js";
 import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
 import { EDITABLE_CHANNELS, MAX_CONTROLLERS, createController, imageChannels } from "../fields/controllers.js";
@@ -353,6 +353,21 @@ export default function App() {
         patch["hole.h"] = (patch["hole.w"] ?? hole.w) * (hole.custom.aspect || 1);
       }
       api.patch(patch);
+    };
+    // An SVG file as the hole: its outlines fitted to the unit square become
+    // the Custom shape, with the hole's height following its width at the
+    // outline's own proportions until the lock is released.
+    const importHoleSVG = async file => {
+      const text = await file.text();
+      const info = inspectSVG(text);
+      if (!info.isSVG) throw new Error("that is not an SVG file");
+      if (!info.hasOutline) throw new Error("the file has no closed outline (a path, rect, circle, ellipse or polygon)");
+      const custom = svgToUnitShape(text, file.name);
+      if (!custom.rings.length) throw new Error("the file's outline is too small to keep");
+      const current = api.ref.current.hole;
+      const w = CUSTOM_SIZE_SHAPES.includes(current.shape) ? current.w : current.diameter;
+      api.patch({ "hole.shape": CUSTOM_SHAPE, "hole.custom": custom, "hole.w": w, "hole.h": w * custom.aspect });
+      return true;
     };
     const setEdgeGapX = v =>
       api.patch(
@@ -811,6 +826,7 @@ export default function App() {
 
     return {
       setShape,
+      importHoleSVG,
       setEdgeGapX,
       setEdgeGapY,
       toggleGapLinked,

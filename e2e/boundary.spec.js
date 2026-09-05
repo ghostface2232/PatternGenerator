@@ -164,3 +164,29 @@ test("the four canvas modes are mutually exclusive", async ({ page }) => {
   await editBoundary.click();
   await expect(removal).toHaveAttribute("aria-checked", "false");
 });
+
+test("a preset hole shape has its own parameters, and an SVG file becomes a custom one", async ({ page }) => {
+  await page.getByRole("button", { name: "Hole Shape", exact: true }).click();
+  await page.getByRole("button", { name: "Star", exact: true }).click();
+  await expect(page.getByLabel("Inner Radius", { exact: true })).toHaveValue("0.5");
+  await expect(page.getByLabel("Points", { exact: true })).toHaveValue("5");
+  const fiveStar = await oar(page);
+  const points = page.getByLabel("Points", { exact: true });
+  await points.fill("8");
+  await points.press("Enter");
+  expect(await oar(page)).not.toBe(fiveStar);
+  await expect(stat(page, "stat-holes")).toHaveText("739");
+
+  // A bar with a hole through it, from a file: the Custom shape, sized by the
+  // width with the height following the outline's proportions.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><rect width="40" height="20" rx="5"/><circle cx="20" cy="10" r="4"/></svg>`;
+  await page.getByLabel("Hole outline file", { exact: true }).setInputFiles({ name: "badge.svg", mimeType: "image/svg+xml", buffer: Buffer.from(svg) }); // prettier-ignore
+  await expect(page.getByText(/badge · 2 outlines/)).toBeVisible();
+  await expect(page.getByLabel("Width (W)", { exact: true })).toHaveValue("5");
+  await expect(page.getByText(/Height \(H\): 2\.50 mm/)).toBeVisible();
+  const text = await download(page, "SVG");
+  expect(text).toContain('fill-rule="evenodd"');
+  // Releasing the lock hands the height back to its own slider.
+  await page.getByRole("switch", { name: "Keep proportions", exact: true }).click();
+  await expect(page.getByLabel("Height (H)", { exact: true })).toHaveValue("2.5");
+});

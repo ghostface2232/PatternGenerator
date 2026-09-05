@@ -517,3 +517,50 @@ test("the boundary's shape, rings, cutouts and trim flag are validated field by 
   assert.equal(computePattern(back).activeHoles.length, computePattern(grille).activeHoles.length);
   assert.ok(computePattern(back).activeHoles.length < 739, "the ellipse and the cutout took holes away");
 });
+
+test("the hole's preset parameters and custom outline are validated and round-trip", () => {
+  const doc = validateDocument({
+    hole: {
+      shape: "Custom",
+      ratio: 7,
+      count: "9",
+      custom: {
+        kind: "svg",
+        name: 42,
+        rings: [
+          [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]], // prettier-ignore
+          [
+            [-0.1, -0.1],
+            [0.1, "x"],
+            [0.1, 0.1],
+          ], // a bad vertex: dropped whole
+          [
+            [0, 0],
+            [1, 1],
+          ], // two vertices: not a ring
+        ],
+        aspect: 0,
+        lockAspect: "no",
+        layers: [{ shape: "Circle", role: "cut", x: 1e9, w: -3 }, { shape: "Blob" }, null],
+      },
+    },
+  });
+  assert.equal(doc.hole.shape, "Custom");
+  assert.equal(doc.hole.ratio, 1);
+  assert.equal(doc.hole.count, 9);
+  assert.equal(doc.hole.custom.kind, "svg");
+  assert.equal(doc.hole.custom.name, "");
+  assert.equal(doc.hole.custom.rings.length, 1);
+  assert.equal(doc.hole.custom.aspect, DOC_LIMITS["custom.aspect"][0]);
+  assert.equal(doc.hole.custom.lockAspect, true);
+  assert.equal(doc.hole.custom.layers.length, 1);
+  assert.equal(doc.hole.custom.layers[0].role, "union");
+  assert.equal(doc.hole.custom.layers[0].x, DOC_LIMITS["layer.coord"][1]);
+  assert.equal(doc.hole.custom.layers[0].w, DOC_LIMITS["layer.size"][0]);
+  // Rings that do not survive leave the shape with nothing: kind falls to none.
+  assert.equal(validateDocument({ hole: { custom: { kind: "svg", rings: [] } } }).hole.custom.kind, "none");
+  // And a document with a real outline round-trips, pattern and all.
+  const star = patchIn(createDocument(), { "hole.shape": "Star", "hole.ratio": 0.3, "hole.count": 7 });
+  assert.deepEqual(deserializeDocument(serializeDocument(star)), star);
+  assert.equal(computePattern(deserializeDocument(serializeDocument(star))).activeHoles.length, computePattern(star).activeHoles.length); // prettier-ignore
+});

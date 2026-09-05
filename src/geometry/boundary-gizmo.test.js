@@ -11,7 +11,7 @@ import {
   removeBoundaryVertex,
 } from "./boundary-gizmo.js";
 import { createCutout } from "./boundary.js";
-import { fitRings, inspectSVG, svgToRings } from "./svg-import.js";
+import { fitRings, inspectSVG, svgToRings, svgToUnitShape } from "./svg-import.js";
 import { circleRing, ringsArea, ringsBBox } from "./rings.js";
 import { DOC_LIMITS, MAX_BOUNDARY_POINTS, MAX_BOUNDARY_RINGS } from "../core/constants.js";
 
@@ -125,4 +125,19 @@ test("an SVG file becomes rings in millimetres, simplified and within the caps",
   );
   const fine = fitRings([circleRing(0, 0, 500, 5000)], { maxPoints: 100 });
   assert.ok(fine[0].length <= 100 && fine[0].length > 30, `${fine[0].length}`);
+});
+
+test("an SVG file becomes a custom hole outline in unit space", () => {
+  const file = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><rect x="10" y="10" width="80" height="20"/><circle cx="50" cy="20" r="5"/></svg>`;
+  const custom = svgToUnitShape(file, "badge.svg");
+  assert.equal(custom.kind, "svg");
+  assert.equal(custom.name, "badge");
+  assert.equal(custom.lockAspect, true);
+  assert.equal(custom.rings.length, 2);
+  near(custom.aspect, 0.25);
+  assert.deepEqual(ringsBBox(custom.rings), { left: -0.5, right: 0.5, top: -0.5, bottom: 0.5 });
+  // The circle is a counter: the outline's area is the bar less the disc, in
+  // unit terms 1 − π·(5/80)·(5/20).
+  near(ringsArea(custom.rings), 1 - (Math.PI * 25) / 1600, 0.003);
+  assert.equal(svgToUnitShape("<svg></svg>", "x").rings.length, 0);
 });

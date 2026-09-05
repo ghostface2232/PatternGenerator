@@ -1,10 +1,41 @@
-import { DIN_PRESETS, HOLE_SHAPES, MORPH_SHAPE, PATTERN_TYPES } from "../../core/constants.js";
+import { useRef, useState } from "react";
+import { Upload } from "lucide-react";
+import { CUSTOM_SHAPE, DIN_PRESETS, HOLE_SHAPES, MORPH_SHAPE, PATTERN_TYPES } from "../../core/constants.js";
 import { useEditor } from "../EditorContext.jsx";
 import { Dropdown, SliderRow } from "../controls/index.js";
+import { MONO } from "../theme.js";
 import { Section, hintStyle } from "./Section.jsx";
 
 export function PatternPanel() {
   const { doc, api, theme, actions, geometry } = useEditor();
+  const fileInput = useRef(null);
+  const [importError, setImportError] = useState("");
+  const isCustom = doc.hole.shape === CUSTOM_SHAPE;
+  const custom = doc.hole.custom;
+  const importFile = async file => {
+    if (!file) return;
+    setImportError("");
+    try {
+      await actions.importHoleSVG(file);
+    } catch (err) {
+      setImportError(`Could not use ${file.name}: ${err.message}`);
+    }
+  };
+  const smallButton = {
+    flex: 1,
+    height: 28,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    border: `1px solid ${theme.border}`,
+    borderRadius: 4,
+    background: "transparent",
+    color: theme.textSecondary,
+    fontSize: 9,
+    cursor: "pointer",
+    fontFamily: MONO,
+  };
   // Voronoi cuts each hole to its own cell and Flow Lines cuts a slot along each
   // streamline, so in those two the shape dropdown below is not driving anything
   // — and saying so is better than leaving someone to work out why changing it
@@ -37,6 +68,38 @@ export function PatternPanel() {
           theme={theme}
         />
       </div>
+      {/* The Custom shape is an outline of the user's own: read from an SVG
+          file here. It stays in the document whichever shape is picked, so
+          coming back to Custom finds it again. */}
+      <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+        <button
+          onClick={() => fileInput.current?.click()}
+          aria-label="Import an SVG outline as the hole shape"
+          title="The closed outlines of an SVG file become the Custom hole shape"
+          style={smallButton}
+        >
+          <Upload size={11} /> Import SVG shape
+        </button>
+      </div>
+      <input
+        ref={fileInput}
+        type="file"
+        accept=".svg,image/svg+xml"
+        aria-label="Hole outline file"
+        style={{ display: "none" }}
+        onChange={e => {
+          importFile(e.target.files?.[0]);
+          e.target.value = "";
+        }}
+      />
+      {importError && <div style={{ ...hintStyle(theme), color: theme.warn, marginTop: 8 }}>{importError}</div>}
+      {isCustom && !imposedShape && (
+        <div style={{ ...hintStyle(theme), marginTop: 8 }}>
+          {custom.kind === "none"
+            ? "No custom outline yet, so the hole is a square. Import an SVG file to give it one."
+            : `${custom.name || "outline"} · ${custom.rings.length} ${custom.rings.length === 1 ? "outline" : "outlines"} · ${custom.rings.reduce((n, r) => n + r.length, 0)} vertices, from ${custom.kind === "svg" ? "an SVG file" : "the shape editor"}.`}
+        </div>
+      )}
       {imposedShape && (
         <div style={{ marginTop: 10 }}>
           <div style={hintStyle(theme)}>
