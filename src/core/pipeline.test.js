@@ -171,6 +171,10 @@ test("every edit that changes hole placement changes the signature", () => {
     { "layout.type": "Scatter" },
     { "layout.type": "Spiral" },
     { "layout.type": "Fibonacci" },
+    { "layout.type": "Path" },
+    { "layout.type": "Path", "layout.path.paths": [{ points: [{ x: 20, y: 30 }, { x: 90, y: 170 }, { x: 170, y: 60 }], closed: false }] }, // prettier-ignore
+    { "layout.type": "Voronoi" },
+    { "layout.type": "Flow Lines" },
   ];
   const edits = [
     { "hole.diameter": 7 },
@@ -196,6 +200,14 @@ test("every edit that changes hole placement changes the signature", () => {
     { "layout.crosshatch.angleA": 10 },
     { "layout.crosshatch.angleB": 80 },
     { "layout.scatter.seed": 4242 },
+    // The blocks the three newest modes place from. `layout.path` is a nested
+    // list rather than a number, and `compilePlacement` signs it whole; these
+    // are what would notice if it stopped.
+    { "layout.path.paths": [{ points: [{ x: 30, y: 30 }, { x: 170, y: 170 }], closed: false }] }, // prettier-ignore
+    { "layout.path.paths": [{ points: [{ x: 30, y: 30 }, { x: 170, y: 170 }], closed: true }] }, // prettier-ignore
+    { "layout.path.smooth": false },
+    { "layout.path.alignToTangent": false },
+    { "layout.flow.angle": 35 },
     { "sheet.w": 260 },
     { "sheet.h": 260 },
     { "boundary.margins.top": 12 },
@@ -745,6 +757,9 @@ test("every spacing edit that moves a hole changes the signature", () => {
     { "layout.type": "Scatter" },
     { "layout.type": "Spiral" },
     { "layout.type": "Fibonacci" },
+    { "layout.type": "Path" },
+    { "layout.type": "Voronoi" },
+    { "layout.type": "Flow Lines" },
   ];
   const fields = [
     [],

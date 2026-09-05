@@ -414,3 +414,54 @@ test("Flow Lines is the mode where an image may not drive the angle channel", as
   await chooseChannel(page, "Size");
   await expect(page.getByRole("button", { name: "Add image controller", exact: true })).toBeEnabled();
 });
+
+test("the path controls do nothing until there is a path to act on", async ({ page }) => {
+  // A fresh Path document has no curve — the layout draws a default one, but
+  // there is nothing to edit yet. "+ vertex" used to be enabled exactly then,
+  // because "no path" measured as zero vertices, and clicking it threw.
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  await choose(page, "Type", "Path");
+  const before = await holes(page);
+  await expect(page.getByRole("button", { name: "Add a path vertex", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Remove a path vertex", exact: true })).toBeDisabled();
+  const loop = page.getByRole("switch", { name: "Close this path into a loop", exact: true });
+  await expect(loop).toHaveAttribute("aria-disabled", "true");
+  await loop.click({ force: true });
+  await expect(loop).toHaveAttribute("aria-checked", "false");
+  expect(await holes(page)).toBe(before);
+  // And the click recorded no undo step of its own: one undo goes back past the
+  // change of layout type itself, which was the last thing that did anything.
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect(page.getByRole("button", { name: "Edit path curves on the canvas", exact: true })).toHaveCount(0);
+  await page.getByTitle("Redo (Ctrl+Shift+Z)").click();
+
+  // With a curve they act, and undoing back past it leaves them inert again
+  // rather than pointing at a path that is no longer there.
+  await page.getByRole("button", { name: "Add a path", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Add a path vertex", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Add a path vertex", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Select path 1", exact: true })).toContainText("5 pts");
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect(page.getByRole("button", { name: "Add a path vertex", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Add a path vertex", exact: true }).click({ force: true });
+  expect(errors).toEqual([]);
+});
+
+test("leaving Path mode leaves its canvas editor with it", async ({ page }) => {
+  // The three canvas modes are mutually exclusive and each entry point clears
+  // the others — but the only control that turns path editing off lives in a
+  // panel section that Path owns, so switching layout used to hide the switch
+  // with the mode still on: the badge stayed up and a drag still moved vertices
+  // of a curve nothing was drawing.
+  await choose(page, "Type", "Path");
+  await page.getByRole("button", { name: "Edit path curves on the canvas", exact: true }).click();
+  await expect(page.getByText(/EDIT PATH/)).toBeVisible();
+  await choose(page, "Type", "Straight");
+  await expect(page.getByText(/EDIT PATH/)).toHaveCount(0);
+  // And coming back is off, not still on from before.
+  await choose(page, "Type", "Path");
+  await expect(page.getByText(/EDIT PATH/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit path curves on the canvas", exact: true })).toHaveAttribute("aria-pressed", "false"); // prettier-ignore
+});

@@ -19,7 +19,22 @@ export function DimensionsPanel() {
   // can draw, rather than filling part of the sheet and leaving the rest blank.
   // Refusing is only the better answer if it says so: an empty canvas with no
   // explanation is worse than either.
-  const tooFine = (g.isCrosshatch || g.usesFreeSpacing || g.isFlow) && stats.holeCount === 0 && !g.crossDegenerate;
+  const empty = (g.isCrosshatch || g.usesFreeSpacing || g.isFlow) && stats.holeCount === 0 && !g.crossDegenerate;
+  // Every mode that refuses a pattern it cannot draw reaches 0 holes that way,
+  // but Path has a second route to it: the curves can be dragged clean off the
+  // panel, and telling someone their pattern is too fine when their curve is
+  // 500 mm to the left is worse than saying nothing. A vertex bounding box that
+  // misses the perforation rectangle proves the curve does; anything else falls
+  // through to the answer that is right for every other mode.
+  const pathBox = layout.path.paths.flatMap(path => path.points);
+  const offPanel =
+    g.isPath &&
+    pathBox.length > 0 &&
+    (Math.max(...pathBox.map(p => p.x)) < margins.left ||
+      Math.min(...pathBox.map(p => p.x)) > sheet.w - margins.right ||
+      Math.max(...pathBox.map(p => p.y)) < margins.top ||
+      Math.min(...pathBox.map(p => p.y)) > sheet.h - margins.bottom);
+  const tooFine = empty && !offPanel;
   // Voronoi draws each hole as its own cell, so the controls that shape the
   // chosen hole — its orientation and its corner radius — have nothing to act
   // on. The size sliders stay: they still set how big a cell is.
@@ -31,6 +46,12 @@ export function DimensionsPanel() {
         <div style={hintStyle(theme)}>
           {doc.layout.type} cannot draw a pattern this fine on a sheet this size, so it has placed nothing rather than
           filling part of it. Widen the edge gap, enlarge the hole, or shrink the panel.
+        </div>
+      )}
+      {empty && offPanel && (
+        <div style={hintStyle(theme)}>
+          Every curve is off the panel, so there is nothing to string holes along. Drag the vertices back onto the
+          sheet, or remove the curve to get the default one back.
         </div>
       )}
       {g.isTriTiling && (
@@ -305,8 +326,8 @@ export function DimensionsPanel() {
           <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
             {[
               ["Add a path", () => actions.addPath(), layout.path.paths.length >= MAX_PATHS, "+ path", `At most ${MAX_PATHS} paths`], // prettier-ignore
-              ["Add a path vertex", () => actions.addVertex(ui.selectedPath), (layout.path.paths[ui.selectedPath]?.points.length ?? 0) >= MAX_PATH_POINTS, "+ vertex", `At most ${MAX_PATH_POINTS} vertices`], // prettier-ignore
-              ["Remove a path vertex", () => actions.removeVertex(ui.selectedPath), (layout.path.paths[ui.selectedPath]?.points.length ?? 0) <= 2, "− vertex", "A path needs two vertices"], // prettier-ignore
+              ["Add a path vertex", () => actions.addVertex(ui.selectedPath), (layout.path.paths[ui.selectedPath]?.points.length ?? MAX_PATH_POINTS) >= MAX_PATH_POINTS, "+ vertex", layout.path.paths.length === 0 ? "Add a path first" : `At most ${MAX_PATH_POINTS} vertices`], // prettier-ignore
+              ["Remove a path vertex", () => actions.removeVertex(ui.selectedPath), (layout.path.paths[ui.selectedPath]?.points.length ?? 0) <= 2, "− vertex", layout.path.paths.length === 0 ? "Add a path first" : "A path needs two vertices"], // prettier-ignore
             ].map(([name, run, disabled, text, why]) => (
               <button
                 key={name}
@@ -347,7 +368,7 @@ export function DimensionsPanel() {
               }}
             >
               <span style={{ fontSize: 11, color: theme.textSecondary }}>{label}</span>
-              <Toggle value={value} onChange={onChange} dark={dark} label={label} />
+              <Toggle value={value} onChange={onChange} dark={dark} label={label} disabled={disabled} />
             </label>
           ))}
         </>

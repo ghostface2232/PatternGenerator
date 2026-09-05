@@ -9,6 +9,8 @@ import { LAYOUTS, generateHoles, layoutPlacementChannels, layoutReadsSpacing, ti
 import { MIN_CROSS_SIN } from "./crosshatch.js";
 import { MAX_SCATTER_HOLES } from "./scatter.js";
 import { generateSpiralHoles } from "./spiral.js";
+import { defaultPathPoints, flattenPath, polylineLength } from "./path.js";
+import { diamondFlatAngle } from "./radial-engine.js";
 import { generateFibonacciHoles } from "./fibonacci.js";
 import { holeVertices } from "../geometry/shapes.js";
 import { compileControllers, imageChannels } from "../fields/controllers.js";
@@ -721,6 +723,83 @@ test("the path gizmo moves, adds and drops vertices within the document's range"
   assert.equal(hitTestPath(paths, 91, 11, 100, 14), null, "zoomed in, the same click is 1.4 mm off and misses");
 });
 
+test("a closed path divides its own loop instead of leaving a seam", () => {
+  // Walking a loop at a fixed step comes back to the start with whatever the
+  // perimeter left over — a gap that sweeps continuously through zero as a
+  // vertex is dragged, and lands on top of the first hole for the side lengths
+  // where it does. The step is scaled to fit the loop instead, so the seam is
+  // one step wide at every size rather than at most of them.
+  const square = side => [{ points: [{ x: 50, y: 50 }, { x: 50 + side, y: 50 }, { x: 50 + side, y: 50 + side }, { x: 50, y: 50 + side }], closed: true }]; // prettier-ignore
+  for (const side of [100, 100.5, 101, 33.3, 12.7]) {
+    const holes = place(doc({ "layout.type": "Path", "layout.path.smooth": false, "layout.path.paths": square(side) }));
+    assert.ok(holes.length >= 4, `side ${side}: ${holes.length} holes`);
+    // Along the loop, since the corners cut the straight-line distance.
+    const perimeter = 4 * side;
+    const seam = perimeter / holes.length;
+    assert.ok(Math.abs(seam - 8) < 8 * 0.5, `side ${side}: ${holes.length} holes round ${perimeter} mm`);
+    // And the two ends of the walk are as far apart as any other pair, rather
+    // than however much the perimeter happened to leave over.
+    const first = holes[0],
+      last = holes[holes.length - 1];
+    assert.ok(Math.hypot(first.x - last.x, first.y - last.y) > 4, `side ${side}: the loop closed onto itself`);
+  }
+});
+
+test("turning holes along a path turns them on top of the shape's own rotation", () => {
+  // Diamond "Flat up" is a rotation the shape carries before any layout touches
+  // it. Replacing it rather than composing with it dropped the orientation
+  // dropdown on the floor in this mode's default configuration, and left the
+  // ligament measuring an orientation that was never drawn.
+  const flat = {
+    "hole.shape": "Diamond",
+    "hole.w": 8,
+    "hole.h": 4,
+    "hole.diamondOrient": "Flat up",
+    "layout.type": "Path",
+    "layout.path.smooth": false,
+    "layout.path.paths": [{ points: [{ x: 20, y: 100 }, { x: 180, y: 100 }], closed: false }], // prettier-ignore
+  };
+  const base = diamondFlatAngle(8, 4);
+  assert.ok(Math.abs(base) > 0.1, "the fixture has to be a shape that carries a rotation");
+  // A horizontal run has a tangent of 0, so composing leaves exactly the base.
+  for (const hole of place(doc({ ...flat, "layout.path.alignToTangent": true }))) {
+    assert.ok(Math.abs((hole.angle ?? 0) - base) < 1e-9, `turned to ${hole.angle} rather than ${base}`);
+  }
+  // Turned off, the shape keeps its own rotation and nothing else — same value.
+  for (const hole of place(doc({ ...flat, "layout.path.alignToTangent": false }))) {
+    assert.ok(Math.abs((hole.angle ?? 0) - base) < 1e-9);
+  }
+  // On a curve that actually turns, the two differ by the tangent.
+  const diagonal = { ...flat, "layout.path.paths": [{ points: [{ x: 20, y: 20 }, { x: 180, y: 180 }], closed: false }] }; // prettier-ignore
+  const turned = place(doc({ ...diagonal, "layout.path.alignToTangent": true }))[0];
+  assert.ok(Math.abs(turned.angle - (Math.PI / 4 + base)) < 1e-9, `${turned.angle}`);
+});
+
+test("a smoothed path is flattened to the curve, not to a polygon that grows with the sheet", () => {
+  // The polyline is not merely what gets drawn: it is what the walk measures, so
+  // its error lands in the holes. The error of a chord is its length squared
+  // over the curvature, so a fixed number of chords per span is off by more the
+  // longer the span — a fixed twelve was 0.44 mm from the true curve on a 200 mm
+  // sheet and 2.2 mm on a 1000 mm one. The count follows the span instead.
+  const at = scale => flattenPath(defaultPathPoints({ xMin: 0, xMax: 200 * scale, yMin: 0, yMax: 200 * scale }), { smooth: true }); // prettier-ignore
+  const small = at(1),
+    large = at(5);
+  const longest = poly => Math.max(...poly.slice(1).map((p, i) => Math.hypot(p.x - poly[i].x, p.y - poly[i].y)));
+  assert.ok(small.length > 100, `${small.length} points for a 200 mm curve`);
+  assert.ok(longest(small) < 3, `${longest(small)} mm chords on a 200 mm curve`);
+  // Five times the sheet is five times the curve, and the flattening has to
+  // follow it rather than spreading the same dozen chords over each span.
+  assert.ok(large.length > small.length * 2, `${large.length} points against ${small.length}`);
+  assert.ok(longest(large) < 8, `${longest(large)} mm chords on a 1000 mm curve`);
+  // And the length it reports converges: against the same curve sampled a
+  // thousand times finer, by scaling it up and dividing back down.
+  const reference = points => polylineLength(flattenPath(points.map(p => ({ x: p.x * 1000, y: p.y * 1000 })), { smooth: true })) / 1000; // prettier-ignore
+  for (const scale of [1, 5]) {
+    const points = defaultPathPoints({ xMin: 0, xMax: 200 * scale, yMin: 0, yMax: 200 * scale });
+    const length = polylineLength(flattenPath(points, { smooth: true }));
+    assert.ok(Math.abs(length - reference(points)) < 0.05 * scale, `${scale}×: ${length} against ${reference(points)}`);
+  }
+});
 test("a path refuses a step it cannot draw rather than covering part of a curve", () => {
   // Four full-length zigzags at the finest step the sliders and the field allow.
   // The cap is a backstop, not a budget: one ordinary curve cannot come near it.

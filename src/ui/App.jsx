@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_PATHS, MAX_VARIATION_LAYERS } from "../core/constants.js";
-import { cloneVariation, createDocument, setIn } from "../core/document.js";
+import { cloneVariation, createDocument } from "../core/document.js";
 import {
   buildParams,
   compileDocumentField,
@@ -134,7 +134,7 @@ export default function App() {
   const [variationAdvanced, setVariationAdvanced] = useState(false);
   const [variationHud, setVariationHud] = useState(null);
   const [fieldEditMode, setFieldEditMode] = useState(false);
-  const [pathEditMode, setPathEditMode] = useState(false);
+  const [pathEditModeOn, setPathEditMode] = useState(false);
   const [activeChannel, setActiveChannel] = useState(EDITABLE_CHANNELS[0]);
   const [fieldTool, setFieldTool] = useState(null); // armed kind for click-to-add on the canvas
   // Which controller the inspector is showing. UI state, like every other
@@ -144,7 +144,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   // Which Path curve the panel shows and the canvas highlights. UI state for the
   // same reason a controller selection is: it changes on every click.
-  const [selectedPath, setSelectedPath] = useState(0);
+  const [selectedPathIndex, setSelectedPath] = useState(0);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [savedDoc, setSavedDoc] = useState(() => (startedClean ? doc : null)); // last written to localStorage
@@ -159,6 +159,21 @@ export default function App() {
   // setIn() shares untouched branches, so keying memos on the sub-objects means
   // e.g. a colour or removed-hole edit never regenerates the pattern.
   const { hole, layout, sheet, boundary, taper, variation, fields } = doc;
+  // Both of these are UI state ABOUT the document, so both are derived rather
+  // than trusted: undo can shorten the curve list under a selection, and leaving
+  // another mode does not stop this one being on. Clamping here rather than at
+  // every edit means neither can outlive what it points at — a selection past
+  // the end threw on the next "+ vertex", and an edit mode still on after the
+  // layout type changed left the canvas dragging invisible handles with the
+  // badge describing it and no control left on screen to switch it off.
+  // Left on rather than merely ignored: turning it off here means coming back to
+  // Path later arrives with the canvas quiet, which is what leaving a mode ought
+  // to mean. Adjusting state during render is React's own answer to "this state
+  // no longer matches the props"; the `&&` keeps this render correct as well,
+  // since the re-render happens after it.
+  if (pathEditModeOn && layout.type !== "Path") setPathEditMode(false);
+  const pathEditMode = pathEditModeOn && layout.type === "Path";
+  const selectedPath = Math.max(0, Math.min(selectedPathIndex, layout.path.paths.length - 1));
   const patternDoc = useMemo(() => ({ hole, layout, sheet, boundary, taper }), [hole, layout, sheet, boundary, taper]);
   const geometry = useMemo(() => deriveGeometry(patternDoc), [patternDoc]);
   const params = useMemo(() => buildParams(patternDoc, geometry), [patternDoc, geometry]);
@@ -617,7 +632,7 @@ export default function App() {
     // vertex drag coalesces into one, exactly like a controller handle.
     const livePaths = () => api.ref.current.layout.path.paths;
     const togglePathEditMode = () => {
-      const next = !pathEditMode;
+      const next = !pathEditModeOn;
       setPathEditMode(next);
       if (next) {
         setVariationEditMode(false);
@@ -636,23 +651,30 @@ export default function App() {
       setSelectedPath(paths.length);
       setPathEditMode(true);
     };
+    // No `setSelectedPath` here: React may run a reducer more than once, so a
+    // state update inside one is not something to rely on — and the selection is
+    // clamped where it is read instead, which also covers the undo that brings a
+    // removed curve back.
     const removePath = index =>
-      api.update(d => {
-        const paths = d.layout.path.paths.filter((_, i) => i !== index);
-        setSelectedPath(current => Math.max(0, Math.min(current, paths.length - 1)));
-        return setIn(d, "layout.path.paths", paths);
-      });
+      api.set(
+        "layout.path.paths",
+        livePaths().filter((_, i) => i !== index)
+      );
     const setPaths = (paths, live = false) =>
       api.set("layout.path.paths", paths, live ? { merge: "layout.path.paths" } : {});
     const editPathVertices = (index, edit) => {
       const paths = livePaths();
+      if (!paths[index]) return;
       const next = edit(paths[index]);
       if (next) setPaths(paths.map((path, i) => (i === index ? next : path)));
     };
     const addVertex = index => editPathVertices(index, addPathVertex);
     const removeVertex = index => editPathVertices(index, removePathVertex);
-    const togglePathClosed = index =>
-      setPaths(livePaths().map((path, i) => (i === index ? { ...path, closed: !path.closed } : path)));
+    const togglePathClosed = index => {
+      const paths = livePaths();
+      if (!paths[index]) return;
+      setPaths(paths.map((path, i) => (i === index ? { ...path, closed: !path.closed } : path)));
+    };
     const resetView = () => {
       setZoom(1);
       setPan({ x: 0, y: 0 });
@@ -703,7 +725,7 @@ export default function App() {
       selectPath: setSelectedPath,
       resetView,
     };
-  }, [doc, api, history, variationEditMode, fieldEditMode, pathEditMode, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
+  }, [doc, api, history, variationEditMode, fieldEditMode, pathEditModeOn, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
