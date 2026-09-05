@@ -294,16 +294,22 @@ test("controllers survive a file round trip unchanged", () => {
   assert.equal(computePattern(back).activeHoles.length, computePattern(doc).activeHoles.length);
 });
 
-test("a v1 document upgrades to v2 with the field block inert", () => {
-  const v1 = { ...createDocument(), schemaVersion: 1 };
+test("a v1 document upgrades to the current schema with every later block inert", () => {
+  const fresh = createDocument();
+  const v1 = { ...fresh, schemaVersion: 1, hole: { ...fresh.hole }, layout: { ...fresh.layout } };
   delete v1.fields;
   delete v1.assets;
   delete v1.hole.shapeMix;
+  delete v1.layout.crosshatch;
+  delete v1.layout.scatter;
   const upgraded = migrateDocument(v1);
-  assert.equal(upgraded.schemaVersion, 2);
+  assert.equal(upgraded.schemaVersion, 3);
   assert.deepEqual(upgraded.fields, { enabled: false, controllers: [] });
   assert.deepEqual(upgraded.assets, {});
-  assert.equal(upgraded.hole.shapeMix, createDocument().hole.shapeMix);
+  assert.equal(upgraded.hole.shapeMix, fresh.hole.shapeMix);
+  // Phase 3's layout blocks are read only by modes a v1 document cannot name.
+  assert.deepEqual(upgraded.layout.crosshatch, fresh.layout.crosshatch);
+  assert.deepEqual(upgraded.layout.scatter, fresh.layout.scatter);
   // Same pattern as before the upgrade, to the hole.
   assert.equal(computePattern(upgraded).activeHoles.length, 739);
 });

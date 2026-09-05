@@ -46,6 +46,13 @@ const MIGRATIONS = {
   // inert (fields disabled, no controllers, no assets) — so a v1 document reads
   // back with exactly the pattern it was saved with.
   1: doc => ({ ...doc, schemaVersion: 2 }),
+  // 2 → 3: Phase 3 adds the layout modes Cross-hatch, Scatter, Spiral and
+  // Fibonacci, with `layout.crosshatch` and `layout.scatter` to describe the
+  // first two. A v2 document names none of them and carries neither block, so
+  // validateDocument fills both from createDocument()'s defaults and the
+  // document reads back with the pattern it was saved with — the new blocks are
+  // read only by modes a v2 document cannot be in.
+  2: doc => ({ ...doc, schemaVersion: 3 }),
 };
 
 // ─── Validation ───────────────────────────────────────────────────────
@@ -273,6 +280,8 @@ export function validateDocument(raw) {
   const hole = obj(r.hole);
   const layout = obj(r.layout);
   const radial = obj(layout.radial);
+  const crosshatch = obj(layout.crosshatch);
+  const scatter = obj(layout.scatter);
   const taper = obj(r.taper);
   const appearance = obj(r.appearance);
   const margin = key => num(margins[key], d.boundary.margins[key], "boundary.margins");
@@ -303,6 +312,14 @@ export function validateDocument(raw) {
       edgeGapY: num(layout.edgeGapY, d.layout.edgeGapY, "layout.edgeGap"),
       gapLinked: bool(layout.gapLinked, d.layout.gapLinked),
       customAngle: num(layout.customAngle, d.layout.customAngle, "layout.customAngle"),
+      crosshatch: {
+        angleA: num(crosshatch.angleA, d.layout.crosshatch.angleA, "layout.crosshatch.angle"),
+        angleB: num(crosshatch.angleB, d.layout.crosshatch.angleB, "layout.crosshatch.angle"),
+      },
+      // Rounded to an integer as well as clamped: the seed is fed to a 32-bit
+      // PRNG, so a fractional one would be truncated somewhere and the document
+      // would no longer say what it produces.
+      scatter: { seed: int(scatter.seed, d.layout.scatter.seed, "layout.scatter.seed") },
       radial: {
         edgeGap: num(radial.edgeGap, d.layout.radial.edgeGap, "layout.radial.gap"),
         circumGap: num(radial.circumGap, d.layout.radial.circumGap, "layout.radial.gap"),

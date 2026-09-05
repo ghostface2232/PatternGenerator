@@ -1,5 +1,6 @@
-import { MoveVertical } from "lucide-react";
+import { MoveVertical, Shuffle } from "lucide-react";
 import { DIAMOND_ORIENTATIONS, RADIAL_LAYOUTS, RADIAL_MODES } from "../../core/constants.js";
+import { MIN_CROSS_SIN } from "../../layouts/crosshatch.js";
 import { useEditor } from "../EditorContext.jsx";
 import { Dropdown, LinkButton, PitchInfo, SegRow, SliderRow, Toggle } from "../controls/index.js";
 import { MONO } from "../theme.js";
@@ -9,18 +10,22 @@ export function DimensionsPanel() {
   const { doc, api, theme, geometry: g, actions } = useEditor();
   const { dark } = theme;
   const { hole, layout, sheet, boundary } = doc;
-  const { radial } = layout;
+  const { radial, crosshatch } = layout;
   const { margins } = boundary;
   const isRadial = layout.type === "Radial";
   const setP = actions.setWithPresetReset;
   const faint = { marginLeft: 6, fontSize: 9, color: theme.textMuted };
+  // Two line families closer than this cut a lattice of slivers rather than a
+  // pattern, so the mode places nothing and says so instead of hanging.
+  const crossDegenerate = g.isCrosshatch && g.crossSin < MIN_CROSS_SIN;
+  const crossingAngle = Math.round((Math.asin(Math.min(1, g.crossSin)) * 180) / Math.PI);
 
   return (
     <Section title="Dimensions" theme={theme}>
-      {hole.shape === "Triangle" && !isRadial && (
+      {g.isTriTiling && (
         <div style={hintStyle(theme)}>
-          ▲▽ Triangles fill in alternating up/down rows — a seamless fit at 0 gap. All grid types share this tiling;
-          Radial places them on rings instead.
+          ▲▽ Triangles fill in alternating up/down rows — a seamless fit at 0 gap. Every grid type shares this tiling;
+          Radial places them on rings, and the free-form modes place them wherever the mode puts a hole.
         </div>
       )}
       {g.isDiamondLattice && (
@@ -155,6 +160,83 @@ export function DimensionsPanel() {
         />
       )}
 
+      {/* Cross-hatch: the two line families. A hole sits at every intersection,
+          so it is the angle BETWEEN them that shapes the lattice — 90° apart is
+          the straight grid, and near-parallel is nothing at all. */}
+      {g.isCrosshatch && (
+        <>
+          <SliderRow
+            label="Line Angle A"
+            value={crosshatch.angleA}
+            min={-90}
+            max={90}
+            step={1}
+            onChange={v => api.set("layout.crosshatch.angleA", v)}
+            unit="°"
+            dark={dark}
+          />
+          <SliderRow
+            label="Line Angle B"
+            value={crosshatch.angleB}
+            min={-90}
+            max={90}
+            step={1}
+            onChange={v => api.set("layout.crosshatch.angleB", v)}
+            unit="°"
+            dark={dark}
+          />
+          {crossDegenerate ? (
+            <div style={hintStyle(theme)}>
+              The two line families are within {crossingAngle}° of parallel. They cut no usable lattice, so no holes are
+              placed — move one angle away from the other.
+            </div>
+          ) : (
+            <div style={noteStyle(theme)}>
+              Crossing at {crossingAngle}°<span style={faint}>cell {g.crossCellArea.toFixed(1)} mm²</span>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Scatter is the one layout that draws random numbers, so its seed is part
+          of the document: the same seed places the same holes everywhere. */}
+      {layout.type === "Scatter" && (
+        <>
+          <SliderRow
+            label="Scatter Seed"
+            value={layout.scatter.seed}
+            min={0}
+            max={99999}
+            step={1}
+            onChange={v => api.set("layout.scatter.seed", Math.round(v))}
+            dark={dark}
+          />
+          <button
+            onClick={actions.reseedScatter}
+            aria-label="Shuffle the scatter seed"
+            title="Try another arrangement at the same density"
+            style={{
+              width: "100%",
+              height: 26,
+              marginBottom: 12,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 5,
+              border: `1px solid ${theme.border}`,
+              borderRadius: 4,
+              background: theme.controlBg,
+              color: theme.textPrimary,
+              fontSize: 10,
+              cursor: "pointer",
+              fontFamily: MONO,
+            }}
+          >
+            <Shuffle size={11} /> Shuffle
+          </button>
+        </>
+      )}
+
       {/* Spacing */}
       {isRadial ? (
         <>
@@ -253,6 +335,98 @@ export function DimensionsPanel() {
             />
             Center hole
           </label>
+        </>
+      ) : g.isFreeform ? (
+        <>
+          {/* Scatter, Spiral and Fibonacci place holes at arbitrary angles to
+              one another, so the gap is measured from the circumscribed
+              diameter rather than from the width or the height. */}
+          {layout.type === "Spiral" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+              <span style={subLabelStyle(theme)}>Gap Link (along = turn)</span>
+              <LinkButton
+                linked={layout.gapLinked}
+                onClick={actions.toggleGapLinked}
+                title={layout.gapLinked ? "Unlink gap" : "Link gap"}
+                dark={dark}
+              />
+            </div>
+          )}
+          <SliderRow
+            label={layout.type === "Spiral" ? "Along Gap" : "Edge Gap"}
+            value={layout.edgeGapX}
+            min={0}
+            max={50}
+            step={0.1}
+            onChange={actions.setEdgeGapX}
+            unit="mm"
+            dark={dark}
+          />
+          <PitchInfo
+            label={layout.type === "Spiral" ? "step along the arm" : "min centre spacing"}
+            value={g.freeSpacingX}
+            dark={dark}
+          />
+          {layout.type === "Spiral" && (
+            <>
+              <SliderRow
+                label="Turn Gap"
+                value={layout.edgeGapY}
+                min={0}
+                max={50}
+                step={0.1}
+                onChange={actions.setEdgeGapY}
+                unit="mm"
+                dark={dark}
+              />
+              <PitchInfo label="turn-to-turn spacing" value={g.freeSpacingY} dark={dark} />
+            </>
+          )}
+          <div style={noteStyle(theme)}>
+            {layout.type === "Scatter"
+              ? "Poisson disk · no two holes closer than the spacing above"
+              : layout.type === "Spiral"
+                ? "Archimedean spiral · equal steps along the arm"
+                : "Golden angle · Fermat spiral"}
+          </div>
+        </>
+      ) : g.isCrosshatch ? (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+            <span style={subLabelStyle(theme)}>Gap Link (A = B)</span>
+            <LinkButton
+              linked={layout.gapLinked}
+              onClick={actions.toggleGapLinked}
+              title={layout.gapLinked ? "Unlink gap" : "Link gap"}
+              dark={dark}
+            />
+          </div>
+          <SliderRow
+            label={layout.gapLinked ? "Edge Gap (A = B)" : "A Edge Gap"}
+            value={layout.edgeGapX}
+            min={0}
+            max={50}
+            step={0.1}
+            onChange={actions.setEdgeGapX}
+            unit="mm"
+            dark={dark}
+          />
+          <PitchInfo label={layout.gapLinked ? "line pitch" : "A line pitch"} value={g.pitchX} dark={dark} />
+          {!layout.gapLinked && (
+            <>
+              <SliderRow
+                label="B Edge Gap"
+                value={layout.edgeGapY}
+                min={0}
+                max={50}
+                step={0.1}
+                onChange={actions.setEdgeGapY}
+                unit="mm"
+                dark={dark}
+              />
+              <PitchInfo label="B line pitch" value={g.pitchY} dark={dark} />
+            </>
+          )}
         </>
       ) : g.uniformGapMode ? (
         <>

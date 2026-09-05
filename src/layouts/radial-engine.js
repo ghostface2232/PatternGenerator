@@ -1,10 +1,13 @@
-const TAU = Math.PI * 2;
-const EPS = 1e-9;
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 // For n >= 1, consecutive golden-angle Fermat points have a normalized
 // nearest-neighbour distance slightly above 1.6. Using the lower bound keeps
 // the requested edge gap intact after the spiral is scaled to the hole size.
-const SUNFLOWER_SAFE_SEPARATION = 1.6;
+// The top-level Fibonacci mode scales its own point set by the same fact, so the
+// constant lives there and both read the one copy.
+import { FERMAT_SAFE_SEPARATION } from "./fibonacci.js";
+
+const TAU = Math.PI * 2;
+const EPS = 1e-9;
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
 export function diamondFlatAngle(w, h) {
   return -Math.atan2(h, w);
@@ -282,7 +285,7 @@ export function generateRadialHoles(options) {
     const minimumCenterDistance = outerRadius * 2 + requestedGap;
     // A centre hole makes n=0 -> n=1 the limiting pair. Without it, the
     // tighter n=1 -> n=4 Fermat pair determines the scale.
-    const spiralScale = minimumCenterDistance / (centerHole ? 1 : SUNFLOWER_SAFE_SEPARATION);
+    const spiralScale = minimumCenterDistance / (centerHole ? 1 : FERMAT_SAFE_SEPARATION);
     for (let n = 1; ; n++) {
       const radius = spiralScale * Math.sqrt(n);
       if (radius > maxRadius + EPS) break;

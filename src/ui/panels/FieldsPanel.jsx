@@ -5,9 +5,11 @@ import {
   CHANNEL_INFO,
   EDITABLE_CHANNELS,
   FALLOFFS,
+  IMAGE_CHANNELS,
   MAX_CONTROLLERS,
   MAX_POLYLINE_POINTS,
 } from "../../fields/controllers.js";
+import { layoutReadsSpacing } from "../../layouts/index.js";
 import { addPolylinePoint, removePolylinePoint } from "../../fields/controller-gizmo.js";
 import { useEditor } from "../EditorContext.jsx";
 import { Select, SliderRow, Toggle } from "../controls/index.js";
@@ -17,6 +19,10 @@ import { Section } from "./Section.jsx";
 
 const KIND_ICON = { point: Circle, line: Minus, curve: Spline, polyline: Waypoints, image: ImageIcon };
 const KINDS = ["point", "line", "curve", "polyline", "image"];
+// An image cannot drive spacing — its brightness map is decoded asynchronously
+// and left out of share links, so it may not decide where a hole goes. See
+// IMAGE_CHANNELS in fields/controllers.js.
+const kindsFor = channel => (IMAGE_CHANNELS.includes(channel) ? KINDS : KINDS.filter(kind => kind !== "image"));
 
 export function FieldsPanel() {
   const { doc, theme, ui, actions, selectedController: selected } = useEditor();
@@ -29,9 +35,13 @@ export function FieldsPanel() {
   const channelControllers = fields.controllers.filter(c => c.channel === activeChannel);
   const info = CHANNEL_INFO[activeChannel];
   const full = fields.controllers.length >= MAX_CONTROLLERS;
-  // The shape channel only has something to morph when the hole is the one shape
-  // with a free parameter, so say so rather than letting it look broken.
+  // Two channels can be live and still have nothing to act on here. Say so
+  // rather than letting them look broken: the shape channel needs the one hole
+  // shape with a free parameter, and the spacing channel needs a layout mode
+  // that lays holes out row by row or point by point.
   const shapeInert = activeChannel === "shape" && doc.hole.shape !== MORPH_SHAPE;
+  const spacingInert = activeChannel === "spacing" && !layoutReadsSpacing(doc.hole.shape, doc.layout.type);
+  const kinds = kindsFor(activeChannel);
 
   // Selected state has to reach assistive tech, not just the eye: every chip
   // below is a button whose only "on" cue is its colour.
@@ -99,8 +109,8 @@ export function FieldsPanel() {
       }
     >
       <div style={{ fontSize: 9, color: theme.textSecondary, marginBottom: 10, lineHeight: 1.6 }}>
-        Drop a controller on the sheet and it drives one channel — how big the holes near it are, which way they turn,
-        or what shape they take. Spacing arrives with the Phase 3 layout modes.
+        Drop a controller on the sheet and it drives one channel — how big the holes near it are, how far apart they
+        sit, which way they turn, or what shape they take.
       </div>
 
       <button
@@ -170,11 +180,31 @@ export function FieldsPanel() {
             </div>
           )}
 
+          {spacingInert && (
+            <div
+              style={{
+                padding: "7px 9px",
+                borderRadius: 5,
+                background: theme.warnBg,
+                color: theme.textSecondary,
+                fontSize: 9,
+                lineHeight: 1.6,
+                marginBottom: 12,
+              }}
+            >
+              {doc.layout.type === "Radial"
+                ? "Radial places its rings by solving for the gaps it is given, so there is no pitch for a spacing field to scale. Try Spiral or Fibonacci for a variable-density radial pattern."
+                : `${doc.hole.shape} on ${doc.layout.type} is an exact interlocking tiling with the same ligament on every edge — a spacing field would be stretching the tiling, not varying its density. Change the hole shape or the pattern type to use this channel.`}
+            </div>
+          )}
+
           <div style={groupLabel}>
             Add ({fields.controllers.length}/{MAX_CONTROLLERS})
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4, marginBottom: 12 }}>
-            {KINDS.map(kind => {
+          <div
+            style={{ display: "grid", gridTemplateColumns: `repeat(${kinds.length}, 1fr)`, gap: 4, marginBottom: 12 }}
+          >
+            {kinds.map(kind => {
               const Icon = KIND_ICON[kind];
               return (
                 <button

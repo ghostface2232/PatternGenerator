@@ -4,6 +4,7 @@ import { cloneVariation, createDocument } from "../core/document.js";
 import {
   buildParams,
   compileDocumentField,
+  compileSpacing,
   computeStats,
   decorateHoles,
   deriveGeometry,
@@ -27,10 +28,10 @@ import {
   serializeDocument,
   touchRecent,
 } from "../core/persistence.js";
-import { generateHoles } from "../layouts/grid.js";
+import { generateHoles } from "../layouts/index.js";
 import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
-import { EDITABLE_CHANNELS, MAX_CONTROLLERS, createController } from "../fields/controllers.js";
+import { EDITABLE_CHANNELS, IMAGE_CHANNELS, MAX_CONTROLLERS, createController } from "../fields/controllers.js";
 import { readImageFile, splitImageMaps, useImageMaps } from "./useImageMaps.js";
 import { generateSVGParts } from "../export/svg.js";
 import { renderPNGBlob } from "../export/png.js";
@@ -129,7 +130,13 @@ export default function App() {
   const patternDoc = useMemo(() => ({ hole, layout, sheet, boundary, taper }), [hole, layout, sheet, boundary, taper]);
   const geometry = useMemo(() => deriveGeometry(patternDoc), [patternDoc]);
   const params = useMemo(() => buildParams(patternDoc, geometry), [patternDoc, geometry]);
-  const baseHoles = useMemo(() => generateHoles(params), [params]);
+  // The spacing channel is the only part of the field system that moves a hole,
+  // so it is compiled apart from the rest and only it reaches the generator. It
+  // is null for a document with no spacing controller — which keeps this memo's
+  // value stable, so editing a size or angle controller still leaves the
+  // generated centres alone instead of regenerating the whole pattern.
+  const spacing = useMemo(() => compileSpacing(fields), [fields]);
+  const baseHoles = useMemo(() => generateHoles(params, spacing), [params, spacing]);
   // Decoding an image is asynchronous and lives outside the document, so the
   // maps arrive after the first render and simply recompile the field then.
   const decodedImages = useImageMaps(doc.assets);
@@ -307,6 +314,9 @@ export default function App() {
           ? { "layout.radial.linked": false }
           : { "layout.radial.linked": true, "layout.radial.circumGap": doc.layout.radial.edgeGap }
       );
+    // Scatter's seed is a document field like any other, so shuffling it is one
+    // undo step and the arrangement it produced can always be got back.
+    const reseedScatter = () => api.set("layout.scatter.seed", Math.floor(Math.random() * 100000));
     const setSunflowerGap = v =>
       api.patch({ "layout.radial.edgeGap": v, "layout.radial.circumGap": v }, { merge: "layout.radial.sunflower" });
     const setMarginUniform = v =>
@@ -479,8 +489,15 @@ export default function App() {
         setFieldTool(null);
         return null;
       }
-      const controller = createController({ channel: activeChannel, kind, area: perfArea, existing: current.controllers }); // prettier-ignore
+      // An image cannot drive spacing, so a picture asked for while that channel
+      // is selected lands on one that can rather than becoming a controller that
+      // is inert by construction. The rail and the panel disable the button for
+      // the same reason; this covers the file dropped on the page, which does not
+      // go through either.
+      const channel = kind === "image" && !IMAGE_CHANNELS.includes(activeChannel) ? IMAGE_CHANNELS[0] : activeChannel;
+      const controller = createController({ channel, kind, area: perfArea, existing: current.controllers });
       if (geometry) controller.geometry = geometry;
+      if (channel !== activeChannel) setActiveChannel(channel);
       api.update(d => ({
         ...d,
         fields: { ...d.fields, enabled: true, controllers: [...d.fields.controllers, controller] },
@@ -562,6 +579,7 @@ export default function App() {
       setCircumEdgeGap,
       toggleRadialLinked,
       setSunflowerGap,
+      reseedScatter,
       setMarginUniform,
       toggleMarginLinked,
       applyPreset,

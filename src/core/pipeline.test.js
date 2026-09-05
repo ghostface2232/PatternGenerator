@@ -1,11 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDocument, getIn, patchIn, setIn } from "./document.js";
-import { PLACEMENT_PARAMS, buildParams, computePattern, deriveGeometry, patternSignature } from "./pipeline.js";
+import {
+  PLACEMENT_PARAMS,
+  buildParams,
+  compileSpacing,
+  computePattern,
+  deriveGeometry,
+  patternSignature,
+} from "./pipeline.js";
 import { validateDocument } from "./persistence.js";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { generateHoles } from "../layouts/grid.js";
+import { generateHoles } from "../layouts/index.js";
 import { generateSVGString } from "../export/svg.js";
 
 // These numbers mirror e2e/smoke.spec.js so a geometry regression is caught
@@ -160,6 +167,10 @@ test("every edit that changes hole placement changes the signature", () => {
     { "layout.type": "Radial", "layout.radial.layout": "6k Rosette", "layout.radial.mode": "Circle" },
     { "boundary.margins.top": 8, "boundary.cornerRadius": 15 },
     { "hole.shape": "Rectangle", "hole.w": 6, "hole.h": 3, "layout.type": "Straight" },
+    { "layout.type": "Cross-hatch" },
+    { "layout.type": "Scatter" },
+    { "layout.type": "Spiral" },
+    { "layout.type": "Fibonacci" },
   ];
   const edits = [
     { "hole.diameter": 7 },
@@ -182,6 +193,9 @@ test("every edit that changes hole placement changes the signature", () => {
     { "layout.radial.mode": "Circle" },
     { "layout.radial.layout": "Sunflower" },
     { "layout.radial.centerHole": true },
+    { "layout.crosshatch.angleA": 10 },
+    { "layout.crosshatch.angleB": 80 },
+    { "layout.scatter.seed": 4242 },
     { "sheet.w": 260 },
     { "sheet.h": 260 },
     { "boundary.margins.top": 12 },
@@ -512,7 +526,12 @@ test("PLACEMENT_PARAMS is exactly what generateHoles reads", () => {
   );
   assert.equal(source.match(/\barguments\b/), null, "generateHoles must not reach its input through arguments");
 
-  const destructuring = source.match(/^function generateHoles\(params\) \{\s*const \{([\s\S]*?)\} = params;/);
+  // The spacing field is generateHoles' second input and deliberately not a
+  // param: it is a sampler, and PLACEMENT_PARAMS is primitives. patternSignature
+  // signs it separately, from the same compileSpacing call the layouts read, and
+  // the tests below exercise that half.
+  assert.match(source, /^function generateHoles\(params, spacing = null\) \{/);
+  const destructuring = source.match(/^function generateHoles\(params, spacing = null\) \{\s*const \{([\s\S]*?)\} = params;/); // prettier-ignore
   assert.ok(destructuring, "could not find generateHoles' destructuring");
   const names = destructuring[1]
     .split(",")
@@ -537,9 +556,18 @@ test("no module let, var or ambient global in generateHoles' import closure", ()
   // the real one. Treat a failure as a design question, not a lint to satisfy by
   // rewriting the `let` as a const object — that spelling is the hole.
   //
-  // Two false alarms are known and deliberate: a pure module-level memo
-  // (`let cache = new Map()`) trips it, and so does a commented-out `let`.
-  const source = url => readFileSync(url, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  // One false alarm is known and deliberate: a pure module-level memo
+  // (`let cache = new Map()`) trips it.
+  //
+  // Comments are stripped first, both kinds. Not to be tidy: the scan below
+  // matches the bare words `document`, `window` and `process`, and prose about
+  // what a document holds is on nearly every file here. A `//` inside a string
+  // literal would be mangled by the second strip, and none of these files has
+  // one — the same assumption the block-comment strip has always made.
+  const source = url =>
+    readFileSync(url, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
   const closure = new Map();
   const walk = url => {
     if (closure.has(url.href)) return;
@@ -551,7 +579,7 @@ test("no module let, var or ambient global in generateHoles' import closure", ()
     // are stripped above for the same reason — one before an import hides it.
     for (const found of src.matchAll(/^\s*(?:import|export)[^"']*["'](\.[^"']+)["']/gm)) walk(new URL(found[1], url));
   };
-  walk(new URL("../layouts/grid.js", import.meta.url));
+  walk(new URL("../layouts/index.js", import.meta.url));
 
   // The exact list, not a count: in both escapes above the closure stayed at
   // five files while the true dependency set was six, so a floor said nothing.
@@ -559,10 +587,18 @@ test("no module let, var or ambient global in generateHoles' import closure", ()
   const files = [...closure.keys()].map(href => href.slice(root.length)).sort();
   assert.deepEqual(files, [
     "src/core/math.js",
+    "src/core/rng.js",
     "src/geometry/polygon.js",
     "src/geometry/rounded-rect.js",
+    "src/geometry/spatial-hash.js",
+    "src/layouts/crosshatch.js",
+    "src/layouts/fibonacci.js",
     "src/layouts/grid.js",
+    "src/layouts/index.js",
+    "src/layouts/lattice.js",
     "src/layouts/radial-engine.js",
+    "src/layouts/scatter.js",
+    "src/layouts/spiral.js",
   ]);
 
   for (const [href, src] of closure) {
@@ -668,10 +704,11 @@ test("the superellipse document computes and exports like any other shape", () =
   assert.ok(area(0) < area(0.5) && area(0.5) < area(1));
 });
 
-test("controllers never invalidate the removed-hole indices", () => {
-  // Nothing about a field moves a centre, so the removals a user made survive
+test("the size, angle and shape channels never invalidate the removed-hole indices", () => {
+  // None of the three moves a centre, so the removals a user made survive
   // adding, editing and enabling one. This is the property that keeps `fields`
-  // out of PLACEMENT_PARAMS.
+  // out of PLACEMENT_PARAMS — and the spacing channel is exactly the one that
+  // does not have it, which the next test is about.
   const base = doc({ removedHoles: [4, 9] });
   for (const patch of [
     { "fields.enabled": true },
@@ -684,4 +721,107 @@ test("controllers never invalidate the removed-hole indices", () => {
   }
   // But the morph shape itself is a shape swap, and that does move holes.
   assert.notEqual(patternSignature(doc({ "hole.shape": "Superellipse" })), patternSignature(createDocument()));
+});
+
+// ─── Phase 3: the spacing channel ─────────────────────────────────────
+
+const spacing = (patch = {}) => controller({ id: "s1", channel: "spacing", target: 2, radius: 70, ...patch });
+const withSpacing = (base, controllers) => patchIn(base, { "fields.enabled": true, "fields.controllers": controllers });
+
+test("every spacing edit that moves a hole changes the signature", () => {
+  // The same contract the placement params carry, for the input that is not one.
+  // generateHoles takes (params, spacing), so a signature over params alone would
+  // hold removals across a controller drag that moved every hole under them —
+  // and there would be no undo step pointing back at the arrangement they meant.
+  const positions = d => JSON.stringify(generateHoles(buildParams(d, deriveGeometry(d)), compileSpacing(d.fields)));
+  const bases = [
+    { "layout.type": "Straight" },
+    { "layout.type": "Staggered 60°" },
+    { "layout.type": "Cross-hatch" },
+    { "layout.type": "Scatter" },
+    { "layout.type": "Spiral" },
+    { "layout.type": "Fibonacci" },
+  ];
+  const fields = [
+    [],
+    [spacing()],
+    [spacing({ target: 0.5 })],
+    [spacing({ target: 2.0001 })],
+    [spacing({ radius: 71 })],
+    [spacing({ strength: 0.5 })],
+    [spacing({ falloff: "linear" })],
+    [spacing({ geometry: { points: [{ x: 101, y: 100 }] } })],
+    [spacing({ kind: "line", geometry: { points: [{ x: 40, y: 40 }, { x: 160, y: 160 }] } })], // prettier-ignore
+    [spacing({ kind: "line", geometry: { points: [{ x: 40, y: 40 }, { x: 160, y: 160 }] }, oneSided: 1 })], // prettier-ignore
+    [spacing(), spacing({ id: "s2", geometry: { points: [{ x: 40, y: 40 }] } })],
+    // A spacing controller borrowing a size controller's geometry: editing the
+    // SIZE controller now moves holes, and the signature has to see it.
+    [controller({ id: "c1", channel: "size", geometry: { points: [{ x: 60, y: 60 }] } }), spacing({ id: "s2", syncWith: "c1" })], // prettier-ignore
+    [controller({ id: "c1", channel: "size", geometry: { points: [{ x: 150, y: 150 }] } }), spacing({ id: "s2", syncWith: "c1" })], // prettier-ignore
+  ];
+  let moved = 0;
+  for (const basePatch of bases) {
+    const documents = fields.map(controllers => withSpacing(doc(basePatch), controllers));
+    for (let i = 0; i < documents.length; i++) {
+      for (let j = i + 1; j < documents.length; j++) {
+        if (positions(documents[i]) === positions(documents[j])) continue;
+        moved++;
+        assert.notEqual(
+          patternSignature(documents[i]),
+          patternSignature(documents[j]),
+          `${JSON.stringify(basePatch)}: fields ${i} and ${j} place different holes but sign the same`
+        );
+      }
+    }
+  }
+  assert.ok(moved > 200, `expected the sweep to move holes often, got ${moved}`);
+});
+
+test("a spacing controller a mode ignores does not move the readout either", () => {
+  // The counted and theoretical open-area figures disagree slightly on identical
+  // geometry, so a controller that changes nothing must not flip the path — the
+  // headline number would move without a hole moving. Radial and the three
+  // uniform-ligament tilings all ignore the channel.
+  for (const patch of [
+    { "layout.type": "Radial" },
+    { "hole.shape": "Hexagon" },
+    { "hole.shape": "Diamond" },
+    { "hole.shape": "Triangle", "layout.type": "Straight" },
+  ]) {
+    const bare = computePattern(doc(patch));
+    const field = computePattern(withSpacing(doc(patch), [spacing({ target: 0.4 })]));
+    assert.equal(field.activeHoles.length, bare.activeHoles.length, JSON.stringify(patch));
+    assert.equal(field.stats.useCountedOAR, bare.stats.useCountedOAR, JSON.stringify(patch));
+    assert.equal(fixed(field.stats.displayOAR), fixed(bare.stats.displayOAR), JSON.stringify(patch));
+  }
+  // And a mode that DOES read it goes onto the counted path, because a stretched
+  // lattice has no unit cell left to divide by.
+  const straight = computePattern(doc({ "layout.type": "Straight" }));
+  const stretched = computePattern(withSpacing(doc({ "layout.type": "Straight" }), [spacing({ target: 2 })]));
+  assert.equal(straight.stats.useCountedOAR, false);
+  assert.equal(stretched.stats.useCountedOAR, true);
+  assert.ok(stretched.activeHoles.length < straight.activeHoles.length);
+});
+
+test("the new layout modes report an honest open area", () => {
+  // Cross-hatch has a unit cell — a parallelogram, not pitch × pitch — so it may
+  // use the theoretical figure; Scatter, Spiral and Fibonacci have no lattice at
+  // all and must count.
+  const cross = computePattern(doc({ "layout.type": "Cross-hatch" }));
+  assert.equal(cross.stats.useCountedOAR, false);
+  // Right-angled families give the straight grid's rectangular cell back.
+  const right = computePattern(
+    doc({ "layout.type": "Cross-hatch", "layout.crosshatch.angleA": 90, "layout.crosshatch.angleB": 0 })
+  );
+  assert.equal(fixed(right.stats.displayOAR), fixed(computePattern(doc({ "layout.type": "Straight" })).stats.displayOAR)); // prettier-ignore
+  // A 60° crossing spreads the same lines over a larger cell, so the open area
+  // falls — the ratio is exactly sin 60°, which is what the cell area divides by.
+  const sixty = computePattern(
+    doc({ "layout.type": "Cross-hatch", "layout.crosshatch.angleA": 90, "layout.crosshatch.angleB": 30 })
+  );
+  assert.ok(Math.abs(sixty.stats.theoreticalOAR / right.stats.theoreticalOAR - Math.sin(Math.PI / 3)) < 1e-9);
+
+  for (const type of ["Scatter", "Spiral", "Fibonacci"]) {
+    assert.equal(computePattern(doc({ "layout.type": type })).stats.useCountedOAR, true, type);
+  }
 });

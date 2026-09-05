@@ -1,6 +1,24 @@
 // Shared vocabulary for patterns, shapes and presets. Pure data, no side effects.
 
-export const PATTERN_TYPES = ["Straight", "Staggered 60°", "Staggered 45°", "Radial", "Custom Angle"];
+// The layout modes, in the order the Type dropdown offers them. The first five
+// are the original grid and radial families; Cross-hatch, Scatter, Spiral and
+// Fibonacci arrived with Phase 3. Keep this list and the LAYOUTS registry in
+// layouts/index.js in step — layouts.test.js asserts they match, since the
+// document may hold any name from here and the registry decides what each one
+// means. The names are the values a saved document carries, so they are part of
+// the file format: rename one and every document naming it falls back to the
+// default on load.
+export const PATTERN_TYPES = [
+  "Straight",
+  "Staggered 60°",
+  "Staggered 45°",
+  "Radial",
+  "Custom Angle",
+  "Cross-hatch",
+  "Scatter",
+  "Spiral",
+  "Fibonacci",
+];
 export const HOLE_SHAPES = ["Circle", "Rectangle", "Pill", "Hexagon", "Diamond", "Triangle", "Superellipse"];
 export const CUSTOM_SIZE_SHAPES = ["Rectangle", "Pill", "Diamond", "Triangle", "Superellipse"];
 // The one shape whose outline the `shape` field channel can morph per hole.
@@ -59,6 +77,15 @@ export const DOC_LIMITS = {
   "layout.edgeGap": [0, 50],
   "layout.customAngle": [0, 90],
   "layout.radial.gap": [0, 50],
+  // Cross-hatch line directions. A full half-turn each way, because it is the
+  // difference between the two that shapes the lattice and either one may be
+  // the larger.
+  "layout.crosshatch.angle": [-90, 90],
+  // Scatter is the one layout that draws random numbers, so the seed is part of
+  // the document: the same seed has to place the same holes in every tab, every
+  // reload and every export, or `removedHoles` addresses a list that no longer
+  // exists.
+  "layout.scatter.seed": [0, 99999],
   "taper.thickness": [0, 10],
   "taper.angle": [0, 15],
   "variation.minScale": [0.01, 2],

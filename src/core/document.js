@@ -3,7 +3,7 @@
 // Bump DOC_SCHEMA_VERSION and add a migration in persistence when the shape changes.
 import { DEFAULT_VARIATION } from "../fields/variation-engine.js";
 
-export const DOC_SCHEMA_VERSION = 2;
+export const DOC_SCHEMA_VERSION = 3;
 
 export const cloneVariation = variation => ({
   ...variation,
@@ -44,6 +44,14 @@ export function createDocument() {
       edgeGapY: 3,
       gapLinked: true,
       customAngle: 30,
+      // Cross-hatch: the directions the two line families run in, in degrees.
+      // 45 and −45 cross at a right angle, so the default is the Straight grid
+      // turned onto its diagonal rather than a mode that looks broken until it
+      // is adjusted.
+      crosshatch: { angleA: 45, angleB: -45 },
+      // Scatter: the seed the Poisson-disk sampler draws from. In the document
+      // because the pattern has to be reproducible from the document alone.
+      scatter: { seed: 1 },
       radial: {
         edgeGap: 5,
         circumGap: 5,

@@ -256,6 +256,20 @@ evaluateChannel(controllers, channel, x, y, ctx) → number
 
 ## 6. Phase 3: 레이아웃 모드 9종
 
+상태 (2026-09-05): 공통 인터페이스, Spacing 채널, 공간 해시, 그리고 신규 모드 4종을 구현했습니다. 산출물은 src/layouts/index.js(레지스트리 겸 유일한 진입점), src/layouts/crosshatch.js, src/layouts/scatter.js, src/layouts/spiral.js, src/layouts/fibonacci.js, src/layouts/lattice.js, src/geometry/spatial-hash.js, src/core/rng.js이며 문서 스키마는 3으로 올렸습니다.
+
+Type 드롭다운은 이제 9종입니다. Straight, Staggered 60°, Staggered 45°, Radial(Concentric·Sunflower·6k Rosette), Custom Angle, Cross-hatch, Scatter, Spiral, Fibonacci. 로드맵이 열거한 10종 가운데 grid, staggered, concentric, crosshatch, scatter, spiral, fibonacci를 덮었습니다.
+
+Spacing 채널은 EDITABLE_CHANNELS에 들어왔고, 격자 계열은 6.2절이 정한 대로 행 단위 누적 피치만 읽습니다. Cross-hatch는 두 직선 계열을 각각 이동시키므로 정렬을 깨지 않고 2차원 밀도 변조가 되며, 이것이 13절의 격자 왜곡 리스크에 대한 답입니다. Radial과 균일 리거먼트 타일링 3종은 이 채널을 읽지 않고, 그 사실을 패널과 툴 레일이 표시합니다.
+
+남긴 항목은 셋입니다.
+
+- Path: 캔버스 위에서 경로를 그리는 편집기가 먼저 필요하고, 그것은 Phase 4의 경계 정점 편집과 같은 UI 작업입니다. 그 편집기가 생긴 다음에 붙이는 편이 낫습니다.
+- Voronoi: 홀마다 다른 다각형 외곽선을 요구하므로 SHAPES 레지스트리가 문서 전역의 hole.shape 하나가 아니라 홀별 형상을 다룰 수 있어야 합니다. findOverlaps, calcMinLigament, generateSVGParts가 모두 형상 인자를 하나만 받는 현재 구조를 바꾸는 일이라, 6.2절의 다른 모드들과 함께 넣기에는 변경 범위가 다릅니다. Phase 4의 polygon 형상 작업과 묶는 것이 맞습니다.
+- Flow Lines: 출력이 홀이 아니라 가변 폭 연속 선이므로 통계, 렌더, 내보내기 경로가 모두 별도입니다. 6.1절 인터페이스가 strokes를 따로 둔 이유이기도 합니다.
+
+이미지 컨트롤러는 Spacing 채널을 구동할 수 없게 막았습니다. 밝기 맵은 DOM이 비동기로 디코딩하고 공유 링크에는 실리지 않으므로, 그것이 홀의 위치를 정하면 문서에 없는 상태가 배치를 좌우하게 되고 removedHoles 인덱스가 근거 없이 어긋납니다. 크기·각도·형상 채널은 그리는 방식만 바꾸므로 그림을 기다려도 됩니다.
+
 ### 6.1 공통 인터페이스
 
 ```js
