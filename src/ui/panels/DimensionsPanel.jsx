@@ -270,7 +270,7 @@ export function DimensionsPanel() {
               fontSize: 10,
               cursor: "pointer",
               fontFamily: MONO,
-              marginBottom: 10,
+              marginBottom: 12,
             }}
           >
             <SquarePen size={11} /> {ui.pathEditMode ? "Editing Canvas" : "Edit on Canvas"}
@@ -281,7 +281,7 @@ export function DimensionsPanel() {
               take hold of it.
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
               {layout.path.paths.map((path, index) => (
                 <div key={index} style={{ display: "flex", gap: 4 }}>
                   <button
@@ -290,7 +290,7 @@ export function DimensionsPanel() {
                     aria-pressed={index === ui.selectedPath}
                     style={{
                       flex: 1,
-                      height: 26,
+                      height: 28,
                       border: `1px solid ${index === ui.selectedPath ? theme.accent : theme.border}`,
                       borderRadius: 4,
                       background: index === ui.selectedPath ? theme.accentBg : "transparent",
@@ -307,8 +307,8 @@ export function DimensionsPanel() {
                     aria-label={`Remove path ${index + 1}`}
                     title="Remove this path"
                     style={{
-                      width: 26,
-                      height: 26,
+                      width: 28,
+                      height: 28,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -325,7 +325,7 @@ export function DimensionsPanel() {
               ))}
             </div>
           )}
-          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
             {[
               ["Add a path", () => actions.addPath(), layout.path.paths.length >= MAX_PATHS, "+ path", `At most ${MAX_PATHS} paths`], // prettier-ignore
               ["Add a path vertex", () => actions.addVertex(ui.selectedPath), (layout.path.paths[ui.selectedPath]?.points.length ?? MAX_PATH_POINTS) >= MAX_PATH_POINTS, "+ vertex", layout.path.paths.length === 0 ? "Add a path first" : `At most ${MAX_PATH_POINTS} vertices`], // prettier-ignore
@@ -365,7 +365,7 @@ export function DimensionsPanel() {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                marginBottom: 8,
+                marginBottom: 10,
                 opacity: disabled ? 0.4 : 1,
               }}
             >
@@ -415,7 +415,7 @@ export function DimensionsPanel() {
             title="Try another arrangement at the same density"
             style={{
               width: "100%",
-              height: 26,
+              height: 31,
               marginBottom: 12,
               display: "flex",
               alignItems: "center",

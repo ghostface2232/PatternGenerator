@@ -502,17 +502,17 @@ function drawPaths(ctx, { pathBlock, selectedPath, editing, bounds, baseScale, d
       ctx.stroke();
     }
     if (!active) return;
-    // Light fill, accent ring — the vector-editor handle, and the one treatment
-    // that reads against both the sheet and the holes it sits over. Filled with
-    // the accent instead, a handle over a black hole was a dark dot on a dark
-    // dot.
+    // Ink fill, accent ring: the same handle the variation gizmo's reach point
+    // and the controllers' hollow handles use, at the reach point's size. The
+    // ring is what reads — filled with the accent, a handle over a black hole
+    // was a dark dot on a dark dot.
     for (const point of path.points) {
       ctx.beginPath();
       ctx.arc(point.x, point.y, 5 * px, 0, Math.PI * 2);
-      ctx.fillStyle = dark ? "#f8fafc" : "#ffffff";
+      ctx.fillStyle = dark ? "#0f0f11" : "#ffffff";
       ctx.fill();
       ctx.strokeStyle = accent;
-      ctx.lineWidth = 2 * px;
+      ctx.lineWidth = 1.6 * px;
       ctx.stroke();
     }
   });
