@@ -8,6 +8,8 @@ import {
   DIN_PRESETS,
   DOC_LIMITS,
   HOLE_SHAPES,
+  MAX_ASSET_DATA_URL_CHARS,
+  MAX_ASSETS,
   MAX_VARIATION_LAYERS,
   PATTERN_TYPES,
   RADIAL_LAYOUTS,
@@ -15,6 +17,15 @@ import {
   TAPER_DIRECTIONS,
 } from "./constants.js";
 import { BLEND_MODES, DEFAULT_VARIATION_LAYER, FIELD_SPACES, SIZE_PROFILES } from "../fields/variation-engine.js";
+import {
+  CHANNEL_INFO,
+  CONTROLLER_KINDS,
+  FALLOFFS,
+  FIELD_CHANNELS,
+  KIND_POINT_COUNT,
+  MAX_CONTROLLERS,
+  ONE_SIDED_VALUES,
+} from "../fields/controllers.js";
 
 export const FILE_EXTENSION = ".perf.json";
 export const FILE_MIME = "application/json";
@@ -28,6 +39,12 @@ export const SHARE_PARAM = "d";
 const MIGRATIONS = {
   // 0 → 1: documents saved before schemaVersion existed carry no version.
   0: doc => ({ ...doc, schemaVersion: 1 }),
+  // 1 → 2: Phase 2 adds hole.shapeMix, the `fields` controller block and the
+  // `assets` image store. All three are absent from a v1 document and
+  // validateDocument fills them from createDocument()'s defaults, which are
+  // inert (fields disabled, no controllers, no assets) — so a v1 document reads
+  // back with exactly the pattern it was saved with.
+  1: doc => ({ ...doc, schemaVersion: 2 }),
 };
 
 // ─── Validation ───────────────────────────────────────────────────────
@@ -104,6 +121,123 @@ function validateVariation(raw, fallback) {
   };
 }
 
+// ─── Field controllers ────────────────────────────────────────────────
+// A controller carries geometry the pipeline reads for every hole, so a broken
+// one is worse than a missing one: a NaN coordinate poisons every distance it
+// takes part in. Anything that cannot be repaired into a usable controller is
+// dropped rather than passed through — the pattern loses one field, not its
+// whole render.
+const TARGET_LIMIT = { size: "controller.target.size", spacing: "controller.target.spacing", angle: "controller.target.angle", shape: "controller.target.shape" }; // prettier-ignore
+
+function validatePoints(raw, kind) {
+  const { min, max } = KIND_POINT_COUNT[kind];
+  if (max === 0) return [];
+  if (!Array.isArray(raw)) return null;
+  const points = [];
+  for (const entry of raw.slice(0, max)) {
+    const p = obj(entry);
+    const x = num(p.x, NaN, "controller.coord");
+    const y = num(p.y, NaN, "controller.coord");
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null; // a hole in the path, not a shorter path
+    points.push({ x, y });
+  }
+  return points.length >= min ? points : null;
+}
+
+function validatePlacement(raw) {
+  const p = obj(raw);
+  return {
+    x: num(p.x, 0, "controller.coord"),
+    y: num(p.y, 0, "controller.coord"),
+    w: num(p.w, 50, "controller.image.size"),
+    h: num(p.h, 50, "controller.image.size"),
+    rotation: num(p.rotation, 0, "controller.image.rotation"),
+  };
+}
+
+function validateController(raw, index, takenIds) {
+  const c = obj(raw);
+  const kind = pick(c.kind, CONTROLLER_KINDS, null);
+  const channel = pick(c.channel, FIELD_CHANNELS, null);
+  if (!kind || !channel) return null;
+  const points = validatePoints(obj(c.geometry).points, kind);
+  if (points === null) return null;
+
+  let id = typeof c.id === "string" && c.id ? c.id.slice(0, 64) : `ctrl-${index + 1}`;
+  while (takenIds.has(id)) id = `${id}-${index + 1}`;
+  takenIds.add(id);
+
+  const controller = {
+    id,
+    channel,
+    kind,
+    enabled: bool(c.enabled, true),
+    geometry: { points },
+    target: num(c.target, CHANNEL_INFO[channel].defaultTarget, TARGET_LIMIT[channel]),
+    radius: num(c.radius, 40, "controller.radius"),
+    falloff: pick(c.falloff, FALLOFFS, "smooth"),
+    oneSided: pick(int(c.oneSided, 0), ONE_SIDED_VALUES, 0),
+    strength: num(c.strength, 1, "controller.strength"),
+    // Checked against the finished list below: a reference to a controller that
+    // did not survive validation would leave the geometry resolution walking to
+    // a dead end on every hole.
+    syncWith: typeof c.syncWith === "string" && c.syncWith && c.syncWith !== id ? c.syncWith.slice(0, 64) : null,
+    image: null,
+  };
+  if (kind === "image") {
+    const image = obj(c.image);
+    controller.image = {
+      assetId: typeof image.assetId === "string" && image.assetId ? image.assetId.slice(0, 64) : null,
+      invert: bool(image.invert, false),
+      gamma: num(image.gamma, 1, "controller.image.gamma"),
+      min: num(image.min, 0, "controller.image.level"),
+      max: num(image.max, 1, "controller.image.level"),
+      placement: validatePlacement(image.placement),
+    };
+  }
+  return controller;
+}
+
+function validateFields(raw, fallback) {
+  const f = obj(raw);
+  const source = Array.isArray(f.controllers) ? f.controllers.slice(0, MAX_CONTROLLERS) : [];
+  const takenIds = new Set();
+  const controllers = source.map((entry, i) => validateController(entry, i, takenIds)).filter(Boolean);
+  const ids = new Set(controllers.map(c => c.id));
+  for (const controller of controllers) {
+    if (controller.syncWith && !ids.has(controller.syncWith)) controller.syncWith = null;
+  }
+  const selected = controllers.find(c => c.id === f.selectedId);
+  return {
+    enabled: bool(f.enabled, fallback.enabled),
+    selectedId: selected ? selected.id : null,
+    controllers,
+  };
+}
+
+// Only assets an image controller still points at are kept: an orphan is dead
+// weight in every autosave and file from then on, and nothing can bring it back.
+function validateAssets(raw, controllers) {
+  const referenced = new Set(controllers.filter(c => c.kind === "image" && c.image?.assetId).map(c => c.image.assetId));
+  const assets = {};
+  let count = 0;
+  for (const [key, value] of Object.entries(obj(raw))) {
+    if (count >= MAX_ASSETS || !referenced.has(key)) continue;
+    const asset = obj(value);
+    const dataURL = typeof asset.dataURL === "string" ? asset.dataURL : "";
+    if (!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(dataURL)) continue;
+    if (dataURL.length > MAX_ASSET_DATA_URL_CHARS) continue;
+    assets[key] = {
+      name: text(asset.name, "image"),
+      dataURL,
+      width: Math.max(1, int(asset.width, 1)),
+      height: Math.max(1, int(asset.height, 1)),
+    };
+    count++;
+  }
+  return assets;
+}
+
 function validateRemovedHoles(raw) {
   if (!Array.isArray(raw)) return [];
   const seen = new Set();
@@ -127,6 +261,7 @@ export function validateDocument(raw) {
   const d = createDocument();
   const r = obj(raw);
   const margins = obj(obj(r.boundary).margins);
+  const fields = validateFields(r.fields, d.fields);
   const hole = obj(r.hole);
   const layout = obj(r.layout);
   const radial = obj(layout.radial);
@@ -152,6 +287,7 @@ export function validateDocument(raw) {
       cornerRadius: num(hole.cornerRadius, d.hole.cornerRadius, "hole.cornerRadius"),
       diamondOrient: pick(hole.diamondOrient, DIAMOND_ORIENTATIONS, d.hole.diamondOrient),
       triEquilateral: bool(hole.triEquilateral, d.hole.triEquilateral),
+      shapeMix: num(hole.shapeMix, d.hole.shapeMix, "hole.shapeMix"),
     },
     layout: {
       type: pick(layout.type, PATTERN_TYPES, d.layout.type),
@@ -170,6 +306,8 @@ export function validateDocument(raw) {
     },
     presetIndex: Math.min(DIN_PRESETS.length - 1, Math.max(0, int(r.presetIndex, 0))),
     variation: validateVariation(r.variation, d.variation),
+    fields,
+    assets: validateAssets(r.assets, fields.controllers),
     taper: {
       enabled: bool(taper.enabled, d.taper.enabled),
       thickness: num(taper.thickness, d.taper.thickness, "taper.thickness"),
@@ -226,9 +364,48 @@ export function fileStem(doc) {
   return stem || "pattern";
 }
 
+// ─── Assets ───────────────────────────────────────────────────────────
+// Embedded images are the one part of a document that does not travel. A share
+// link has to fit in a URL, and the recent list holds ten whole documents under
+// one localStorage key — a few hundred kilobytes of base64 each would blow the
+// quota and take the list down with it. Both drop the images and keep
+// everything else; the image controllers survive and go inert until a picture is
+// loaded again. The `current` autosave keeps them, so a reload is unaffected.
+export function stripAssets(doc) {
+  if (!doc || !doc.assets || Object.keys(doc.assets).length === 0) return doc;
+  return { ...doc, assets: {} };
+}
+
+export const hasAssets = doc => Object.keys(doc?.assets || {}).length > 0;
+
+// Drop images no image controller points at any more. Called whenever a
+// controller is deleted or given a different picture, so an editing session does
+// not accumulate megabytes of base64 nothing can reach. Returns the same object
+// when there is nothing to drop, so the autosave still sees an unchanged
+// document as unchanged.
+export function pruneAssets(doc) {
+  const assets = doc.assets || {};
+  const keys = Object.keys(assets);
+  if (!keys.length) return doc;
+  const referenced = new Set(
+    (doc.fields?.controllers || []).filter(c => c.kind === "image" && c.image?.assetId).map(c => c.image.assetId)
+  );
+  const kept = keys.filter(key => referenced.has(key));
+  if (kept.length === keys.length) return doc;
+  return { ...doc, assets: Object.fromEntries(kept.map(key => [key, assets[key]])) };
+}
+
+// An asset key that is free in this document.
+export function newAssetId(assets = {}) {
+  for (let i = 1; ; i++) {
+    const id = `asset-${i}`;
+    if (!(id in assets)) return id;
+  }
+}
+
 // ─── Share links ──────────────────────────────────────────────────────
 export function encodeShareHash(doc) {
-  const compact = { ...doc };
+  const compact = stripAssets({ ...doc });
   delete compact.id; // a shared copy becomes its own document when opened
   return `#${SHARE_PARAM}=${LZString.compressToEncodedURIComponent(JSON.stringify(compact))}`;
 }
@@ -289,7 +466,7 @@ export function loadRecent(storage) {
 
 // Upsert the document in the recent list (most recent first, capped).
 export function touchRecent(storage, doc, now = Date.now()) {
-  const entry = { id: doc.id, name: doc.name, updatedAt: now, doc };
+  const entry = { id: doc.id, name: doc.name, updatedAt: now, doc: stripAssets(doc) };
   const rest = loadRecent(storage).filter(e => e && e.id !== doc.id);
   const list = [entry, ...rest].slice(0, RECENT_LIMIT);
   storage.setItem(STORAGE_KEY_RECENT, JSON.stringify(list));

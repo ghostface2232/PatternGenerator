@@ -31,7 +31,7 @@ export function generateSVGParts(holes, params) {
       const topW = taperDirection === "Top larger" ? pt.w : pt.exitW;
       const topH = taperDirection === "Top larger" ? pt.h : pt.exitH;
       if (topW > 0 && topH > 0)
-        parts.push(holeSVGElement(pt.x, pt.y, shape, topW, topH, holeFill, "", pt.angle, pt.holeRadius));
+        parts.push(holeSVGElement(pt.x, pt.y, shape, topW, topH, holeFill, "", pt.angle, pt.holeRadius, pt.superN));
     });
     parts.push(`  </g>\n  <g id="exit-side">\n`);
     holes.forEach(pt => {
@@ -48,14 +48,15 @@ export function generateSVGParts(holes, params) {
             'fill="none"',
             'stroke="#666" stroke-width="0.15"',
             pt.angle,
-            pt.exitHoleRadius
+            pt.exitHoleRadius,
+            pt.superN
           )
         );
     });
     parts.push(`  </g>\n`);
   } else {
     holes.forEach(pt => {
-      parts.push(holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, holeFill, "", pt.angle, pt.holeRadius));
+      parts.push(holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, holeFill, "", pt.angle, pt.holeRadius, pt.superN));
     });
   }
   parts.push(`  </g>\n</svg>`);

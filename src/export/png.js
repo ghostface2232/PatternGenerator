@@ -19,18 +19,18 @@ export async function renderPNGBlob({ activeHoles, params, holeColor, bgColor, d
   ctx.clip();
   activeHoles.forEach(h => {
     ctx.beginPath();
-    traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
+    traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, h.superN);
     ctx.fillStyle = h.isClosed ? "rgba(200,30,30,0.5)" : holeColor;
     ctx.fill();
     if (taperActive && h.exitW > 0 && h.exitH > 0 && !h.isClosed) {
       ctx.beginPath();
-      traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
+      traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, h.superN);
       ctx.save();
       ctx.clip();
       ctx.fillStyle = dark ? "rgba(80,85,95,0.6)" : "rgba(160,165,175,0.5)";
       ctx.fillRect(h.x - h.w, h.y - h.h, h.w * 2, h.h * 2);
       ctx.beginPath();
-      traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius);
+      traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius, h.superN);
       ctx.fillStyle = holeColor;
       ctx.fill();
       ctx.restore();

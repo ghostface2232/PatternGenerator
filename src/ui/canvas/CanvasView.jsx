@@ -11,17 +11,26 @@ import {
   gizmoUsesPosition,
   hitTestGizmo,
 } from "../../fields/gizmo.js";
+import { controllerBodyDistance, hitTestController, moveControllerHandle } from "../../fields/controller-gizmo.js";
 import { drawScene } from "../../render/canvas-renderer.js";
 import { canvasToSheet, zoomAbout } from "../../render/view.js";
 import { useEditor } from "../EditorContext.jsx";
 import { MONO } from "../theme.js";
 import { StatsHud, VariationHud } from "./Hud.jsx";
+import { ToolRail } from "./ToolRail.jsx";
+
+// A pointer that never travelled this far (in screen pixels) was a click.
+const CLICK_SLOP = 5;
+// Below this a canvas drag reads as a click, so a line or curve drawn by
+// accident does not collapse into a zero-length one that cannot be grabbed.
+const MIN_DRAW_MM = 2;
 
 // The floating canvas card: draws the scene, and owns pan/zoom, hole-removal
 // clicks and variation-gizmo drags.
 export function CanvasView() {
   const {
     doc,
+    api,
     theme,
     ui,
     params,
@@ -32,10 +41,13 @@ export function CanvasView() {
     stats,
     history,
     selectedVariationLayer,
+    field,
+    imageElements,
     actions,
   } = useEditor();
   const { dark, showHud, holeRemovalMode, variationEditMode, pan, setPan, zoom, setZoom, setVariationHud } = ui;
-  const { variation } = doc;
+  const { fieldEditMode, activeChannel, fieldTool, setFieldTool } = ui;
+  const { variation, fields } = doc;
   const { holeColor, bgColor } = doc.appearance;
   const { marginLeft, marginTop } = params;
   const { perfW, perfH, taperActive } = geometry;
@@ -48,6 +60,9 @@ export function CanvasView() {
   const panOrigin = useRef({ x: 0, y: 0 });
   const pointerDownPos = useRef(null);
   const variationDrag = useRef(null);
+  const controllerDrag = useRef(null); // { id, handle } while a handle is held
+  const drawDrag = useRef(null); // { kind, from } while a line/curve is being drawn
+  const [drawPreview, setDrawPreview] = useState(null);
   const spacePressed = useRef(false);
 
   useEffect(() => {
@@ -82,6 +97,11 @@ export function CanvasView() {
       variation,
       variationEditMode,
       selectedVariationLayer,
+      fields: drawPreview ? { ...fields, controllers: [...fields.controllers, drawPreview] } : fields,
+      field,
+      fieldEditMode,
+      activeChannel,
+      imageElements,
       taperActive,
       holeColor,
       bgColor,
@@ -102,6 +122,12 @@ export function CanvasView() {
       variation,
       variationEditMode,
       selectedVariationLayer,
+      fields,
+      drawPreview,
+      field,
+      fieldEditMode,
+      activeChannel,
+      imageElements,
       taperActive,
       holeColor,
       bgColor,
@@ -176,11 +202,41 @@ export function CanvasView() {
 
   const geom = useMemo(() => ({ marginLeft, marginTop, perfW, perfH }), [marginLeft, marginTop, perfW, perfH]);
 
+  // Controllers on the channel being edited, nearest handle first. Only the
+  // active channel is grabbable — the others are drawn faintly for reference, so
+  // a stray click on one must not start dragging it.
+  const fieldsLive = useCallback(() => api.ref.current.fields, [api]);
+
   const handlePointerDown = useCallback(
     e => {
       if (e.button !== 0) return;
       pointerDownPos.current = { x: e.clientX, y: e.clientY };
       const view = viewRef.current;
+
+      if (fieldEditMode && fields.enabled && showHud && !spacePressed.current && view) {
+        const sheet = clientToSheet(e.clientX, e.clientY);
+        if (sheet) {
+          // The selected controller wins a tie, so its handles stay reachable
+          // even where another controller's overlap them.
+          const candidates = fields.controllers.filter(c => c.channel === activeChannel);
+          const ordered = candidates.slice().sort((a, b) => (a.id === fields.selectedId ? -1 : 0) - (b.id === fields.selectedId ? -1 : 0)); // prettier-ignore
+          for (const controller of ordered) {
+            const handle = hitTestController(controller, sheet.x, sheet.y, view.baseScale);
+            if (handle) {
+              controllerDrag.current = { id: controller.id, handle };
+              if (controller.id !== fields.selectedId) actions.selectController(controller.id);
+              e.currentTarget.setPointerCapture(e.pointerId);
+              return;
+            }
+          }
+          if (fieldTool === "line" || fieldTool === "curve") {
+            drawDrag.current = { kind: fieldTool, from: sheet };
+            e.currentTarget.setPointerCapture(e.pointerId);
+            return;
+          }
+        }
+      }
+
       if (
         variation.enabled &&
         variationEditMode &&
@@ -218,11 +274,63 @@ export function CanvasView() {
       showShapeHud,
       setVariationHud,
       history,
+      fieldEditMode,
+      fields,
+      activeChannel,
+      fieldTool,
+      actions,
     ]
+  );
+
+  // The two-point drag that draws a line or a curve, as a controller-shaped
+  // preview the renderer can draw without knowing anything about drafting.
+  const draftFromDrag = useCallback(
+    (kind, from, to) => {
+      const points =
+        kind === "curve"
+          ? [
+              from,
+              { x: from.x + (to.x - from.x) / 3, y: from.y + (to.y - from.y) / 3 - (to.x - from.x) * 0.25 },
+              { x: from.x + ((to.x - from.x) * 2) / 3, y: from.y + ((to.y - from.y) * 2) / 3 + (to.x - from.x) * 0.25 },
+              to,
+            ]
+          : [from, to];
+      return {
+        id: "__draft__",
+        channel: activeChannel,
+        kind,
+        enabled: true,
+        geometry: { points },
+        target: 0,
+        radius: Math.max(1, Math.round(Math.min(geom.perfW, geom.perfH) * 0.25)),
+        falloff: "smooth",
+        oneSided: 0,
+        strength: 1,
+        syncWith: null,
+        image: null,
+      };
+    },
+    [activeChannel, geom.perfW, geom.perfH]
   );
 
   const handlePointerMove = useCallback(
     e => {
+      if (controllerDrag.current) {
+        const sheet = clientToSheet(e.clientX, e.clientY);
+        if (!sheet) return;
+        const { id, handle } = controllerDrag.current;
+        const controller = fieldsLive().controllers.find(c => c.id === id);
+        if (!controller) return;
+        const patch = moveControllerHandle(controller, handle, sheet.x, sheet.y, e.shiftKey);
+        if (patch) actions.updateController(id, patch, true);
+        return;
+      }
+      if (drawDrag.current) {
+        const sheet = clientToSheet(e.clientX, e.clientY);
+        if (!sheet) return;
+        setDrawPreview(draftFromDrag(drawDrag.current.kind, drawDrag.current.from, sheet));
+        return;
+      }
       if (variationDrag.current) {
         const sheet = clientToSheet(e.clientX, e.clientY);
         if (!sheet) return;
@@ -249,11 +357,30 @@ export function CanvasView() {
         y: panOrigin.current.y + (e.clientY - panStart.current.y),
       });
     },
-    [isPanning, history, clientToSheet, selectedLayerLive, geom, showShapeHud, setPan]
+    [isPanning, history, clientToSheet, selectedLayerLive, geom, showShapeHud, setPan, actions, fieldsLive, draftFromDrag] // prettier-ignore
   );
 
   const handlePointerUp = useCallback(
     e => {
+      if (controllerDrag.current) {
+        controllerDrag.current = null;
+        api.closeGroup(); // the whole drag is one undo step
+        pointerDownPos.current = null;
+        return;
+      }
+      if (drawDrag.current) {
+        const { kind, from } = drawDrag.current;
+        drawDrag.current = null;
+        setDrawPreview(null);
+        const sheet = clientToSheet(e.clientX, e.clientY);
+        // Too short to be a deliberate stroke → treat it as a click, which the
+        // branch below turns into a point (or a selection).
+        if (sheet && Math.hypot(sheet.x - from.x, sheet.y - from.y) >= MIN_DRAW_MM) {
+          actions.addController(kind, draftFromDrag(kind, from, sheet).geometry);
+          pointerDownPos.current = null;
+          return;
+        }
+      }
       if (variationDrag.current) {
         const { startVariation } = variationDrag.current;
         variationDrag.current = null;
@@ -263,11 +390,44 @@ export function CanvasView() {
         return;
       }
       setIsPanning(false);
+      const wasClick =
+        pointerDownPos.current &&
+        Math.abs(e.clientX - pointerDownPos.current.x) < CLICK_SLOP &&
+        Math.abs(e.clientY - pointerDownPos.current.y) < CLICK_SLOP;
+
+      // A click on the canvas while editing fields either drops a new
+      // controller (a tool is armed) or picks the one under the cursor.
+      if (fieldEditMode && fields.enabled && showHud && wasClick && !spacePressed.current) {
+        const sheet = clientToSheet(e.clientX, e.clientY);
+        if (sheet) {
+          if (fieldTool === "point" || fieldTool === "line" || fieldTool === "curve") {
+            actions.addController("point", { points: [{ x: sheet.x, y: sheet.y }] });
+            pointerDownPos.current = null;
+            return;
+          }
+          const view = viewRef.current;
+          let closest = null,
+            closestDist = Infinity;
+          for (const controller of fields.controllers) {
+            if (controller.channel !== activeChannel) continue;
+            const d = controllerBodyDistance(controller, sheet.x, sheet.y);
+            if (d < closestDist) {
+              closestDist = d;
+              closest = controller;
+            }
+          }
+          // Same tolerance as a handle hit: within ~14 screen pixels of the body.
+          if (closest && closestDist * (view?.baseScale || 1) < 14 && closest.id !== fields.selectedId) {
+            actions.selectController(closest.id);
+            pointerDownPos.current = null;
+            return;
+          }
+        }
+      }
+
       // A click (not a drag) in removal mode toggles the nearest hole.
-      if (holeRemovalMode && pointerDownPos.current) {
-        const dx = e.clientX - pointerDownPos.current.x;
-        const dy = e.clientY - pointerDownPos.current.y;
-        if (Math.abs(dx) < 5 && Math.abs(dy) < 5) {
+      if (holeRemovalMode && wasClick) {
+        {
           const sheet = clientToSheet(e.clientX, e.clientY);
           if (sheet) {
             let closestIdx = -1,
@@ -287,11 +447,36 @@ export function CanvasView() {
       }
       pointerDownPos.current = null;
     },
-    [holeRemovalMode, holes, history, clientToSheet, actions, setVariationHud]
+    [
+      holeRemovalMode,
+      holes,
+      history,
+      clientToSheet,
+      actions,
+      setVariationHud,
+      api,
+      draftFromDrag,
+      fieldEditMode,
+      fields,
+      showHud,
+      fieldTool,
+      activeChannel,
+    ]
   );
 
+  // Escape puts the drawing tool away without leaving edit mode.
+  useEffect(() => {
+    if (!fieldTool) return;
+    const onKey = e => {
+      if (e.key === "Escape") setFieldTool(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fieldTool, setFieldTool]);
+
+  const fieldActive = fieldEditMode && fields.enabled;
   const cursor =
-    variation.enabled && variationEditMode
+    (variation.enabled && variationEditMode) || fieldActive
       ? "crosshair"
       : isPanning
         ? "grabbing"
@@ -352,9 +537,17 @@ export function CanvasView() {
             {variation.enabled && variationEditMode && (
               <Badge color={dark ? "#2563eb" : "#1d4ed8"}>EDIT VARIATION · SPACE TO PAN</Badge>
             )}
+            {fieldActive && (
+              <Badge color={dark ? "#7c3aed" : "#6d28d9"}>
+                {fieldTool
+                  ? `CLICK TO PLACE ${fieldTool.toUpperCase()} · ESC TO STOP`
+                  : `${activeChannel.toUpperCase()} FIELD · SPACE TO PAN`}
+              </Badge>
+            )}
           </div>
         </div>
       )}
+      {showHud && fieldActive && <ToolRail />}
       {showHud && ui.variationHud && <VariationHud />}
     </div>
   );

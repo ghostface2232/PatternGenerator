@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_VARIATION_LAYERS } from "../core/constants.js";
 import { cloneVariation, createDocument } from "../core/document.js";
-import { buildParams, computeStats, decorateHoles, deriveGeometry, filterActive } from "../core/pipeline.js";
+import {
+  buildParams,
+  compileDocumentField,
+  computeStats,
+  decorateHoles,
+  deriveGeometry,
+  filterActive,
+} from "../core/pipeline.js";
 import {
   FILE_EXTENSION,
   FILE_MIME,
@@ -9,6 +16,9 @@ import {
   deserializeDocument,
   encodeShareHash,
   fileStem,
+  hasAssets,
+  newAssetId,
+  pruneAssets,
   STORAGE_KEY_CURRENT,
   loadCurrent,
   loadRecent,
@@ -20,6 +30,8 @@ import {
 import { generateHoles } from "../layouts/grid.js";
 import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
+import { EDITABLE_CHANNELS, MAX_CONTROLLERS, createController } from "../fields/controllers.js";
+import { splitImageMaps, useImageMaps } from "./useImageMaps.js";
 import { generateSVGParts } from "../export/svg.js";
 import { renderPNGBlob } from "../export/png.js";
 import { downloadBlob, downloadText } from "../export/download.js";
@@ -92,6 +104,9 @@ export default function App() {
   const [variationEditMode, setVariationEditMode] = useState(false);
   const [variationAdvanced, setVariationAdvanced] = useState(false);
   const [variationHud, setVariationHud] = useState(null);
+  const [fieldEditMode, setFieldEditMode] = useState(false);
+  const [activeChannel, setActiveChannel] = useState(EDITABLE_CHANNELS[0]);
+  const [fieldTool, setFieldTool] = useState(null); // armed kind for click-to-add on the canvas
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [savedDoc, setSavedDoc] = useState(() => (startedClean ? doc : null)); // last written to localStorage
@@ -105,19 +120,33 @@ export default function App() {
   // ─── Derived pipeline (memoised step by step) ──────────────────────
   // setIn() shares untouched branches, so keying memos on the sub-objects means
   // e.g. a colour or removed-hole edit never regenerates the pattern.
-  const { hole, layout, sheet, boundary, taper, variation } = doc;
+  const { hole, layout, sheet, boundary, taper, variation, fields } = doc;
   const patternDoc = useMemo(() => ({ hole, layout, sheet, boundary, taper }), [hole, layout, sheet, boundary, taper]);
   const geometry = useMemo(() => deriveGeometry(patternDoc), [patternDoc]);
   const params = useMemo(() => buildParams(patternDoc, geometry), [patternDoc, geometry]);
   const baseHoles = useMemo(() => generateHoles(params), [params]);
-  const holeDoc = useMemo(() => ({ ...patternDoc, variation }), [patternDoc, variation]);
-  const holes = useMemo(() => decorateHoles(baseHoles, holeDoc, geometry), [baseHoles, holeDoc, geometry]);
+  // Decoding an image is asynchronous and lives outside the document, so the
+  // maps arrive after the first render and simply recompile the field then.
+  const decodedImages = useImageMaps(doc.assets);
+  const { maps: imageMaps, images: imageElements } = useMemo(() => splitImageMaps(decodedImages), [decodedImages]);
+  const field = useMemo(() => compileDocumentField(fields, { imageMaps }), [fields, imageMaps]);
+  const holeDoc = useMemo(() => ({ ...patternDoc, variation, fields }), [patternDoc, variation, fields]);
+  const holes = useMemo(
+    () => decorateHoles(baseHoles, holeDoc, geometry, field),
+    [baseHoles, holeDoc, geometry, field]
+  );
   const removedSet = useMemo(() => new Set(doc.removedHoles), [doc.removedHoles]);
   const activeHoles = useMemo(() => filterActive(holes, removedSet), [holes, removedSet]);
   const overlaps = useMemo(() => findOverlaps(activeHoles, hole.shape), [activeHoles, hole.shape]);
   const stats = useMemo(
-    () => computeStats({ doc: holeDoc, g: geometry, params, holes, activeHoles, removedSet, overlaps }),
-    [holeDoc, geometry, params, holes, activeHoles, removedSet, overlaps]
+    () => computeStats({ doc: holeDoc, g: geometry, params, holes, activeHoles, removedSet, overlaps, field }),
+    [holeDoc, geometry, params, holes, activeHoles, removedSet, overlaps, field]
+  );
+  const selectedController = useMemo(() => fields.controllers.find(c => c.id === fields.selectedId) || null, [fields]);
+  // Where a new controller is placed, and the frame the panel reports in.
+  const perfArea = useMemo(
+    () => ({ x: params.marginLeft, y: params.marginTop, w: geometry.perfW, h: geometry.perfH }),
+    [params.marginLeft, params.marginTop, geometry.perfW, geometry.perfH]
   );
 
   // ─── Autosave (localStorage) ──────────────────────────────────────
@@ -365,6 +394,86 @@ export default function App() {
       }));
       setVariationEditMode(true);
     };
+    // ─── Field controllers ─────────────────────────────────────────
+    // Every edit goes through api.update so it lands on the one global undo
+    // stack, exactly like the variation block. Continuous edits (sliders, canvas
+    // drags) coalesce under a key naming the controller, so a drag is one step
+    // and dragging two controllers in a row is two.
+    const mapControllers = (d, fn) => ({ ...d, fields: { ...d.fields, controllers: d.fields.controllers.map(fn) } });
+    const setFieldsEnabled = enabled => {
+      api.set("fields.enabled", enabled);
+      if (!enabled) setFieldEditMode(false);
+    };
+    const toggleFieldEditMode = () => {
+      const next = !fieldEditMode;
+      setFieldEditMode(next);
+      if (next) {
+        setHoleRemovalMode(false);
+        setVariationEditMode(false);
+        if (!api.ref.current.fields.enabled) api.set("fields.enabled", true);
+      } else {
+        setFieldTool(null);
+      }
+    };
+    const selectChannel = channel => {
+      setActiveChannel(channel);
+      // Keep the inspector on something that belongs to the channel just picked.
+      const current = api.ref.current.fields;
+      const selected = current.controllers.find(c => c.id === current.selectedId);
+      if (selected && selected.channel !== channel) {
+        const first = current.controllers.find(c => c.channel === channel);
+        api.set("fields.selectedId", first ? first.id : null);
+      }
+    };
+    const selectController = id => api.set("fields.selectedId", id);
+    // `geometry` overrides the default placement when the controller is being
+    // drawn on the canvas rather than dropped from the panel.
+    const addController = (kind, geometry = null) => {
+      const current = api.ref.current.fields;
+      if (current.controllers.length >= MAX_CONTROLLERS) return null;
+      const controller = createController({ channel: activeChannel, kind, area: perfArea, existing: current.controllers }); // prettier-ignore
+      if (geometry) controller.geometry = geometry;
+      api.update(d => ({
+        ...d,
+        fields: {
+          ...d.fields,
+          enabled: true,
+          selectedId: controller.id,
+          controllers: [...d.fields.controllers, controller],
+        },
+      }));
+      setFieldEditMode(true);
+      return controller.id;
+    };
+    const updateController = (id, patch, live = false) =>
+      api.update(
+        d => mapControllers(d, c => (c.id === id ? { ...c, ...patch } : c)),
+        live ? { merge: `fields.${id}` } : {}
+      );
+    const removeController = id =>
+      api.update(d => {
+        const controllers = d.fields.controllers.filter(c => c.id !== id);
+        // A controller synced to the one being removed would otherwise keep a
+        // reference that resolves to nothing on every hole.
+        const cleaned = controllers.map(c => (c.syncWith === id ? { ...c, syncWith: null } : c));
+        const selectedId = d.fields.selectedId === id ? (cleaned[0]?.id ?? null) : d.fields.selectedId;
+        return pruneAssets({ ...d, fields: { ...d.fields, selectedId, controllers: cleaned } });
+      });
+    const clearControllers = () =>
+      api.update(d => pruneAssets({ ...d, fields: { ...d.fields, selectedId: null, controllers: [] } }));
+    // Attaching a picture rewrites the asset store and the controller together,
+    // so one undo takes both back and no orphan is ever left behind.
+    const setControllerImage = (id, asset) =>
+      api.update(d => {
+        const assetId = newAssetId(d.assets);
+        return pruneAssets({
+          ...mapControllers(d, c => (c.id === id ? { ...c, image: { ...c.image, assetId } } : c)),
+          assets: { ...d.assets, [assetId]: asset },
+        });
+      });
+    const clearControllerImage = id =>
+      api.update(d => pruneAssets(mapControllers(d, c => (c.id === id ? { ...c, image: { ...c.image, assetId: null } } : c)))); // prettier-ignore
+
     const setHoleRemoval = on => {
       setHoleRemovalMode(on);
       if (on) setVariationEditMode(false);
@@ -396,10 +505,20 @@ export default function App() {
       addVariationLayer,
       removeSelectedVariationLayer,
       randomizeVariation,
+      setFieldsEnabled,
+      toggleFieldEditMode,
+      selectChannel,
+      selectController,
+      addController,
+      updateController,
+      removeController,
+      clearControllers,
+      setControllerImage,
+      clearControllerImage,
       setHoleRemoval,
       resetView,
     };
-  }, [doc, api, history, variationEditMode]);
+  }, [doc, api, history, variationEditMode, fieldEditMode, activeChannel, perfArea]);
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
@@ -437,6 +556,8 @@ export default function App() {
       api.replace(next);
       setVariationEditMode(false);
       setHoleRemovalMode(false);
+      setFieldEditMode(false);
+      setFieldTool(null);
       setVariationHud(null);
     },
     [api, flushPending]
@@ -468,6 +589,10 @@ export default function App() {
       },
       saveFile: () =>
         downloadText(serializeDocument(api.ref.current), `${fileStem(api.ref.current)}${FILE_EXTENSION}`, FILE_MIME),
+      // A link carries the controllers but not their pictures — those go only in
+      // the .perf.json file. The panel says so rather than letting the recipient
+      // wonder why their halftone is flat.
+      shareDropsImages: hasAssets(doc),
       shareLink: async () => {
         const url = `${window.location.origin}${window.location.pathname}${encodeShareHash(api.ref.current)}`;
         try {
@@ -479,7 +604,7 @@ export default function App() {
         }
       },
     }),
-    [saveStatus, recent, loadDocument, openFile, api]
+    [saveStatus, recent, loadDocument, openFile, api, doc]
   );
 
   // Keyboard shortcuts: undo / redo / save. Text fields keep their own undo.
@@ -542,6 +667,10 @@ export default function App() {
     setVariationAdvanced,
     variationHud,
     setVariationHud,
+    fieldEditMode,
+    activeChannel,
+    fieldTool,
+    setFieldTool,
     pan,
     setPan,
     zoom,
@@ -561,6 +690,10 @@ export default function App() {
     stats,
     history,
     selectedVariationLayer,
+    field,
+    selectedController,
+    perfArea,
+    imageElements,
     actions,
     project,
     exportSVG,

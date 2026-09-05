@@ -3,19 +3,23 @@
 //
 //   deriveGeometry(doc)              effective hole extents, pitches, tiling flags
 //   buildParams(doc, geometry)       the flat params object for generateHoles / exports
-//   decorateHoles(base, doc, g)      applies size variation, taper exit sizes, cull flags
+//   compileDocumentField(doc, ctx)   the document's field controllers, ready to sample
+//   decorateHoles(base, doc, g, f)   applies size variation, the field channels,
+//                                    taper exit sizes and cull flags
 //   filterActive(holes, removed)     drops removed / culled holes
 //   computeStats(...)                OAR (theoretical or counted), ligament, overlaps
-import { CUSTOM_SIZE_SHAPES, PERF_MODE_HOLE_LIMIT } from "./constants.js";
-import { clamp } from "./math.js";
+import { CUSTOM_SIZE_SHAPES, MORPH_SHAPE, PERF_MODE_HOLE_LIMIT } from "./constants.js";
+import { clamp, DEG } from "./math.js";
 import { basePolyVerts, maxCornerRadius, triInradius } from "../geometry/polygon.js";
-import { calcHoleArea } from "../geometry/shapes.js";
+import { calcHoleArea, getShape } from "../geometry/shapes.js";
+import { superNFromMix } from "../geometry/superellipse.js";
 import { estimateVisibleHoleArea, perfBoundsArea, perfBoundsFromParams } from "../geometry/boundary.js";
 import { calcMinLigament, findOverlaps } from "../geometry/ligament.js";
 import { calcTheoreticalOAR } from "../geometry/oar.js";
 import { generateHoles } from "../layouts/grid.js";
 import { getRadialShapeExtents, getRadialShapeOuterRadius } from "../layouts/radial-engine.js";
 import { evaluateVariationField, variationScaleAt } from "../fields/variation-engine.js";
+import { compileControllers, compiledHasChannel, evaluateCompiled } from "../fields/controllers.js";
 
 export function deriveGeometry(doc) {
   const { hole, layout, sheet, boundary, taper } = doc;
@@ -156,16 +160,64 @@ export function buildParams(doc, g) {
   };
 }
 
-// Apply size variation, taper exit sizes and the size-floor cull to raw centres.
-export function decorateHoles(baseHoles, doc, g) {
+// A document with no field controllers compiles to this, and every `has*` check
+// below then short-circuits: the per-hole cost of the whole controller system on
+// a document that does not use one is a single `.some()` over an empty array.
+const NO_FIELD = [];
+
+// A document's `fields` block, flattened and ready to sample. Takes the block
+// rather than the whole document so the React memo can key on it alone — the
+// document changes identity on every edit, the fields block only on its own.
+// `ctx` carries the decoded image maps (`{ imageMaps }`), which only the UI has;
+// a controller whose picture is missing compiles away rather than reading black.
+export function compileDocumentField(fields, ctx = {}) {
+  if (!fields?.enabled || !fields.controllers?.length) return NO_FIELD;
+  return compileControllers(fields.controllers, ctx);
+}
+
+// Which channels a compiled field actually changes for THIS document. A shape
+// controller over Circles and an angle controller over Circles both compile
+// fine and then do nothing, and the difference matters twice over: an angle a
+// shape cannot show would still widen the rotated bounding box
+// `estimateVisibleHoleArea` samples over, and a channel that changes nothing
+// must not push the statistics onto the counted-OAR path, which would move the
+// reported figure without moving a hole.
+//
+// The spacing channel is absent on purpose: it is the one channel that decides
+// where holes go, so it belongs to the layouts, and they start reading it in
+// Phase 3. Until then a spacing controller round-trips through save, share and
+// undo without changing anything.
+export function activeFieldChannels(doc, field = NO_FIELD) {
+  const shape = doc.hole.shape;
+  return {
+    size: compiledHasChannel(field, "size"),
+    angle: compiledHasChannel(field, "angle") && getShape(shape).rotates,
+    shape: shape === MORPH_SHAPE && compiledHasChannel(field, "shape"),
+  };
+}
+
+export const anyFieldChannel = active => active.size || active.angle || active.shape;
+
+// Apply size variation, the field channels, taper exit sizes and the size-floor
+// cull to raw centres. `field` is the output of compileDocumentField.
+export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
   const { variation, hole, boundary } = doc;
   const { margins } = boundary;
   const { effW, effH, perfW, perfH, taperActive, taperInset } = g;
   const holeRadius = hole.cornerRadius;
+  const morphs = hole.shape === MORPH_SHAPE;
+  const baseMix = hole.shapeMix ?? 0.5;
+  const baseSuperN = morphs ? superNFromMix(baseMix) : undefined;
+  const { size: hasSize, angle: hasAngle, shape: hasShape } = activeFieldChannels(doc, field);
   return baseHoles.map((base, index) => {
     const nx = perfW > 0 ? clamp((base.x - margins.left) / perfW, 0, 1) : 0.5;
     const ny = perfH > 0 ? clamp((base.y - margins.top) / perfH, 0, 1) : 0.5;
-    const scale = variationScaleAt(nx, ny, variation, index + 1);
+    // Controllers are placed in sheet millimetres, so they are sampled at the
+    // hole's real position — not at the normalised (nx, ny) the variation field
+    // uses, which would move every controller when a margin changes.
+    const scale = variationScaleAt(nx, ny, variation, index + 1) * (hasSize ? evaluateCompiled(field, "size", base.x, base.y) : 1); // prettier-ignore
+    const angle = hasAngle ? (base.angle || 0) + evaluateCompiled(field, "angle", base.x, base.y) * DEG : base.angle;
+    const superN = hasShape ? superNFromMix(evaluateCompiled(field, "shape", base.x, base.y, baseMix)) : baseSuperN;
     const w = Math.max(0.01, effW * scale);
     const h = Math.max(0.01, effH * scale);
     const culled = variation.enabled && variation.cullBelow > 0 && Math.min(w, h) < variation.cullBelow;
@@ -179,14 +231,16 @@ export function decorateHoles(baseHoles, doc, g) {
       culled,
       fieldValue: variation.enabled ? evaluateVariationField(nx, ny, variation, index + 1) : 1,
       scale,
+      angle,
+      superN,
       w,
       h,
       holeRadius: scaledRadius,
-      area: calcHoleArea(hole.shape, w, h, scaledRadius),
+      area: calcHoleArea(hole.shape, w, h, scaledRadius, superN),
       exitW,
       exitH,
       exitHoleRadius,
-      exitArea: exitW > 0 && exitH > 0 ? calcHoleArea(hole.shape, exitW, exitH, exitHoleRadius) : 0,
+      exitArea: exitW > 0 && exitH > 0 ? calcHoleArea(hole.shape, exitW, exitH, exitHoleRadius, superN) : 0,
       isClosed: taperActive && (exitW <= 0 || exitH <= 0),
     };
   });
@@ -196,9 +250,10 @@ export function filterActive(holes, removedSet) {
   return holes.filter((hole, i) => !removedSet.has(i) && !hole.culled);
 }
 
-export function computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps }) {
+export function computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps, field = NO_FIELD }) {
   const { hole, layout, sheet, boundary, variation } = doc;
   const shape = hole.shape;
+  const baseSuperN = shape === MORPH_SHAPE ? superNFromMix(hole.shapeMix ?? 0.5) : undefined;
   const { effW, effH, isRadial, taperActive, taperInset } = g;
   const perfBounds = perfBoundsFromParams(params);
   const activeHoleCount = activeHoles.length;
@@ -225,8 +280,14 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   // link from another version), and those must not read as removed holes.
   const removedHoleCount = holeCount - activeHoleCount - culledHoleCount;
   const hasRemovedHoles = removedHoleCount > 0;
-  const useCountedOAR = variation.enabled || hasRemovedHoles || g.hasAnyMargin || boundary.cornerRadius > 0 || isRadial;
-  const theoreticalHoleArea = calcHoleArea(shape, effW, effH, hole.cornerRadius);
+  // A controller that this document's shape can actually show makes the unit
+  // cell a fiction — size and shape vary the hole area across the sheet, and
+  // angle turns holes into the boundary — so the counted path takes over for
+  // exactly the reason variation already does.
+  const hasFieldControllers = anyFieldChannel(activeFieldChannels(doc, field));
+  const useCountedOAR =
+    variation.enabled || hasFieldControllers || hasRemovedHoles || g.hasAnyMargin || boundary.cornerRadius > 0 || isRadial; // prettier-ignore
+  const theoreticalHoleArea = calcHoleArea(shape, effW, effH, hole.cornerRadius, baseSuperN);
   // Triangle tiling / diamond lattice: one hole per tiling cell (the hole
   // expanded by gap/2), so the unit cell is simply that cell's area.
   const uniformCellArea = g.isTriTiling
@@ -271,7 +332,7 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   );
   const theoreticalExitArea =
     theoreticalExitW > 0 && theoreticalExitH > 0
-      ? calcHoleArea(shape, theoreticalExitW, theoreticalExitH, theoreticalExitRadius)
+      ? calcHoleArea(shape, theoreticalExitW, theoreticalExitH, theoreticalExitRadius, baseSuperN)
       : 0;
   const theoreticalEffOAR = uniformCellArea
     ? Math.min((theoreticalExitArea / uniformCellArea) * 100, 100)
@@ -317,21 +378,29 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
 }
 
 // One-shot convenience for tests and headless export: the whole pipeline.
-export function computePattern(doc) {
+export function computePattern(doc, ctx = {}) {
   const g = deriveGeometry(doc);
   const params = buildParams(doc, g);
   const baseHoles = generateHoles(params);
-  const holes = decorateHoles(baseHoles, doc, g);
+  const field = compileDocumentField(doc.fields, ctx);
+  const holes = decorateHoles(baseHoles, doc, g, field);
   const removedSet = new Set(doc.removedHoles);
   const activeHoles = filterActive(holes, removedSet);
   const overlaps = findOverlaps(activeHoles, doc.hole.shape);
-  const stats = computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps });
-  return { geometry: g, params, baseHoles, holes, activeHoles, removedSet, overlaps, stats };
+  const stats = computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps, field });
+  return { geometry: g, params, baseHoles, holes, activeHoles, removedSet, overlaps, stats, field };
 }
 
 // The params generateHoles actually reads — keep in step with its destructuring.
 // buildParams also carries the hole corner radius and the taper fields, which
 // change how a hole is drawn but never where it sits.
+//
+// The Phase 2 field channels are out for the same reason: size, angle and shape
+// are applied in decorateHoles, after the centres exist, so a controller resizes,
+// turns or morphs a hole without moving it and the removed-hole indices stay
+// meaningful. `hole.shapeMix` never reaches buildParams at all. The spacing
+// channel WILL move holes — Phase 3 is where the layouts start reading it, and
+// that is the point at which this list has to grow.
 //
 // What makes this sound is structural, not empirical: generateHoles is pure in
 // `params` (it reads no module state, and generateRadialHoles receives only

@@ -3,6 +3,7 @@ import { ProjectPanel } from "./panels/ProjectPanel.jsx";
 import { PatternPanel } from "./panels/PatternPanel.jsx";
 import { DimensionsPanel } from "./panels/DimensionsPanel.jsx";
 import { VariationPanel } from "./panels/VariationPanel.jsx";
+import { FieldsPanel } from "./panels/FieldsPanel.jsx";
 import { TaperPanel } from "./panels/TaperPanel.jsx";
 import { HoleRemovalPanel } from "./panels/HoleRemovalPanel.jsx";
 import { ColorsPanel } from "./panels/ColorsPanel.jsx";
@@ -43,6 +44,7 @@ export function Sidebar() {
         <PatternPanel />
         <DimensionsPanel />
         <VariationPanel />
+        <FieldsPanel />
         <TaperPanel />
         <HoleRemovalPanel />
         <ColorsPanel />

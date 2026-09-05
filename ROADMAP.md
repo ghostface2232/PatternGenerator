@@ -177,7 +177,14 @@ SolidVents의 클라우드 저장소를 백엔드 없이 대체하는 단계입�
 
 ## 5. Phase 2: 컨트롤러 기반 4채널 필드 시스템
 
-SolidVents의 핵심 차별점입니다. 기존 variation-engine.js는 그대로 두고, 그 위에 컨트롤러 개념을 얹어 하위 호환을 유지합니다.
+상태 (2026-09-05): 구현 완료. 산출물은 src/fields/controllers.js, src/fields/image-map.js, src/fields/controller-gizmo.js, src/geometry/superellipse.js, src/ui/panels/FieldsPanel.jsx, src/ui/canvas/ToolRail.jsx, src/ui/useImageMaps.js이며 문서 스키마는 2로 올렸습니다.
+
+의도적으로 남긴 항목은 두 가지입니다.
+
+- Spacing 채널: 데이터 모델, 검증, 저장, 평가까지 모두 있지만 읽는 쪽이 없습니다. 이 채널만은 홀의 위치를 바꾸므로 레이아웃의 몫이고, 그것이 Phase 3의 인터페이스가 fields를 인자로 받는 이유입니다. 아무 일도 하지 않는 도구를 UI에 노출하는 편이 더 나쁘므로 EDITABLE_CHANNELS에서는 빼 두었습니다. 이 채널이 들어오는 순간 PLACEMENT_PARAMS와 removedHoles 규칙도 함께 손봐야 합니다.
+- Web Worker (5.5): 컨트롤러 수를 8개로 제한하는 쪽을 먼저 택했습니다. 워커로 옮기는 작업은 생성과 통계를 함께 옮기는 Phase 6와 같은 일이고, 그때 한 번에 하는 편이 낫습니다.
+
+기존 variation-engine.js는 그대로 두고, 그 위에 컨트롤러 개념을 얹어 하위 호환을 유지합니다.
 
 ### 5.1 데이터 모델
 

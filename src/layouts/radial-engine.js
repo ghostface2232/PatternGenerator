@@ -65,13 +65,17 @@ export function getRadialShapeExtents(shape, w, h, diamondOrient = "Point up") {
       tangential: projectedVertexExtent(vertices, Math.PI / 2 - offset),
     };
   }
-  if (shape === "Rectangle" || shape === "Pill") return { radial: w, tangential: h };
+  // Superellipse joins the axis-aligned family: the hole is turned so its own
+  // x axis points outward, so w is the radial extent and h the tangential one.
+  if (shape === "Rectangle" || shape === "Pill" || shape === "Superellipse") return { radial: w, tangential: h };
   return { radial: w, tangential: w };
 }
 
 export function getRadialShapeOuterRadius(shape, w, h) {
   if (shape === "Circle") return w / 2;
-  if (shape === "Rectangle") return Math.hypot(w, h) / 2;
+  // Bounding-box corner: exact at n → ∞ and conservative below it, which is the
+  // safe direction — it only ever spaces the rings further apart.
+  if (shape === "Rectangle" || shape === "Superellipse") return Math.hypot(w, h) / 2;
   if (shape === "Pill") return Math.max(w, h) / 2;
   const vertices = shapeVertices(shape, w, h);
   return Math.max(...vertices.map(([x, y]) => Math.hypot(x, y)));
@@ -90,7 +94,7 @@ function shapeSupport(shape, w, h, orientation, direction) {
   const c = Math.cos(local),
     s = Math.sin(local);
   if (shape === "Circle") return w / 2;
-  if (shape === "Rectangle") return (Math.abs(c) * w) / 2 + (Math.abs(s) * h) / 2;
+  if (shape === "Rectangle" || shape === "Superellipse") return (Math.abs(c) * w) / 2 + (Math.abs(s) * h) / 2;
   if (shape === "Pill") {
     if (w >= h) return (Math.abs(c) * (w - h)) / 2 + h / 2;
     return (Math.abs(s) * (h - w)) / 2 + w / 2;
