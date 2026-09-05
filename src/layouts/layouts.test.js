@@ -8,6 +8,8 @@ import { generateSVGString } from "../export/svg.js";
 import { LAYOUTS, generateHoles, layoutReadsSpacing, tilingFlags } from "./index.js";
 import { MIN_CROSS_SIN } from "./crosshatch.js";
 import { MAX_SCATTER_HOLES } from "./scatter.js";
+import { generateSpiralHoles } from "./spiral.js";
+import { generateFibonacciHoles } from "./fibonacci.js";
 import { compileControllers } from "../fields/controllers.js";
 
 const doc = (patch = {}) => patchIn(createDocument(), patch);
@@ -305,15 +307,233 @@ test("the spacing field bounds it reports really do bound it", () => {
   }
 });
 
-test("a scatter stops at its cap instead of running away", () => {
-  const dense = doc({
-    "layout.type": "Scatter",
-    "hole.diameter": 0.5,
+test("a free-form mode refuses a pattern it cannot draw rather than drawing part of one", () => {
+  // All three fill outward from the middle, so stopping at a cap leaves a disc
+  // of holes in a blank sheet — a pattern that reads as broken rather than as a
+  // limit. The panel says why when a mode places nothing.
+  const dense = extra =>
+    doc({ "hole.diameter": 0.5, "layout.edgeGapX": 0, "layout.edgeGapY": 0, "sheet.w": 1000, "sheet.h": 1000, ...extra }); // prettier-ignore
+  for (const type of ["Scatter", "Spiral", "Fibonacci"]) {
+    assert.equal(place(dense({ "layout.type": type })).length, 0, type);
+    // And what it does draw, it draws over the whole sheet: an island would
+    // satisfy a count assertion but not this one.
+    const ok = computePattern(doc({ "layout.type": type, "sheet.w": 400, "sheet.h": 400 })).activeHoles;
+    assert.ok(ok.length > 500, `${type}: ${ok.length} holes`);
+    const span = axis => Math.max(...ok.map(h => h[axis])) - Math.min(...ok.map(h => h[axis]));
+    assert.ok(span("x") > 380 && span("y") > 380, `${type}: covers only ${span("x")}×${span("y")} of 400×400`);
+  }
+  // The cap is generous enough for a square metre at a 2.2 mm centre distance,
+  // which is well past any panel a person would scatter by hand.
+  assert.ok(MAX_SCATTER_HOLES >= 250_000);
+});
+
+test("cross-hatch under a spacing field fills the sheet or refuses it", () => {
+  // Its two guards used to be measured against the BASE pitches, so a 0.2× field
+  // under-counted the lines by twenty-five and both the line lists and the hole
+  // loop were cut short — in line-A order, which put every hole it did draw in
+  // one strip of an otherwise blank sheet.
+  const fine = withSpacing(
+    { "layout.type": "Cross-hatch", "hole.diameter": 0.5, "layout.edgeGapX": 0, "layout.edgeGapY": 0, "sheet.w": 1000, "sheet.h": 1000 }, // prettier-ignore
+    { target: 0.2, radius: 2000, falloff: "hard" }
+  );
+  assert.equal(place(fine).length, 0);
+
+  const drawn = computePattern(withSpacing({ "layout.type": "Cross-hatch", "sheet.w": 400, "sheet.h": 400 }, { target: 0.4, radius: 2000, falloff: "hard" })).activeHoles; // prettier-ignore
+  assert.ok(drawn.length > 1000);
+  const span = axis => Math.max(...drawn.map(h => h[axis])) - Math.min(...drawn.map(h => h[axis]));
+  assert.ok(span("x") > 390 && span("y") > 390, `covers only ${span("x")}×${span("y")} of 400×400`);
+});
+
+test("a diamond lattice fills a large sheet of small holes", () => {
+  // The rhombus lattice goes through a generic basis walk with a guard on the
+  // point count. Set below what DOC_LIMITS allows, that guard turned a 1000 mm
+  // panel of 0.5 mm diamonds into a blank canvas with no explanation.
+  const big = doc({
+    "hole.shape": "Diamond",
+    "layout.type": "Staggered 60°",
+    "hole.w": 0.5,
+    "hole.h": 0.5,
     "layout.edgeGapX": 0,
     "layout.edgeGapY": 0,
     "sheet.w": 1000,
     "sheet.h": 1000,
   });
-  const holes = place(dense);
-  assert.equal(holes.length, MAX_SCATTER_HOLES);
+  assert.ok(place(big).length > 7_000_000);
+});
+
+// ─── What the earlier tests did not pin ───────────────────────────────
+// Each of these was written against a mutation of the implementation that the
+// rest of the suite accepted. A test that passes on the broken version is not a
+// test of the thing its name claims.
+
+test("the spacing channel is a field, not one number applied everywhere", () => {
+  // Replacing the per-position read with a single sample at the middle of the
+  // sheet passed every count assertion in this file: a uniform multiplier
+  // thins and crowds exactly the way a field does, in total.
+  // Measured as the RATIO between two bands of the sheet, before and after: a
+  // uniform multiplier scales both bands alike and leaves the ratio where it
+  // was, while a field that reads the controller only near the middle cannot.
+  const band = (holes, lo, hi) => holes.filter(h => h.y >= lo && h.y < hi).length;
+  const contrast = d => {
+    const holes = computePattern(d).activeHoles;
+    return band(holes, 75, 125) / Math.max(1, band(holes, 0, 50));
+  };
+  for (const type of ["Straight", "Staggered 60°", "Cross-hatch", "Spiral", "Fibonacci"]) {
+    const flat = contrast(doc({ "layout.type": type }));
+    const fielded = contrast(withSpacing({ "layout.type": type }, { target: 0.35, radius: 60 }));
+    assert.ok(fielded > flat * 1.2, `${type}: middle-to-edge density ${flat.toFixed(2)} → ${fielded.toFixed(2)}`);
+  }
+});
+
+test("a grid row and a cross-hatch line read the whole of themselves", () => {
+  // Reading one point per row or line makes the mode blind everywhere else: the
+  // grid's centre column, and — at the default 45°/−45° — cross-hatch's two
+  // diagonals. A controller anywhere on the sheet has to move something.
+  for (const type of ["Straight", "Cross-hatch"]) {
+    const base = computePattern(doc({ "layout.type": type })).activeHoles.length;
+    for (const [x, y] of [
+      [30, 100],
+      [170, 100],
+      [100, 30],
+      [100, 170],
+    ]) {
+      const off = withSpacing({ "layout.type": type }, { target: 2.5, radius: 55, geometry: { points: [{ x, y }] } });
+      assert.notEqual(
+        computePattern(off).activeHoles.length,
+        base,
+        `${type}: a controller at ${x},${y} changed nothing`
+      );
+    }
+  }
+});
+
+test("a scatter's floor is min(rᵢ, rⱼ), not max", () => {
+  // The guarantee test asserts `>= min`, which `max` also satisfies — so it
+  // cannot tell the two apart, and `max` is the choice that opens a seam along
+  // every density boundary. Under `min` some pair must be closer than the
+  // sparser of its two radii; under `max` none can be.
+  const d = withSpacing({ "layout.type": "Scatter" }, { target: 2.5, radius: 55 });
+  const { activeHoles, geometry } = computePattern(d);
+  const field = compileSpacing(d.fields);
+  const radius = h => geometry.freeSpacingX * field.sample(h.x, h.y);
+  let below = 0;
+  for (let i = 0; i < activeHoles.length; i++) {
+    for (let j = i + 1; j < activeHoles.length; j++) {
+      const a = activeHoles[i],
+        b = activeHoles[j];
+      if (Math.hypot(a.x - b.x, a.y - b.y) < Math.max(radius(a), radius(b))) below++;
+    }
+  }
+  assert.ok(below > 0, "no pair sits inside the larger of its two radii, so this is the max() rule");
+});
+
+test("a spacing controller resolves the geometry it borrows", () => {
+  // `syncWith` may point across channels, so compileSpacing compiles the whole
+  // controller list and filters afterwards. Filtering first — which passed the
+  // entire suite — silently falls back to the follower's own geometry.
+  const source = spacingController({ id: "src", channel: "size", geometry: { points: [{ x: 30, y: 30 }] } });
+  const follower = spacingController({ id: "spc", syncWith: "src", target: 2.5 });
+  const synced = doc({ "layout.type": "Straight", "fields.enabled": true, "fields.controllers": [source, follower] });
+  // Through the signature, which is the compiled entries the layouts will read.
+  assert.deepEqual(JSON.parse(compileSpacing(synced.fields).signature)[0].points, [{ x: 30, y: 30 }]);
+
+  // And moving the SOURCE moves holes, so the signature has to see it.
+  const moved = doc({
+    "layout.type": "Straight",
+    "fields.enabled": true,
+    "fields.controllers": [{ ...source, geometry: { points: [{ x: 170, y: 170 }] } }, follower],
+  });
+  assert.notEqual(positions(moved), positions(synced));
+});
+
+test("the ligament search still finds the closest pair when the field spreads it out", () => {
+  // The search grid is sized from the hole extents and the layout's nominal
+  // pitch, neither of which knows what a spacing controller did. Without the
+  // holes' own spread in that maximum, a thinned pattern reported no ligament at
+  // all rather than a wide one.
+  const spread = withSpacing({ "layout.type": "Scatter", "hole.diameter": 1 }, { target: 4, radius: 400 });
+  const { stats } = computePattern(spread);
+  assert.ok(stats.minLigament !== null && stats.minLigament > 0, `ligament ${stats.minLigament}`);
+  // And a nearly-collinear pair, where the bounding box has no area to speak of.
+  const thin = computePattern(
+    doc({ "layout.type": "Spiral", "hole.shape": "Rectangle", "hole.w": 10, "hole.h": 10, "layout.edgeGapX": 20, "layout.edgeGapY": 20, "sheet.w": 200, "sheet.h": 15 }) // prettier-ignore
+  );
+  assert.ok(thin.activeHoles.length >= 2);
+  assert.ok(thin.stats.minLigament !== null, "two holes on one line reported no ligament");
+});
+
+test("Custom Angle keeps its angle when the spacing field moves the rows", () => {
+  // The stagger offset is a slope: shear = rise × tan(angle). Taking the rise
+  // from the nominal pitch while the field moved it turned 30° into 55°.
+  // Columns repeat every pitch, so the shear is only ever known modulo it, and
+  // its sign alternates row to row: the assertion is
+  // shear ≡ ±rise·tan(angle) (mod pitch), which pins the slope without pinning
+  // which column the row happens to start on.
+  const distanceToMultiple = (value, period) => {
+    const wrapped = ((value % period) + period) % period;
+    return Math.min(wrapped, period - wrapped);
+  };
+  const checkSlope = (d, what) => {
+    const holes = place(d).filter(h => h.x > 20 && h.x < 180);
+    const byRow = new Map();
+    for (const h of holes) byRow.set(h.y, [...(byRow.get(h.y) || []), h.x]);
+    const rows = [...byRow.entries()].sort((a, b) => a[0] - b[0]).slice(3, 9);
+    const tan = Math.tan((30 * Math.PI) / 180);
+    for (let i = 1; i < rows.length; i++) {
+      const [yA, xsA] = rows[i - 1];
+      const [yB, xsB] = rows[i];
+      const pitch = Math.min(...xsA.slice(1).map((x, k) => x - xsA[k]));
+      const shear = Math.min(...xsB) - Math.min(...xsA);
+      const rise = yB - yA;
+      const off = Math.min(distanceToMultiple(shear - rise * tan, pitch), distanceToMultiple(shear + rise * tan, pitch)); // prettier-ignore
+      assert.ok(off < 0.02, `${what}: rows ${yA}→${yB} sheared ${shear.toFixed(3)} where ±${(rise * tan).toFixed(3)} was asked for`); // prettier-ignore
+    }
+  };
+  const angled = { "layout.type": "Custom Angle", "layout.customAngle": 30, "hole.diameter": 4, "layout.edgeGapX": 6, "layout.edgeGapY": 6 }; // prettier-ignore
+  checkSlope(doc(angled), "no field");
+  checkSlope(withSpacing(angled, { target: 0.4, radius: 2000, falloff: "hard" }), "under a 0.4× field");
+});
+
+test("a spiral keeps the step it was asked for, however wide the field opens it", () => {
+  // The Δθ solver saturates at half a turn, where the chord is 2r + turnGap/2.
+  // The opening radius is picked so that exceeds the step — a margin a 4×
+  // controller erased, silently placing the innermost holes at 20 mm where 32
+  // was asked for.
+  for (const target of [1, 2.5, 4]) {
+    const d = target === 1 ? doc({ "layout.type": "Spiral" }) : withSpacing({ "layout.type": "Spiral" }, { target });
+    const holes = place(d);
+    const field = compileSpacing(d.fields);
+    let worst = Infinity;
+    for (let i = 1; i < holes.length; i++) {
+      const asked = 8 * (field ? field.sample(holes[i - 1].x, holes[i - 1].y) : 1);
+      worst = Math.min(worst, Math.hypot(holes[i].x - holes[i - 1].x, holes[i].y - holes[i - 1].y) / asked);
+    }
+    assert.ok(worst > 0.97, `target ${target}: closest consecutive pair is ${(worst * 100).toFixed(0)}% of the step`);
+  }
+});
+
+test("a broken sampler empties a layout rather than hanging it", () => {
+  // Not reachable through compileSpacing, which clamps to the slider range — but
+  // every walk in the layouts guards its step, and Fibonacci's did not: a zero
+  // step left its radius where it was, so neither the boundary test nor the hole
+  // cap ever fired.
+  const bounds = { xMin: 0, xMax: 100, yMin: 0, yMax: 100 };
+  for (const sample of [() => 0, () => -1, () => NaN]) {
+    const broken = { sample, signature: "broken", min: 1, max: 1 };
+    assert.ok(generateFibonacciHoles({ bounds, minSpacing: 5, spacing: broken }).length < 2);
+    assert.ok(generateSpiralHoles({ bounds, alongStep: 5, turnGap: 5, spacing: broken }).length < 2);
+  }
+});
+
+test("no two modes place the same holes", () => {
+  // The dispatch is a chain of ifs. A mode added to the registry but forgotten
+  // there would come out as a plausible straight grid, and every other test in
+  // this file — fills the sheet, stays in bounds, exports, gets denser as the
+  // gap closes — would pass on it.
+  const seen = new Map();
+  for (const type of PATTERN_TYPES) {
+    const key = positions(doc({ "layout.type": type }));
+    assert.ok(!seen.has(key), `${type} places exactly what ${seen.get(key)} places`);
+    seen.set(key, type);
+  }
 });

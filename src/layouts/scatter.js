@@ -28,33 +28,41 @@ const TAU = Math.PI * 2;
 // below about twenty the packing visibly loosens, above it the cost rises
 // without changing the result.
 const CANDIDATES = 30;
-// Past this the fill stops rather than growing without bound. It is six times
-// the point at which the app already switches to its reduced render, and reached
-// on the default sheet only below a 0.7 mm centre distance — a 0.5 mm hole at a
-// 0.2 mm gap. Every other layout here is closed-form and can afford the sliders'
-// full range; a dart-throwing sampler cannot, and a pattern that arrives is
-// better than a tab that stops responding.
-export const MAX_SCATTER_HOLES = 60_000;
+// Past this the mode refuses outright rather than filling what it can. The fill
+// grows outward from the middle, so stopping at a cap leaves a disc of holes in
+// a blank sheet — which reads as a broken pattern, not as a limit. Every other
+// layout here is closed-form and can afford the sliders' full range; a
+// dart-throwing sampler cannot, and this is roughly a square metre at a 2.2 mm
+// centre distance, well past any panel a person would draw this way.
+export const MAX_SCATTER_HOLES = 250_000;
+// Discs of radius r/2 pack at most π/(2√3) of the plane, so no dart-throwing can
+// place more than this many centres per unit area at minimum distance r. The
+// bound is what the refusal above is measured against; Bridson in practice lands
+// around 0.7/r², well under it.
+const MAX_PACKING_DENSITY = 1.16;
 
 export function generateScatterHoles({ bounds, minDist, seed, spacing, holeAngle = 0 }) {
   const { xMin, xMax, yMin, yMax } = bounds;
   if (!(xMax > xMin) || !(yMax > yMin) || !(minDist > 0)) return [];
 
   const lowest = spacing ? spacing.min : 1;
+  const finest = minDist * Math.max(1e-6, lowest);
+  if (MAX_PACKING_DENSITY * (xMax - xMin) * (yMax - yMin) > MAX_SCATTER_HOLES * finest * finest) return [];
   const radiusAt = spacing ? (x, y) => minDist * spacing.sample(x, y) : () => minDist;
   // Only speed depends on this: every query rounds its own radius up to whole
   // cells, so a cell smaller or larger than ideal changes how much of the map is
   // walked and nothing else.
   //
   // A cell of r/√2 holds at most one point and is the textbook choice, but there
-  // is no single r here — `spacing.min` is a rigorous lower bound on the field
-  // and the base value 1 an upper one, and a document can span the whole range.
-  // Sizing to the minimum makes a query in the SPARSE part of the sheet walk
-  // hundreds of empty cells (a controller reaching over a twentieth of a large
-  // panel cost twenty-seven seconds that way); sizing to the base makes a query
-  // in the DENSE part test dozens of points per cell. The geometric mean of the
-  // two splits the difference, and neither end degrades worse than quadratically
-  // from it.
+  // is no single r here: the field spans `spacing.min` to `spacing.max`, and a
+  // document can use the whole range. Sizing to the minimum makes a query in the
+  // SPARSE part of the sheet walk hundreds of empty cells (a controller reaching
+  // over a twentieth of a large panel cost twenty-seven seconds that way);
+  // sizing to the neutral value makes a query in the DENSE part test dozens of
+  // points per cell. The geometric mean of the two splits the difference, and
+  // neither end degrades worse than quadratically from it. `spacing.max` is
+  // deliberately not in this: a sparse REGION is cheap however it is sized,
+  // because it holds few points to query from.
   const hash = new SpatialHash((minDist * Math.sqrt(lowest)) / Math.SQRT2);
   const random = mulberry32(seed);
   const points = [];

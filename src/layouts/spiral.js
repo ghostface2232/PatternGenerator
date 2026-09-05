@@ -18,7 +18,12 @@
 // spiral whose turn clearance anyone can state.
 
 const TWO_PI = Math.PI * 2;
-export const MAX_SPIRAL_HOLES = 150_000;
+// Past this the mode refuses outright rather than drawing what it can. Both are
+// bad answers to "this is finer than I can draw", but a spiral grows outward
+// from its eye, so stopping part-way leaves a disc of holes in the middle of a
+// blank sheet — a pattern that looks wrong rather than a limit that reads as
+// one. The panel says why when a mode places nothing.
+export const MAX_SPIRAL_HOLES = 1_000_000;
 
 // |p(θ + delta) − p(θ)| on r = b·θ, squared. Strictly increasing in delta over
 // (0, π] — the next point turns away and recedes at once — which is what makes
@@ -53,12 +58,24 @@ export function generateSpiralHoles({ bounds, alongStep, turnGap, spacing, holeA
   const b = turnGap / TWO_PI;
   const maxRadius = Math.hypot(xMax - xMin, yMax - yMin) / 2;
 
+  // Each hole claims alongStep along the arm and turnGap across it, so the disc
+  // the walk covers over that area bounds the count — with the along-step taken
+  // at the smallest the field can ask for.
+  const finest = spacing ? Math.max(1e-6, spacing.min) : 1;
+  if (Math.PI * maxRadius * maxRadius > MAX_SPIRAL_HOLES * alongStep * finest * turnGap) return [];
+
   // The spiral crowds against itself near the origin: the perpendicular distance
   // between successive turns is turnGap·sin α with tan α = θ, so it only reaches
   // the full turnGap once the curve has unwound. Starting one pitch out leaves a
   // small open eye and holds the innermost pair within about 1% of the gap the
   // document asked for; starting at the origin loses a quarter of it.
-  let theta = Math.max(alongStep, turnGap) / b;
+  //
+  // Scaled by the field's UPPER bound, because that is the largest step it can
+  // ask for. `deltaForChord` saturates at half a turn, where the chord is
+  // 2r + turnGap/2, and the eye is picked precisely so that exceeds the step —
+  // a margin a 4× controller erased, silently placing the innermost holes at
+  // 20 mm where 32 mm was asked for.
+  let theta = (Math.max(alongStep, turnGap) * (spacing ? spacing.max : 1)) / b;
   const holes = [];
   while (holes.length < MAX_SPIRAL_HOLES) {
     const radius = b * theta;

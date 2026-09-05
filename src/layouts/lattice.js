@@ -1,18 +1,22 @@
 // Filling a rectangle with the points of a two-dimensional lattice
 // `origin + i·u + j·v`, whatever direction the basis vectors point in.
 //
-// Two layouts need exactly this and got it wrong in different ways before it was
-// one function: the Diamond rhombus lattice (a sheared basis) and Cross-hatch
-// (the intersections of two rotated line families). Walking i and j over a range
-// derived from the sheet's width and height only works for an axis-aligned
-// basis; a 45° basis has to walk the pre-image of the rectangle's corners
-// instead, which is what this does.
+// The Diamond rhombus lattice is what needs it: its basis is sheared, and
+// walking i and j over a range derived from the sheet's width and height only
+// works for an axis-aligned one. A sheared basis has to walk the pre-image of
+// the rectangle's corners instead, which is what this does. (Cross-hatch builds
+// its lattice from two lists of line offsets rather than from a basis, because
+// only that form can move the lines of each family independently under the
+// spacing field.)
 
-// A basis whose determinant is small relative to the region describes a lattice
-// with more points than any sheet could hold — the far end of two nearly
-// parallel line families. Every caller has a reason of its own to refuse that
-// case, but this is the backstop that stops a slider drag from hanging the tab.
-export const MAX_LATTICE_POINTS = 4_000_000;
+// Purely a backstop against a degenerate basis — one whose determinant is small
+// enough that the lattice has more points than memory. No document can reach it:
+// DOC_LIMITS floors both rhombus diagonals at 0.5 mm, so |det| ≥ 0.125 mm² and
+// the largest perforation area is about 1.03e6 mm², which is 8.3 M points. An
+// earlier 4 M cap sat BELOW that and turned a 1000 mm panel of 0.5 mm diamonds
+// into a blank canvas with no explanation — the one place the layout refactor
+// was not output-identical to what it replaced.
+export const MAX_LATTICE_POINTS = 20_000_000;
 
 // Visits `visit(x, y, i, j)` for every lattice point inside `bounds`, and
 // returns how many it visited — or -1 without visiting anything when the basis

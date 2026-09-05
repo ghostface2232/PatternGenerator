@@ -185,7 +185,7 @@ test("the modes that ignore the spacing channel say why", async ({ page }) => {
 
   await choose(page, "Hole Shape", "Circle");
   await choose(page, "Type", "Radial");
-  await expect(page.getByText(/no pitch for a spacing field to scale/)).toBeVisible();
+  await expect(page.getByText(/Radial does not read this channel/)).toBeVisible();
 
   // And a controller they ignore leaves the pattern untouched — read the
   // baseline BEFORE adding it, or the assertion never observes the add.

@@ -12,10 +12,17 @@
 // than the area of the sheet: a 1000 mm panel of 0.5 mm holes would need tens of
 // millions of dense-array cells and needs none of them here.
 //
-// Correctness never depends on the cell size — every query rounds its radius up
-// to whole cells and the caller still does the exact distance test. The cell
-// size only decides how much of the map a query walks, so an approximate guess
-// at the typical spacing is a perfectly good one.
+// For `SpatialHash` itself, correctness never depends on the cell size: every
+// query rounds its own radius up to whole cells and the caller still does the
+// exact distance test, so the cell size only decides how much of the map a query
+// walks and an approximate guess at the typical spacing is a perfectly good one.
+//
+// `forEachNeighbourPair` is the exception, and the reason this is spelled out
+// rather than left as a general rule: it has no radius of its own and visits
+// only pairs within ONE cell, so there the cell size IS the interaction
+// distance. Sizing it below the real neighbour distance finds no pairs at all,
+// which reads as "no ligament" rather than as a wide one — see the floor
+// `calcMinLigament` computes from the holes themselves.
 
 // Cell indices are packed into one number instead of a "gx,gy" string, which is
 // what this replaced: the scatter sampler makes millions of lookups and building

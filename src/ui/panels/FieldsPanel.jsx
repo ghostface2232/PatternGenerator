@@ -193,7 +193,7 @@ export function FieldsPanel() {
               }}
             >
               {doc.layout.type === "Radial"
-                ? "Radial places its rings by solving for the gaps it is given, so there is no pitch for a spacing field to scale. Try Spiral or Fibonacci for a variable-density radial pattern."
+                ? "Radial does not read this channel: two of its three ring layouts place their rings by solving for the gaps they are given, so there is no one pitch to scale. Spiral and Fibonacci are the variable-density radial patterns."
                 : `${doc.hole.shape} on ${doc.layout.type} is an exact interlocking tiling with the same ligament on every edge — a spacing field would be stretching the tiling, not varying its density. Change the hole shape or the pattern type to use this channel.`}
             </div>
           )}

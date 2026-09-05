@@ -67,13 +67,18 @@ export function tilingFlags(holeShape, patternType) {
 }
 
 // True when a spacing controller would actually move a hole in this document.
-// The three uniform-ligament tilings say no on purpose: each is an exact
+//
+// The three uniform-ligament tilings say no on principle: each is an exact
 // interlocking lattice whose whole point is a constant ligament on every edge,
 // and a field that stretches it is not varying the density of that pattern, it
-// is destroying the pattern. Radial says no for a different reason — each of its
-// three sub-layouts places rings by solving for the gaps it was given, so a
-// pitch multiplier has nothing to multiply. Spiral and Fibonacci are where a
-// variable-density radial pattern lives.
+// is destroying the pattern.
+//
+// Radial says no as a scope decision, not an impossibility — Concentric does
+// have a constant ring pitch that the grid's accumulate-outward rule would
+// transfer to directly. What it does not have is Sunflower and 6k Rosette, which
+// place their rings by SOLVING for the gaps they were given, so the three
+// sub-layouts would need three different answers under one dropdown. Spiral and
+// Fibonacci are where a variable-density radial pattern lives meanwhile.
 export const layoutReadsSpacing = (holeShape, patternType) =>
   LAYOUTS[patternType]?.spacing === true && !tilingFlags(holeShape, patternType).uniformGapMode;
 
@@ -144,6 +149,7 @@ export function generateHoles(params, spacing = null) {
     });
   }
 
+  const flags = tilingFlags(holeShape, patternType);
   const field = layoutReadsSpacing(holeShape, patternType) ? spacing : null;
   // Grid-family centres may overhang the perforation bounds by up to one hole
   // radius; the free-form modes fill the bounds exactly, because a scattered
@@ -151,7 +157,7 @@ export function generateHoles(params, spacing = null) {
   // not.
   const padded = { xMin: xMin - pad, xMax: xMax + pad, yMin: yMin - pad, yMax: yMax + pad };
 
-  if (tilingFlags(holeShape, patternType).isDiamondLattice) {
+  if (flags.isDiamondLattice) {
     const { u, v } = diamondLatticeBasis(hw * 2, hh * 2, pitchX, flatTheta);
     const holes = [];
     forEachLatticePoint((xMin + xMax) / 2, (yMin + yMax) / 2, u, v, padded, (x, y) =>
@@ -195,19 +201,28 @@ export function generateHoles(params, spacing = null) {
     );
   }
 
-  return clipToBoundary(
-    generateGridHoles({
-      holeShape,
-      holeW: hw * 2,
-      holeH: hh * 2,
-      patternType,
-      pitchX,
-      pitchY,
-      bounds,
-      pad,
-      flatTheta,
-      customAngle,
-      spacing: field,
-    })
-  );
+  // Explicit rather than a fallthrough. A mode added to PATTERN_TYPES and to
+  // LAYOUTS but forgotten in the dispatch above would otherwise come out as a
+  // plausible straight grid, and every test in layouts.test.js — fills the
+  // sheet, stays in bounds, exports, gets denser as the gap closes — would pass
+  // on it. An empty pattern is the loud failure.
+  if (flags.isGrid) {
+    return clipToBoundary(
+      generateGridHoles({
+        holeShape,
+        holeW: hw * 2,
+        holeH: hh * 2,
+        patternType,
+        pitchX,
+        pitchY,
+        bounds,
+        pad,
+        flatTheta,
+        customAngle,
+        spacing: field,
+        isHexHoneycomb: flags.isHexHoneycomb,
+      })
+    );
+  }
+  return [];
 }

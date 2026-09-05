@@ -16,7 +16,8 @@ import { superNFromMix } from "../geometry/superellipse.js";
 import { estimateVisibleHoleArea, perfBoundsArea, perfBoundsFromParams } from "../geometry/boundary.js";
 import { calcMinLigament, findOverlaps } from "../geometry/ligament.js";
 import { calcTheoreticalOAR } from "../geometry/oar.js";
-import { generateHoles, layoutFamily, layoutReadsSpacing, tilingFlags } from "../layouts/index.js";
+import { LAYOUTS, generateHoles, layoutFamily, layoutReadsSpacing, tilingFlags } from "../layouts/index.js";
+import { MIN_CROSS_SIN } from "../layouts/crosshatch.js";
 import { getRadialShapeExtents, getRadialShapeOuterRadius } from "../layouts/radial-engine.js";
 import { evaluateVariationField, variationScaleAt } from "../fields/variation-engine.js";
 import { CHANNEL_INFO, compileControllers, compiledDrivesChannel, evaluateCompiled } from "../fields/controllers.js";
@@ -80,7 +81,11 @@ export function deriveGeometry(doc) {
   const crossAngleA = layout.crosshatch.angleA;
   const crossAngleB = layout.crosshatch.angleB;
   const crossSin = Math.abs(Math.sin(((crossAngleB - crossAngleA) * Math.PI) / 180));
-  const crossCellArea = isCrosshatch && crossSin > 0 ? (pitchX * pitchY) / crossSin : null;
+  // Below MIN_CROSS_SIN the two families are near enough to parallel that their
+  // lattice cell is a sliver, so the mode places nothing at all. Derived here
+  // rather than in the panel so the threshold stays inside the layouts.
+  const crossDegenerate = isCrosshatch && crossSin < MIN_CROSS_SIN;
+  const crossCellArea = isCrosshatch && !crossDegenerate ? (pitchX * pitchY) / crossSin : null;
 
   const perfW = sheet.w - margins.left - margins.right;
   const perfH = sheet.h - margins.top - margins.bottom;
@@ -138,9 +143,11 @@ export function deriveGeometry(doc) {
     family,
     isFreeform,
     isCrosshatch,
+    hasUnitCell: LAYOUTS[patternType]?.theoretical === true,
     crossAngleA,
     crossAngleB,
     crossSin,
+    crossDegenerate,
     crossCellArea,
     freeDiameter,
     freeSpacingX,
@@ -237,7 +244,8 @@ export function compileDocumentField(fields, ctx = {}) {
 //   min, max      rigorous bounds on `sample`. The blend in evaluateCompiled is
 //                 a convex combination of the base value and the targets, so the
 //                 extremes of those bound every value it can return — which is
-//                 what lets the scatter sampler size its grid without guessing.
+//                 what lets the scatter sampler size its search grid and the
+//                 spiral its opening radius without either one guessing.
 const SPACING_RANGE = DOC_LIMITS["controller.target.spacing"];
 
 export function compileSpacing(fields) {
@@ -246,7 +254,15 @@ export function compileSpacing(fields) {
   // The whole list is compiled, not just the spacing entries: a spacing
   // controller may borrow another channel's geometry through `syncWith`.
   const compiled = compileControllers(fields.controllers).filter(entry => entry.channel === "spacing");
-  if (!compiled.length) return null;
+  // A controller whose target IS the channel's neutral value has to compile away
+  // entirely, not to a field that returns 1 everywhere. The two are the same
+  // number and a very different pattern: a field, however neutral, puts the grid
+  // on its accumulating row walk, and summing `pitch` a hundred times does not
+  // land on `cy + 100·pitch` to the last bit. One row falling a bit-width past
+  // the sheet edge dropped 31 holes from a 961-hole document while the open-area
+  // readout — correctly, since `activeFieldChannels` already knew the controller
+  // was inert — did not move at all.
+  if (!compiledDrivesChannel(compiled, "spacing")) return null;
   const base = CHANNEL_INFO.spacing.base;
   const [lo, hi] = SPACING_RANGE;
   let min = base,
@@ -360,7 +376,7 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   const { hole, layout, sheet, boundary, variation } = doc;
   const shape = hole.shape;
   const baseSuperN = shape === MORPH_SHAPE ? superNFromMix(hole.shapeMix ?? 0.5) : undefined;
-  const { effW, effH, isRadial, taperActive, taperInset } = g;
+  const { effW, effH, taperActive, taperInset } = g;
   const perfBounds = perfBoundsFromParams(params);
   const activeHoleCount = activeHoles.length;
   const holeCount = holes.length;
@@ -391,10 +407,16 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   // angle turns holes into the boundary — so the counted path takes over for
   // exactly the reason variation already does.
   const hasFieldControllers = anyFieldChannel(activeFieldChannels(doc, field));
-  // Scatter, Spiral and Fibonacci have no unit cell at all: their holes are not
-  // a lattice, so the only honest open-area figure is the counted one.
+  // `g.hasUnitCell` is the layout registry's own answer — Radial, Scatter,
+  // Spiral and Fibonacci place holes that are not a lattice, so the only honest
+  // open-area figure for them is the counted one, and the registry is where that
+  // fact is written down rather than repeated here.
+  //
+  // A pattern with no holes is the other case with no unit cell to divide by:
+  // a Cross-hatch whose two line families are parallel places nothing, and used
+  // to report the straight grid's 30.7% over an empty sheet.
   const useCountedOAR =
-    variation.enabled || hasFieldControllers || hasRemovedHoles || g.hasAnyMargin || boundary.cornerRadius > 0 || isRadial || g.isFreeform; // prettier-ignore
+    variation.enabled || hasFieldControllers || hasRemovedHoles || g.hasAnyMargin || boundary.cornerRadius > 0 || !g.hasUnitCell || holeCount === 0; // prettier-ignore
   const theoreticalHoleArea = calcHoleArea(shape, effW, effH, hole.cornerRadius, baseSuperN);
   // Triangle tiling / diamond lattice: one hole per tiling cell (the hole
   // expanded by gap/2), so the unit cell is simply that cell's area. Cross-hatch
@@ -570,7 +592,17 @@ export function patternSignature(doc) {
   // second half of the signature. It comes from compileSpacing, which is the
   // same call that produces the sampler the layouts read — one function, so the
   // signature cannot describe a field the layouts do not see, or miss one they do.
-  const spacing = compileSpacing(doc.fields)?.signature ?? "";
+  //
+  // Gated on the same `layoutReadsSpacing` that generateHoles gates on, and for
+  // the same reason read backwards: in the four modes where the rail and the
+  // panel say the channel does nothing, signing it anyway meant that dragging
+  // that controller's radius wiped the user's hole removals for a field nothing
+  // reads. The gate is sound because both of its inputs — the hole shape and the
+  // layout type — are themselves signed above, so a document cannot change which
+  // side of it it falls on without the signature moving.
+  const spacing = layoutReadsSpacing(doc.hole.shape, doc.layout.type)
+    ? (compileSpacing(doc.fields)?.signature ?? "")
+    : "";
   // Pairs of [type, text] inside JSON. The type keeps null, undefined and NaN
   // apart — JSON alone writes all three as null in array position, and the three
   // behave very differently in the arithmetic in generateHoles. JSON's quoting

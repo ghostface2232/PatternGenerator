@@ -1,13 +1,12 @@
 import { MoveVertical, Shuffle } from "lucide-react";
 import { DIAMOND_ORIENTATIONS, RADIAL_LAYOUTS, RADIAL_MODES } from "../../core/constants.js";
-import { MIN_CROSS_SIN } from "../../layouts/crosshatch.js";
 import { useEditor } from "../EditorContext.jsx";
 import { Dropdown, LinkButton, PitchInfo, SegRow, SliderRow, Toggle } from "../controls/index.js";
 import { MONO } from "../theme.js";
 import { Section, hintStyle, noteStyle, subLabelStyle } from "./Section.jsx";
 
 export function DimensionsPanel() {
-  const { doc, api, theme, geometry: g, actions } = useEditor();
+  const { doc, api, theme, geometry: g, stats, actions } = useEditor();
   const { dark } = theme;
   const { hole, layout, sheet, boundary } = doc;
   const { radial, crosshatch } = layout;
@@ -15,13 +14,21 @@ export function DimensionsPanel() {
   const isRadial = layout.type === "Radial";
   const setP = actions.setWithPresetReset;
   const faint = { marginLeft: 6, fontSize: 9, color: theme.textMuted };
-  // Two line families closer than this cut a lattice of slivers rather than a
-  // pattern, so the mode places nothing and says so instead of hanging.
-  const crossDegenerate = g.isCrosshatch && g.crossSin < MIN_CROSS_SIN;
   const crossingAngle = Math.round((Math.asin(Math.min(1, g.crossSin)) * 180) / Math.PI);
+  // Cross-hatch and the three free-form modes refuse a pattern finer than they
+  // can draw, rather than filling part of the sheet and leaving the rest blank.
+  // Refusing is only the better answer if it says so: an empty canvas with no
+  // explanation is worse than either.
+  const tooFine = (g.isCrosshatch || g.isFreeform) && stats.holeCount === 0 && !g.crossDegenerate;
 
   return (
     <Section title="Dimensions" theme={theme}>
+      {tooFine && (
+        <div style={hintStyle(theme)}>
+          {doc.layout.type} cannot draw a pattern this fine on a sheet this size, so it has placed nothing rather than
+          filling part of it. Widen the edge gap, enlarge the hole, or shrink the panel.
+        </div>
+      )}
       {g.isTriTiling && (
         <div style={hintStyle(theme)}>
           ▲▽ Triangles fill in alternating up/down rows — a seamless fit at 0 gap. Every grid type shares this tiling;
@@ -185,7 +192,7 @@ export function DimensionsPanel() {
             unit="°"
             dark={dark}
           />
-          {crossDegenerate ? (
+          {g.crossDegenerate ? (
             <div style={hintStyle(theme)}>
               The two line families are within {crossingAngle}° of parallel. They cut no usable lattice, so no holes are
               placed — move one angle away from the other.
