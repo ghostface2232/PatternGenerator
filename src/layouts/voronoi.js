@@ -64,9 +64,19 @@ export function boundaryPolygon({ xMin, xMax, yMin, yMax }, cornerRadius = 0) {
   for (const [cx, cy, from] of corners) {
     for (let i = 0; i <= CORNER_SEGMENTS; i++) {
       const a = from + (HALF * i) / CORNER_SEGMENTS;
-      verts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
+      const x = cx + Math.cos(a) * r,
+        y = cy + Math.sin(a) * r;
+      // At the full radius — a stadium, or a circle on a square panel — one
+      // corner's last vertex IS the next one's first. A repeated vertex is a
+      // zero-length edge, and `maxCornerRadius` reads one of those as "this
+      // corner can take no radius at all", which quietly disabled the cell
+      // corner slider for every cell that inherited the pair.
+      const last = verts[verts.length - 1];
+      if (last && Math.hypot(last[0] - x, last[1] - y) < 1e-9) continue;
+      verts.push([x, y]);
     }
   }
+  if (verts.length > 2 && Math.hypot(verts[0][0] - verts[verts.length - 1][0], verts[0][1] - verts[verts.length - 1][1]) < 1e-9) verts.pop(); // prettier-ignore
   return verts;
 }
 
@@ -122,18 +132,25 @@ export function generateVoronoiHoles({ bounds, cornerRadius = 0, minDist, gap, s
   const frame = boundaryPolygon(bounds, cornerRadius);
   const limit = Math.hypot(xMax - xMin, yMax - yMin);
   // Bridson stops only when no further dart fits, so every point of the sheet is
-  // within one local radius of a site and a cell reaches about that far. Twice
-  // the coarsest radius the field can ask for is therefore a first reach that
-  // finishes almost every cell in one pass, and the loop above is exact whether
+  // within one LOCAL radius of a site and a cell reaches about that far. Twice
+  // the radius the field asks for AT THIS SITE is therefore a first reach that
+  // usually finishes the cell in one pass, and the loop above is exact whether
   // it does or not.
-  const firstReach = minDist * (spacing ? Math.max(1e-6, spacing.max) : 1) * 2;
+  //
+  // At this site, not the coarsest anywhere on the sheet: a field spanning the
+  // slider's full 0.2× to 4× made every cell in the dense majority query at the
+  // radius the sparse corner needed, which is (max/min)² times the area and was
+  // 85 million half-plane clips where a Voronoi cell has six neighbours. One
+  // 1000 mm document went from 1.3 s to 37 s on the strength of a second
+  // controller that barely changed the pattern.
+  const firstReach = (x, y) => minDist * (spacing ? Math.max(1e-6, spacing.sample(x, y)) : 1) * 2;
   const hash = new SpatialHash(minDist * Math.sqrt(lowest));
   sites.forEach((site, index) => hash.insert(site.x, site.y, index));
 
   const inset = Math.max(0, gap || 0) / 2;
   const holes = [];
   for (let i = 0; i < sites.length; i++) {
-    const cell = voronoiCell(i, sites, hash, frame, firstReach, limit);
+    const cell = voronoiCell(i, sites, hash, frame, firstReach(sites[i].x, sites[i].y), limit);
     if (!cell) continue;
     const kept = insetConvexPoly(cell, inset);
     if (kept.length < 3 || polyArea(kept) < MIN_CELL_AREA) continue;

@@ -10,7 +10,7 @@
 //   computeStats(...)                OAR (theoretical or counted), ligament, overlaps
 import { CUSTOM_SIZE_SHAPES, DOC_LIMITS, MORPH_SHAPE, PERF_MODE_HOLE_LIMIT } from "./constants.js";
 import { clamp, DEG } from "./math.js";
-import { basePolyVerts, insetConvexPoly, maxCornerRadius, polyBBox, triInradius } from "../geometry/polygon.js";
+import { basePolyVerts, insetConvexPoly, maxCornerRadius, polyBBox, polyCentroid, triInradius } from "../geometry/polygon.js"; // prettier-ignore
 import { calcHoleArea, getShape } from "../geometry/shapes.js";
 import { strokeBBox, strokeMaxWidth } from "../geometry/stroke.js";
 import { superNFromMix } from "../geometry/superellipse.js";
@@ -346,7 +346,7 @@ export function compileSpacing(fields) {
 export function compilePlacement(doc) {
   const channels = layoutPlacementChannels(doc.layout.type);
   const spacing =
-    channels.includes("spacing") && layoutReadsSpacing(doc.hole.shape, doc.layout.type)
+    channels.includes("spacing") && layoutReadsSpacing(effectiveHoleShape(doc), doc.layout.type)
       ? compileSpacing(doc.fields)
       : null;
   const angle = channels.includes("angle") ? compileChannelField(doc.fields, "angle") : null;
@@ -446,7 +446,21 @@ export const anyFieldChannel = active => active.size || active.angle || active.s
 // width, not the length of the panel it crosses.
 function decorateOutline(base, { scale, scaleAt, effW, effH, taperActive, taperInset }) {
   if (base.poly) {
-    const poly = base.poly.map(([px, py]) => [px * scale, py * scale]);
+    // Scaled about the cell's own centroid, not about the site.
+    //
+    // Shrinking a hole must never move it closer to its neighbour, and scaling
+    // about any point INSIDE the outline guarantees that: the result is a subset
+    // of what was there, so no clearance can fall. The site is normally inside
+    // its cell but need not be inside the INSET one — a spacing controller that
+    // puts two sites closer together than the edge gap leaves the site on the
+    // far side of that bisector's inset edge, and scaling toward it dragged the
+    // cell at its neighbour. Measured: a 20 mm ligament came back 17.96 mm at
+    // half size. A convex polygon's centroid is always inside it.
+    const centre = polyCentroid(base.poly);
+    const poly = base.poly.map(([px, py]) => [
+      centre[0] + (px - centre[0]) * scale,
+      centre[1] + (py - centre[1]) * scale,
+    ]);
     const exitPoly = taperActive ? insetConvexPoly(poly, taperInset / 2) : poly;
     const box = polyBBox(poly),
       exitBox = polyBBox(exitPoly);

@@ -12,7 +12,9 @@ import { generateSpiralHoles } from "./spiral.js";
 import { defaultPathPoints, flattenPath, polylineLength } from "./path.js";
 import { diamondFlatAngle } from "./radial-engine.js";
 import { generateFibonacciHoles } from "./fibonacci.js";
-import { holeVertices } from "../geometry/shapes.js";
+import { holeVertices, isPointInsideHole } from "../geometry/shapes.js";
+import { signedPolyArea } from "../geometry/polygon.js";
+import { boundaryPolygon } from "./voronoi.js";
 import { compileControllers, imageChannels } from "../fields/controllers.js";
 import { DOC_LIMITS, MAX_PATHS, MAX_PATH_POINTS } from "../core/constants.js";
 import { patternSignature } from "../core/pipeline.js";
@@ -1096,4 +1098,74 @@ test("flow lines refuse a separation they cannot draw, and taper like any other 
     assert.ok(hole.exitStroke.halfW.every((w, i) => Math.abs(w - (hole.stroke.halfW[i] - inset / 2)) < 1e-9));
   }
   assert.ok(tapered.stats.totalExitHoleArea < tapered.stats.totalHoleArea);
+});
+
+test("a voronoi cell is exact, not merely the first guess at one", () => {
+  // The construction stops clipping only once no site outside its reach could
+  // still cut the cell. Skipping that check leaves cells that overlap: on this
+  // document a single pass reports a ligament of 0 against a gap of 1, and a
+  // quarter to a third of the cells on the DEFAULT document need a second pass
+  // too — this one is here because it is the one where getting it wrong shows.
+  for (const [seed, gap] of [
+    [7, 1],
+    [42, 1],
+    [3, 2],
+  ]) {
+    const { stats, overlaps } = computePattern(
+      doc({ "layout.type": "Voronoi", "hole.diameter": 2, "layout.edgeGapX": gap, "layout.scatter.seed": seed })
+    );
+    assert.equal(overlaps.size, 0, `seed ${seed}: cells overlap`);
+    assert.ok(Math.abs(stats.minLigament - gap) < 1e-6, `seed ${seed}: ligament ${stats.minLigament}`);
+  }
+});
+
+test("shrinking a voronoi cell never moves it closer to its neighbour", () => {
+  // A cell is scaled about its own centroid rather than about its site, and this
+  // is the document that tells them apart: a spacing field that puts two sites
+  // closer together than the edge gap leaves the site OUTSIDE the inset cell, so
+  // scaling toward it drags the cell at its neighbour. It cost 2 mm of a 20 mm
+  // ligament, on a readout whose whole job is to be trusted.
+  const base = {
+    "layout.type": "Voronoi",
+    "layout.edgeGapX": 20,
+    "layout.scatter.seed": 3,
+    "fields.enabled": true,
+    "fields.controllers": [spacingController({ target: 0.2, radius: 100 })],
+  };
+  const full = computePattern(doc(base));
+  for (const scale of [0.9, 0.5, 0.2]) {
+    const small = computePattern(
+      doc({ ...base, "variation.enabled": true, "variation.minScale": scale, "variation.maxScale": scale })
+    );
+    assert.equal(small.activeHoles.length, full.activeHoles.length);
+    assert.ok(
+      small.stats.minLigament >= full.stats.minLigament - 1e-9,
+      `at ${scale}×: ${small.stats.minLigament} against ${full.stats.minLigament}`
+    );
+  }
+});
+
+test("the voronoi boundary polygon is a simple, correctly wound convex outline", () => {
+  // Nothing downstream would notice if it were not: a cell is clipped to this
+  // frame, so it is always wholly inside the boundary, and the area estimator
+  // short-circuits before it ever hit-tests one. The winding decides whether
+  // click-to-remove works at all, and a repeated vertex at the full radius is a
+  // zero-length edge that reads as "this corner can take no radius".
+  for (const cornerRadius of [0, 1, 20, 99.99, 100, 500]) {
+    const poly = boundaryPolygon({ xMin: 0, xMax: 200, yMin: 0, yMax: 200 }, cornerRadius);
+    assert.ok(poly.length >= 4, `r ${cornerRadius}: ${poly.length} vertices`);
+    assert.ok(signedPolyArea(poly) > 0, `r ${cornerRadius}: wound the wrong way`);
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i],
+        b = poly[(i + 1) % poly.length];
+      assert.ok(Math.hypot(a[0] - b[0], a[1] - b[1]) > 1e-9, `r ${cornerRadius}: a repeated vertex at ${i}`);
+    }
+  }
+  // And a cell really does contain its own site, which is what the removal
+  // click asks — through the same registry entry the canvas uses.
+  const { activeHoles, geometry } = computePattern(doc({ "layout.type": "Voronoi", "layout.edgeGapX": 1 }));
+  assert.equal(geometry.holeShape, "Polygon");
+  const inside = activeHoles.filter(h => isPointInsideHole(h.x, h.y, h, "Polygon"));
+  assert.ok(inside.length > activeHoles.length * 0.9, `${inside.length} of ${activeHoles.length} cells contain a click on their own site`); // prettier-ignore
+  assert.equal(isPointInsideHole(-50, -50, activeHoles[0], "Polygon"), false);
 });

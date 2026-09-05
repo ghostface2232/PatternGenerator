@@ -65,6 +65,28 @@ export function signedPolyArea(verts) {
 
 export const polyArea = verts => Math.abs(signedPolyArea(verts));
 
+// Area centroid of a simple polygon, which for a convex one is always strictly
+// inside it — the property that makes it the safe centre to scale a hole about.
+// Falls back to the vertex mean for a degenerate outline with no area.
+export function polyCentroid(verts) {
+  let twice = 0,
+    cx = 0,
+    cy = 0;
+  for (let i = 0; i < verts.length; i++) {
+    const [x1, y1] = verts[i],
+      [x2, y2] = verts[(i + 1) % verts.length];
+    const cross = x1 * y2 - x2 * y1;
+    twice += cross;
+    cx += (x1 + x2) * cross;
+    cy += (y1 + y2) * cross;
+  }
+  if (Math.abs(twice) < 1e-12) {
+    const n = verts.length || 1;
+    return [verts.reduce((sum, v) => sum + v[0], 0) / n, verts.reduce((sum, v) => sum + v[1], 0) / n];
+  }
+  return [cx / (3 * twice), cy / (3 * twice)];
+}
+
 // Axis-aligned extent of a vertex list. Zeroes for an empty one, so a cell that
 // the inset below closed up entirely reads as a hole of no size rather than as
 // ±Infinity propagating through the statistics.
