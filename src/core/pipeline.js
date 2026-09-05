@@ -12,7 +12,7 @@ import { CUSTOM_SIZE_SHAPES, DOC_LIMITS, MORPH_SHAPE, PERF_MODE_HOLE_LIMIT } fro
 import { clamp, DEG } from "./math.js";
 import { basePolyVerts, insetConvexPoly, maxCornerRadius, polyBBox, polyCentroid, triInradius } from "../geometry/polygon.js"; // prettier-ignore
 import { calcHoleArea, getShape } from "../geometry/shapes.js";
-import { curvatureLimit, strokeBBox, strokeMaxWidth } from "../geometry/stroke.js";
+import { curvatureLimit, strokeBBox, strokeMaxWidth, strokeMinWidth } from "../geometry/stroke.js";
 import { superNFromMix } from "../geometry/superellipse.js";
 import { estimateVisibleHoleArea, perfBoundsArea, perfBoundsFromParams } from "../geometry/boundary.js";
 import { calcMinLigament, findOverlaps } from "../geometry/ligament.js";
@@ -515,18 +515,28 @@ function decorateOutline(base, { scale, scaleAt, effW, effH, taperActive, taperI
     const exitStroke = taperActive ? { pts, halfW: halfW.map(value => Math.max(0, value - taperInset / 2)) } : stroke;
     const box = strokeBBox(stroke),
       exitBox = strokeBBox(exitStroke);
+    // A slot is closed by the taper wherever its exit width reaches zero, not
+    // only when its widest point does. One slot's width follows the size
+    // channel along its length, so a 4× region on a 5 mm slot under a taper
+    // that eats 5.4 mm leaves the exit open inside the region and gone outside
+    // it: what comes through is two lobes joined by nothing, not the slot that
+    // was drawn. There is one exit per hole and the exporters trace it as one
+    // outline, so a slot cut anywhere along its length is reported closed —
+    // with the exit box zeroed, the way a round hole's is when its exit
+    // vanishes, so the exit side is neither drawn nor counted.
+    const closed = strokeMinWidth(exitStroke) <= 0;
     return {
       outline: { stroke, exitStroke },
       entry: stroke,
       exit: exitStroke,
       w: Math.max(0.01, box.right - box.left),
       h: Math.max(0.01, box.bottom - box.top),
-      exitW: Math.max(0, exitBox.right - exitBox.left),
-      exitH: Math.max(0, exitBox.bottom - exitBox.top),
+      exitW: closed ? 0 : exitBox.right - exitBox.left,
+      exitH: closed ? 0 : exitBox.bottom - exitBox.top,
       // The widest point of the slot: a line is one hole and cannot be culled in
       // the middle, so it goes only when the whole of it is below the floor.
       minSize: strokeMaxWidth(stroke),
-      closed: strokeMaxWidth(exitStroke) <= 0,
+      closed,
     };
   }
   const w = Math.max(0.01, effW * scale),

@@ -112,6 +112,17 @@ export const strokeMaxWidth = stroke => {
   return s ? 2 * Math.max(0, ...s.halfW) : 0;
 };
 
+// The narrowest the slot gets anywhere along its length. Zero means the slot is
+// cut in two there — which is the question a taper has to answer for a slot
+// that varies in width, not whether its widest point survives.
+export const strokeMinWidth = stroke => {
+  const s = strokeOf(stroke);
+  if (!s) return 0;
+  let min = Infinity;
+  for (const value of s.halfW) min = Math.min(min, Math.max(0, value));
+  return min === Infinity ? 0 : 2 * min;
+};
+
 // The widest a slot may be at each vertex of a centreline before its own turn
 // closes over it.
 //

@@ -1145,6 +1145,48 @@ test("flow lines refuse a separation they cannot draw, and taper like any other 
   assert.ok(tapered.stats.totalExitHoleArea < tapered.stats.totalHoleArea);
 });
 
+test("a slot the taper cuts anywhere along its length is a closed hole", () => {
+  // A slot's width follows the size channel along its length, so a taper can
+  // close it in some places and not others: the default 5 mm slot under a
+  // 10 mm / 15° taper loses 5.4 mm, which leaves nothing outside a 4× region
+  // and a 14.6 mm exit inside it. Judged by its widest point, such a slot was
+  // reported open, with an exit outline of two lobes joined by nothing. It is
+  // closed wherever its exit width reaches zero, and a closed slot has no
+  // exit box, area or outline to draw — like a round hole whose exit vanishes.
+  const { activeHoles, stats } = computePattern(
+    withSpacing(
+      { "layout.type": "Flow Lines", "taper.enabled": true, "taper.thickness": 10, "taper.angle": 15 },
+      { channel: "size", target: 4, radius: 120, falloff: "smooth" }
+    )
+  );
+  let pinched = 0;
+  for (const hole of activeHoles) {
+    const cut = hole.exitStroke.halfW.some(w => w <= 0);
+    assert.equal(hole.isClosed, cut, `${hole.id}: closed ${hole.isClosed} with widths ${hole.exitStroke.halfW.length}`);
+    if (cut) {
+      assert.equal(hole.exitW, 0);
+      assert.equal(hole.exitH, 0);
+      assert.equal(hole.exitArea, 0);
+      if (Math.max(...hole.exitStroke.halfW) > 0) pinched++;
+    } else {
+      assert.ok(hole.exitW > 0 && hole.exitH > 0 && hole.exitArea > 0, hole.id);
+    }
+  }
+  assert.ok(pinched > 0, "the fixture has to have a slot that is open in places and closed in others");
+  assert.ok(stats.closedHoleCount > 0 && stats.closedHoleCount < activeHoles.length, `${stats.closedHoleCount} closed`);
+  assert.equal(stats.hasClosedHoles, true);
+  assert.equal(stats.holeClosed, false);
+  assert.ok(stats.totalExitHoleArea > 0 && stats.totalExitHoleArea < stats.totalHoleArea);
+  // And a taper that leaves every slot some width everywhere closes none.
+  const mild = computePattern(
+    withSpacing(
+      { "layout.type": "Flow Lines", "taper.enabled": true, "taper.thickness": 1, "taper.angle": 10 },
+      { channel: "size", target: 4, radius: 120, falloff: "smooth" }
+    )
+  );
+  assert.equal(mild.stats.closedHoleCount, 0);
+});
+
 test("a voronoi cell is exact, not merely the first guess at one", () => {
   // The construction stops clipping only once no site outside its reach could
   // still cut the cell. Skipping that check leaves cells that overlap: on this
