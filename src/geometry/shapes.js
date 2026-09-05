@@ -1,14 +1,19 @@
 // Hole shape registry. Every shape implements the same five operations so the
 // generator, stats, canvas and exporters never branch on the shape name:
 //
-//   area(w, h, holeRadius)                 exact area (drives OAR)
-//   trace(ctx, cx, cy, w, h, holeRadius)   canvas Path2D drawing, centred at (cx, cy)
-//   svg(x, y, w, h, holeRadius)            SVG element body (without fill/attrs)
-//   contains(x, y, w, h, holeRadius)       hit test in the hole's local, un-rotated frame
-//   gap(h1, h2)                            signed clearance between two holes (< 0 overlaps)
+//   area(w, h, holeRadius, n)                 exact area (drives OAR)
+//   trace(ctx, cx, cy, w, h, holeRadius, n)   canvas Path2D drawing, centred at (cx, cy)
+//   svg(x, y, w, h, holeRadius, n)            SVG element body (without fill/attrs)
+//   contains(x, y, w, h, holeRadius, n)       hit test in the hole's local, un-rotated frame
+//   gap(h1, h2)                               signed clearance between two holes (< 0 overlaps)
 //
 // w = horizontal extent, h = vertical extent, both in mm. Rotation is a per-hole
 // `angle` (radians) applied by the callers below, so shape code stays canonical.
+//
+// `n` is the superellipse exponent, and only Superellipse reads it: it is the one
+// shape whose outline varies per hole, because the `shape` field channel morphs
+// it (fields/controllers.js). Every other shape ignores the argument, and `gap`
+// reads `superN` off the hole objects it is handed rather than taking it apart.
 import {
   basePolyVerts,
   convexPolyGap,
@@ -22,6 +27,7 @@ import {
 } from "./polygon.js";
 import { hexEdgeReach, hexVertices } from "./hexagon.js";
 import { isInsideRoundedRect } from "./rounded-rect.js";
+import { superArea, superContains, superellipseGap, superellipseVerts } from "./superellipse.js";
 
 const f3 = n => n.toFixed(3);
 
@@ -293,6 +299,55 @@ const Circle = {
   rotates: false,
 };
 
+// ─── Superellipse (the morph shape) ───────────────────────────────────
+// |x/a|ⁿ + |y/b|ⁿ = 1. The exponent arrives per hole from the `shape` channel,
+// so this is the only shape whose outline is not fixed by w, h and the corner
+// radius — and the corner radius is meaningless here, since the curve rounds
+// its own corners as n falls toward 2. See geometry/superellipse.js.
+const SUPER_DEFAULT_N = 2;
+const superN = value => (Number.isFinite(value) ? value : SUPER_DEFAULT_N);
+
+const Superellipse = {
+  area(w, h, holeRadius, n) {
+    return superArea(w / 2, h / 2, superN(n));
+  },
+  trace(ctx, cx, cy, w, h, holeRadius, n) {
+    const verts = superellipseVerts(w, h, superN(n));
+    ctx.moveTo(cx + verts[0][0], cy + verts[0][1]);
+    for (let i = 1; i < verts.length; i++) ctx.lineTo(cx + verts[i][0], cy + verts[i][1]);
+    ctx.closePath();
+  },
+  svg(x, y, w, h, holeRadius, n) {
+    const pts = superellipseVerts(w, h, superN(n))
+      .map(([vx, vy]) => `${f3(x + vx)},${f3(y + vy)}`)
+      .join(" ");
+    return `<polygon points="${pts}"`;
+  },
+  contains(x, y, w, h, holeRadius, n) {
+    return superContains(x, y, w / 2, h / 2, superN(n));
+  },
+  gap(h1, h2) {
+    // Support functions maximised over direction, not the reach along the centre
+    // line — see superellipseGap. The reach reads a clearance LARGER than the
+    // metal actually is (0.14 mm, 13% of the bridge, on nothing more exotic than
+    // the default 60° lattice with the shape slider at the square end), and this
+    // is the one statistic that must never fail in that direction.
+    return superellipseGap(
+      h2.x - h1.x,
+      h2.y - h1.y,
+      h1.w / 2,
+      h1.h / 2,
+      superN(h1.superN),
+      h1.angle || 0,
+      h2.w / 2,
+      h2.h / 2,
+      superN(h2.superN),
+      h2.angle || 0
+    );
+  },
+  rotates: true,
+};
+
 export const SHAPES = {
   Circle,
   Rectangle,
@@ -300,24 +355,25 @@ export const SHAPES = {
   Hexagon,
   Diamond: polyShape("Diamond"),
   Triangle: polyShape("Triangle"),
+  Superellipse,
 };
 
 export const getShape = name => SHAPES[name] || SHAPES.Circle;
 
 // ─── Shape-agnostic entry points (the API the rest of the app uses) ───
-export function calcHoleArea(shape, w, h, holeRadius) {
-  return getShape(shape).area(w, h, holeRadius);
+export function calcHoleArea(shape, w, h, holeRadius, n) {
+  return getShape(shape).area(w, h, holeRadius, n);
 }
 
 // Trace a hole into the current canvas path, honouring its rotation.
-export function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
+export function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius, n) {
   const def = getShape(shape);
   const needsRotation = angle && def.rotates;
   if (needsRotation) {
     ctx.translate(x, y);
     ctx.rotate(angle);
   }
-  def.trace(ctx, needsRotation ? 0 : x, needsRotation ? 0 : y, w, h, holeRadius);
+  def.trace(ctx, needsRotation ? 0 : x, needsRotation ? 0 : y, w, h, holeRadius, n);
   if (needsRotation) {
     ctx.rotate(-angle);
     ctx.translate(-x, -y);
@@ -325,12 +381,12 @@ export function traceHolePath(ctx, x, y, shape, w, h, angle, holeRadius) {
 }
 
 // Full SVG element string (with trailing newline) for one hole.
-export function holeSVGElement(x, y, shape, w, h, fill, extra, angle, holeRadius) {
+export function holeSVGElement(x, y, shape, w, h, fill, extra, angle, holeRadius, n) {
   const def = getShape(shape);
   const attrs = extra || "";
   const rotAttr =
     angle && def.rotates ? ` transform="rotate(${((angle * 180) / Math.PI).toFixed(2)} ${f3(x)} ${f3(y)})"` : "";
-  return `    ${def.svg(x, y, w, h, holeRadius)} ${fill} ${attrs}${rotAttr}/>\n`;
+  return `    ${def.svg(x, y, w, h, holeRadius, n)} ${fill} ${attrs}${rotAttr}/>\n`;
 }
 
 // Hit test against a hole's entry (default) or exit profile, in sheet space.
@@ -346,7 +402,7 @@ export function isPointInsideHole(px, py, hole, shape, useExit = false) {
     dy = py - hole.y;
   const x = dx * cos - dy * sin,
     y = dx * sin + dy * cos;
-  return getShape(shape).contains(x, y, w, h, radius);
+  return getShape(shape).contains(x, y, w, h, radius, hole.superN);
 }
 
 // Signed clearance between two holes of the same shape (< 0 when they overlap).

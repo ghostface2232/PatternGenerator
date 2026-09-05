@@ -3,7 +3,7 @@
 // Bump DOC_SCHEMA_VERSION and add a migration in persistence when the shape changes.
 import { DEFAULT_VARIATION } from "../fields/variation-engine.js";
 
-export const DOC_SCHEMA_VERSION = 1;
+export const DOC_SCHEMA_VERSION = 2;
 
 export const cloneVariation = variation => ({
   ...variation,
@@ -36,6 +36,7 @@ export function createDocument() {
       cornerRadius: 0,
       diamondOrient: "Point up",
       triEquilateral: true, // Triangle: lock H = W·√3/2
+      shapeMix: 0.5, // Superellipse only: 0 diamond · 0.5 ellipse · 1 near-square
     },
     layout: {
       type: "Staggered 60°",
@@ -54,6 +55,15 @@ export function createDocument() {
     },
     presetIndex: 0,
     variation: cloneVariation(DEFAULT_VARIATION),
+    // Field controllers (Phase 2). One flat list; each entry names the channel
+    // it drives. See fields/controllers.js for the shape of an entry. Which
+    // controller is SELECTED is not here: selection is a view of the document,
+    // not part of it, and putting it here would spend one undo step per click.
+    fields: { enabled: false, controllers: [] },
+    // Image data for the image controllers, keyed by assetId. Kept in the
+    // document so a file save and a reload restore the picture; deliberately
+    // stripped from share links and from the recent list (see persistence.js).
+    assets: {},
     taper: { enabled: false, thickness: 0, angle: 0, direction: "Top larger" },
     appearance: { holeColor: "#141418", bgColor: "#c8c8cd" },
     removedHoles: [], // indices into the generated hole list

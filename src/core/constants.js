@@ -1,8 +1,10 @@
 // Shared vocabulary for patterns, shapes and presets. Pure data, no side effects.
 
 export const PATTERN_TYPES = ["Straight", "Staggered 60°", "Staggered 45°", "Radial", "Custom Angle"];
-export const HOLE_SHAPES = ["Circle", "Rectangle", "Pill", "Hexagon", "Diamond", "Triangle"];
-export const CUSTOM_SIZE_SHAPES = ["Rectangle", "Pill", "Diamond", "Triangle"];
+export const HOLE_SHAPES = ["Circle", "Rectangle", "Pill", "Hexagon", "Diamond", "Triangle", "Superellipse"];
+export const CUSTOM_SIZE_SHAPES = ["Rectangle", "Pill", "Diamond", "Triangle", "Superellipse"];
+// The one shape whose outline the `shape` field channel can morph per hole.
+export const MORPH_SHAPE = "Superellipse";
 export const DIAMOND_ORIENTATIONS = ["Point up", "Flat up"];
 export const RADIAL_LAYOUTS = ["Concentric", "Sunflower", "6k Rosette"];
 export const RADIAL_MODES = ["Full", "Circle"];
@@ -28,6 +30,20 @@ export const PERF_MODE_HOLE_LIMIT = 10000;
 
 // Size-variation layers a document may carry.
 export const MAX_VARIATION_LAYERS = 3;
+
+// Image assets a document may embed, with a per-image and a whole-document cap
+// on the base64. The decoder downsamples to IMAGE_MAP_SIZE before encoding, so
+// even a full-frame noise photo — the worst case for PNG — lands around 80 K
+// chars; eight of those fit inside the total with room to spare.
+//
+// Both numbers exist to keep a document inside the browser's localStorage quota,
+// which measures around 5 MB and is shared with the recent list. An earlier
+// 1 M-char per-image cap failed at exactly that job: eight of them is 8 MB, so
+// validation would happily accept a document the autosave could then never
+// write, and it would retry the failure on every keystroke thereafter.
+export const MAX_ASSETS = 8;
+export const MAX_ASSET_DATA_URL_CHARS = 300_000;
+export const MAX_ASSET_TOTAL_CHARS = 1_200_000;
 
 // Value ranges the UI can produce. Loading a file or share link clamps to these,
 // so an imported document can never describe a pattern the sliders could not.
@@ -62,4 +78,18 @@ export const DOC_LIMITS = {
   "layer.exponent": [0.12, 5],
   "layer.jitter": [0, 0.5],
   "layer.seed": [0, 99999],
+  "hole.shapeMix": [0, 1],
+  // Controllers live in sheet millimetres and may sit off the sheet, so their
+  // coordinates are bounded by the largest sheet rather than by the current one.
+  "controller.coord": [-2000, 2000],
+  "controller.radius": [0.5, 2000],
+  "controller.strength": [0, 1],
+  "controller.target.size": [0.05, 4],
+  "controller.target.spacing": [0.2, 4],
+  "controller.target.angle": [-180, 180],
+  "controller.target.shape": [0, 1],
+  "controller.image.gamma": [0.1, 5],
+  "controller.image.level": [0, 1],
+  "controller.image.size": [1, 2000],
+  "controller.image.rotation": [-180, 180],
 };

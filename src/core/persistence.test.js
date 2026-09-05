@@ -1,19 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDocument, patchIn } from "./document.js";
-import { DOC_LIMITS } from "./constants.js";
+import { DOC_LIMITS, MAX_ASSET_DATA_URL_CHARS } from "./constants.js";
+import { MAX_CONTROLLERS, MAX_POLYLINE_POINTS } from "../fields/controllers.js";
 import { computePattern } from "./pipeline.js";
 import {
   decodeShareHash,
   deserializeDocument,
   encodeShareHash,
   fileStem,
+  hasAssets,
   loadCurrent,
   loadRecent,
   migrateDocument,
   saveCurrent,
   serializeDocument,
   STORAGE_KEY_RECENT,
+  stripAssets,
   touchRecent,
   validateDocument,
 } from "./persistence.js";
@@ -239,4 +242,189 @@ test("an unreadable document surfaces as an error rather than a silent default",
   };
   assert.throws(() => validateDocument(hostile), /boom/);
   assert.throws(() => deserializeDocument(JSON.stringify({ sheet: 1 })), /not a Perf Pattern/);
+});
+
+// ─── Phase 2: controllers, the morph shape and image assets ───────────
+
+const PNG = "data:image/png;base64,iVBORw0KGgo=";
+const ctrl = (patch = {}) => ({
+  id: "c1",
+  channel: "size",
+  kind: "point",
+  enabled: true,
+  geometry: { points: [{ x: 40, y: 60 }] },
+  target: 1.6,
+  radius: 35,
+  falloff: "smooth",
+  oneSided: 0,
+  strength: 1,
+  syncWith: null,
+  image: null,
+  ...patch,
+});
+
+test("controllers survive a file round trip unchanged", () => {
+  const doc = patchIn(createDocument(), {
+    "hole.shape": "Superellipse",
+    "hole.shapeMix": 0.8,
+    "fields.enabled": true,
+    "fields.controllers": [
+      ctrl(),
+      ctrl({
+        id: "c2",
+        channel: "angle",
+        kind: "curve",
+        target: -35,
+        oneSided: -1,
+        falloff: "hard",
+        syncWith: "c1",
+        geometry: {
+          points: [
+            { x: 0, y: 0 },
+            { x: 10, y: 20 },
+            { x: 30, y: 20 },
+            { x: 40, y: 0 },
+          ],
+        },
+      }),
+    ],
+  });
+  const back = deserializeDocument(serializeDocument(doc));
+  assert.deepEqual(back, doc);
+  assert.equal(computePattern(back).activeHoles.length, computePattern(doc).activeHoles.length);
+});
+
+test("a v1 document upgrades to v2 with the field block inert", () => {
+  const v1 = { ...createDocument(), schemaVersion: 1 };
+  delete v1.fields;
+  delete v1.assets;
+  delete v1.hole.shapeMix;
+  const upgraded = migrateDocument(v1);
+  assert.equal(upgraded.schemaVersion, 2);
+  assert.deepEqual(upgraded.fields, { enabled: false, controllers: [] });
+  assert.deepEqual(upgraded.assets, {});
+  assert.equal(upgraded.hole.shapeMix, createDocument().hole.shapeMix);
+  // Same pattern as before the upgrade, to the hole.
+  assert.equal(computePattern(upgraded).activeHoles.length, 739);
+});
+
+test("validation drops the controllers it cannot repair and repairs the rest", () => {
+  const doc = validateDocument({
+    fields: {
+      enabled: "yes",
+      selectedId: "ghost", // an older document's selection: dropped, not carried
+      controllers: [
+        ctrl({ channel: "colour" }), // no such channel
+        ctrl({ kind: "blob" }), // no such kind
+        ctrl({ kind: "line", geometry: { points: [{ x: 1, y: 1 }] } }), // a line needs two
+        ctrl({ geometry: { points: [{ x: 1, y: "nope" }] } }), // a coordinate that is not one
+        ctrl({ geometry: null }),
+        ctrl({ id: "keep", target: 99, radius: -5, strength: 4, falloff: "wobble", oneSided: 7, syncWith: "gone" }),
+      ],
+    },
+  });
+  assert.deepEqual(
+    doc.fields.controllers.map(c => c.id),
+    ["keep"]
+  );
+  const [kept] = doc.fields.controllers;
+  assert.equal(kept.target, DOC_LIMITS["controller.target.size"][1]);
+  assert.equal(kept.radius, DOC_LIMITS["controller.radius"][0]);
+  assert.equal(kept.strength, 1);
+  assert.equal(kept.falloff, "smooth");
+  assert.equal(kept.oneSided, 0);
+  assert.equal(kept.syncWith, null, "a reference to a controller that did not survive must be dropped");
+  assert.equal(doc.fields.enabled, false); // "yes" is not a boolean
+  assert.equal("selectedId" in doc.fields, false); // selection is UI state, not document state
+  // The repaired document still drives the pipeline.
+  assert.ok(computePattern(doc).activeHoles.length > 0);
+});
+
+test("validation caps, de-duplicates and clamps the controller list", () => {
+  const many = validateDocument({ fields: { controllers: Array.from({ length: 30 }, () => ctrl()) } });
+  assert.equal(many.fields.controllers.length, MAX_CONTROLLERS);
+  assert.equal(new Set(many.fields.controllers.map(c => c.id)).size, MAX_CONTROLLERS, "ids must stay unique");
+  // A self-reference cannot survive: it would be a cycle of one.
+  assert.equal(validateDocument({ fields: { controllers: [ctrl({ syncWith: "c1" })] } }).fields.controllers[0].syncWith, null); // prettier-ignore
+  // Coordinates and the shape mix clamp to what the app can reach.
+  const wild = validateDocument({
+    hole: { shapeMix: 12 },
+    fields: { controllers: [ctrl({ geometry: { points: [{ x: 1e9, y: -1e9 }] } })] },
+  });
+  assert.equal(wild.hole.shapeMix, 1);
+  assert.deepEqual(wild.fields.controllers[0].geometry.points[0], {
+    x: DOC_LIMITS["controller.coord"][1],
+    y: DOC_LIMITS["controller.coord"][0],
+  });
+  // A polyline longer than the cap is trimmed, not rejected.
+  const long = validateDocument({
+    fields: {
+      controllers: [ctrl({ kind: "polyline", geometry: { points: Array.from({ length: 99 }, (_, i) => ({ x: i, y: i })) } })], // prettier-ignore
+    },
+  });
+  assert.equal(long.fields.controllers[0].geometry.points.length, MAX_POLYLINE_POINTS);
+});
+
+test("only assets an image controller still points at are kept", () => {
+  const image = ctrl({
+    id: "img",
+    kind: "image",
+    image: { assetId: "a1", invert: true, gamma: 2, min: 0.1, max: 0.9 },
+  });
+  const doc = validateDocument({
+    fields: { controllers: [image] },
+    assets: {
+      a1: { name: "photo", dataURL: PNG, width: 128, height: 96 },
+      orphan: { name: "unused", dataURL: PNG, width: 8, height: 8 },
+      bad: { name: "script", dataURL: "javascript:alert(1)", width: 8, height: 8 },
+    },
+  });
+  assert.deepEqual(Object.keys(doc.assets), ["a1"]);
+  assert.equal(doc.assets.a1.width, 128);
+  assert.equal(doc.fields.controllers[0].image.gamma, 2);
+  assert.equal(doc.fields.controllers[0].image.invert, true);
+  // An image controller always gets a usable placement, even from nothing.
+  assert.ok(doc.fields.controllers[0].image.placement.w > 0);
+  // A data URL that is not an image, or is too big to belong in localStorage, goes.
+  const huge = "data:image/png;base64," + "A".repeat(MAX_ASSET_DATA_URL_CHARS);
+  assert.deepEqual(
+    validateDocument({ fields: { controllers: [image] }, assets: { a1: { dataURL: huge } } }).assets,
+    {}
+  );
+});
+
+test("share links and the recent list travel without the images", () => {
+  const doc = patchIn(createDocument(), {
+    name: "Halftone",
+    "fields.enabled": true,
+    "fields.controllers": [
+      ctrl({ id: "img", kind: "image", image: { assetId: "a1", invert: false, gamma: 1, min: 0, max: 1 } }),
+    ],
+    assets: { a1: { name: "photo", dataURL: PNG, width: 8, height: 8 } },
+  });
+  assert.equal(hasAssets(doc), true);
+  assert.equal(hasAssets(stripAssets(doc)), false);
+  assert.equal(stripAssets(doc).name, "Halftone");
+  assert.notEqual(stripAssets(doc), doc, "stripping must not mutate the document it is given");
+  assert.deepEqual(doc.assets, { a1: { name: "photo", dataURL: PNG, width: 8, height: 8 } });
+  // Nothing to strip → the same object, so an autosave comparison still sees an
+  // untouched document as unchanged.
+  const plain = createDocument();
+  assert.equal(stripAssets(plain), plain);
+
+  // The controller survives the trip; only the picture is left behind, and the
+  // controller goes inert rather than reading as black.
+  const shared = decodeShareHash(encodeShareHash(doc));
+  assert.deepEqual(shared.assets, {});
+  assert.equal(shared.fields.controllers.length, 1);
+  assert.equal(shared.fields.controllers[0].image.assetId, "a1");
+  assert.equal(computePattern(shared).field.length, 0);
+
+  const storage = memStorage();
+  touchRecent(storage, doc, 1);
+  assert.deepEqual(loadRecent(storage)[0].doc.assets, {});
+  assert.equal(loadRecent(storage)[0].doc.fields.controllers.length, 1);
+  // The autosave, which a reload reads back, keeps them.
+  saveCurrent(storage, doc);
+  assert.deepEqual(loadCurrent(storage).assets, doc.assets);
 });

@@ -6,16 +6,17 @@ Built with React + Vite. Installable as an offline-capable PWA.
 
 ## Features
 
-- **Hole shapes** — Circle, Rectangle (rounded corners), Pill, Hexagon, Diamond (point-up or flat-up), Triangle (alternating ▲▽ rows), most with corner-radius control
+- **Hole shapes** — Circle, Rectangle (rounded corners), Pill, Hexagon, Diamond (point-up or flat-up), Triangle (alternating ▲▽ rows), Superellipse (one slider from diamond through ellipse to square), most with corner-radius control
 - **Pattern types** — Straight, Staggered 60°, Staggered 45°, Radial (concentric, Sunflower, 6k Rosette), Custom Angle
 - **Seamless tilings** — Hexagon honeycomb, interlocking Diamond lattice, and the Triangle tiling treat the edge gap as a uniform ligament on every side; at 0 gap they tile the plane exactly (100% open area)
 - **DIN 24041 presets** — common Rv/Rg perforation standards
+- **Field controllers** — a point, line, curve, polyline or image placed on the panel drives one channel across it: hole size, hole rotation, or the superellipse morph. Points, lines and curves are drawn straight onto the canvas; polylines and images are added at the centre and then shaped by their handles. Reach, falloff, strength and one-sidedness per controller, and one controller can follow another's geometry. An image drives the channel from its brightness (halftone) — drop one anywhere on the page — with invert, gamma and level range. Everything is edited on the canvas with draggable handles, over a live heat-map of the channel
 - **Size variation** — multi-layer scalar fields (linear / radial / angular / spiral × ramp / peak / wave / noise / steps) modulate hole size across the panel, edited directly on the canvas with Photoshop-style gizmo handles; includes presets, randomize, undo/redo
 - **Sheet & bounds** — panel size, per-side margins, rounded panel corners, hole removal by click
 - **Thickness & taper** — models tapered (conical) holes: exit diameter, surface vs. effective (through-thickness) open area, closed-hole warnings
 - **Live statistics** — open area ratio (OAR) gauge, hole count, exact minimum ligament, overlap detection
 - **Export** — dimensioned SVG (mm units, entry/exit layers when taper is active) and high-resolution PNG
-- **Projects** — autosave in the browser, `.perf.json` save / open (or drop a file onto the page), copy-to-clipboard share links, a recent-documents list, and global undo / redo (Ctrl+Z, Ctrl+Shift+Z)
+- **Projects** — autosave in the browser, `.perf.json` save / open (or drop a file onto the page), copy-to-clipboard share links, a recent-documents list, and global undo / redo (Ctrl+Z, Ctrl+Shift+Z). Controller images are saved with the file; share links and the recent list leave them out
 
 ## Getting started
 
@@ -42,7 +43,7 @@ src/main.jsx               React bootstrap
 src/core/                  document model, constants, and the pure document → holes → stats pipeline
 src/geometry/              hole shapes (registry), polygon helpers, boundary, ligament, OAR
 src/layouts/               hole placement: grid family, uniform-ligament tilings, radial engine
-src/fields/                size-variation fields and the on-canvas gizmo math
+src/fields/                size-variation fields, the controller system, image sampling, and the on-canvas gizmo maths
 src/export/                SVG / PNG writers and download helpers
 src/render/                canvas renderer and view transform
 src/ui/                    React app: App, TopBar, Sidebar, canvas/, panels/, controls/, theme

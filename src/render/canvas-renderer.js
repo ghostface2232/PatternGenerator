@@ -5,6 +5,9 @@ import { traceHolePath } from "../geometry/shapes.js";
 import { tracePerfBoundary } from "../geometry/boundary.js";
 import { evaluateVariationField } from "../fields/variation-engine.js";
 import { computeGizmo } from "../fields/gizmo.js";
+import { channelBase, evaluateCompiled, resolveSyncedGeometry } from "../fields/controllers.js";
+import { controllerHandles, controllerPolyline } from "../fields/controller-gizmo.js";
+import { placementCorners } from "../fields/image-map.js";
 import { computeView } from "./view.js";
 
 export function drawScene(canvas, scene) {
@@ -23,6 +26,12 @@ export function drawScene(canvas, scene) {
     variation,
     variationEditMode,
     selectedVariationLayer,
+    fields,
+    selectedControllerId,
+    field,
+    fieldEditMode,
+    activeChannel,
+    imageElements,
     taperActive,
     holeColor,
     bgColor,
@@ -121,6 +130,8 @@ export function drawScene(canvas, scene) {
     ctx.restore();
   }
 
+  const showFieldOverlay = fieldEditMode && showHud && fields?.enabled;
+
   const showTaperRings = taperActive && !perfMode;
 
   // Clip holes to the actual perforation boundary so preview, OAR and exports agree.
@@ -164,7 +175,7 @@ export function drawScene(canvas, scene) {
       if (isRemoved) {
         if (!showHud) return; // HUD hidden: removed holes vanish entirely
         ctx.beginPath();
-        traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
+        traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, h.superN);
         ctx.strokeStyle = dark ? "rgba(255,100,100,0.25)" : "rgba(200,50,50,0.2)";
         ctx.lineWidth = 0.4;
         ctx.setLineDash([1, 1]);
@@ -186,7 +197,7 @@ export function drawScene(canvas, scene) {
       const isOverlap = activeOverlapSet.has(i);
       const isClosed = h.isClosed;
       ctx.beginPath();
-      traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
+      traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, h.superN);
       ctx.fillStyle = isClosed
         ? dark
           ? "rgba(220,50,50,0.55)"
@@ -215,13 +226,13 @@ export function drawScene(canvas, scene) {
       // Taper ring: fill gap between entry and exit shapes
       if (showTaperRings && h.exitW > 0 && h.exitH > 0 && !isClosed) {
         ctx.beginPath();
-        traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius);
+        traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, h.superN);
         ctx.save();
         ctx.clip();
         ctx.fillStyle = dark ? "rgba(80,85,95,0.6)" : "rgba(160,165,175,0.5)";
         ctx.fillRect(h.x - h.w, h.y - h.h, h.w * 2, h.h * 2);
         ctx.beginPath();
-        traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius);
+        traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius, h.superN);
         ctx.fillStyle = holeColor;
         ctx.fill();
         ctx.restore();
@@ -237,6 +248,13 @@ export function drawScene(canvas, scene) {
 
   if (variation.enabled && variationEditMode && selectedVariationLayer && showHud) {
     drawGizmo(ctx, selectedVariationLayer, { marginLeft, marginTop, perfW, perfH }, sheetW, sheetH, baseScale, dark);
+  }
+  if (showFieldOverlay) {
+    // Over the holes, not under them: at 35% open area a third of the sheet is
+    // hole, and an overlay that answers "where does this reach, and which way"
+    // is useless with a third of it painted over.
+    drawChannelHeatmap(ctx, { field, activeChannel, marginLeft, marginTop, perfW, perfH, fields });
+    drawControllers(ctx, { fields, selectedControllerId, activeChannel, imageElements, sheetW, sheetH, baseScale, dark }); // prettier-ignore
   }
   ctx.restore();
 
@@ -336,4 +354,188 @@ function drawGizmo(ctx, layer, geom, sheetW, sheetH, baseScale, dark) {
   ctx.fill();
 
   ctx.restore();
+}
+
+// ─── Field controllers (Phase 2) ──────────────────────────────────────
+
+// The active channel's value across the perforation area, as a diverging wash:
+// cool below the channel's neutral value, warm above it. The scale is set by the
+// strongest controller on the channel rather than by the slider range, so a
+// gentle field still reads — the overlay answers "where does this reach and how
+// hard", which a fixed scale would flatten to one colour on a subtle field.
+function drawChannelHeatmap(ctx, { field, activeChannel, marginLeft, marginTop, perfW, perfH, fields }) {
+  const base = channelBase(activeChannel);
+  let span = 0;
+  for (const controller of fields.controllers) {
+    if (controller.channel === activeChannel && controller.enabled !== false) {
+      span = Math.max(span, Math.abs(controller.target - base));
+    }
+  }
+  if (span <= 0 || perfW <= 0 || perfH <= 0) return;
+
+  const cols = 40;
+  const rows = Math.max(20, Math.round((cols * perfH) / Math.max(1, perfW)));
+  const cellW = perfW / cols,
+    cellH = perfH / rows;
+  ctx.save();
+  // Painted plainly, not through a blend mode. The variation overlay uses
+  // "screen" in the dark theme, which works there because it is monochrome — but
+  // the sheet is a light colour in BOTH themes, and screening a diverging warm /
+  // cool scale onto a light ground flattens it to roughly a third of the contrast
+  // it has in the light theme. This map encodes a sign, so that contrast is the
+  // information.
+  for (let gy = 0; gy < rows; gy++) {
+    for (let gx = 0; gx < cols; gx++) {
+      const x = marginLeft + (gx + 0.5) * cellW;
+      const y = marginTop + (gy + 0.5) * cellH;
+      const value = evaluateCompiled(field, activeChannel, x, y, base);
+      const t = (value - base) / span; // −1 … 1 over the strongest controller's pull
+      const strength = Math.min(1, Math.abs(t));
+      if (strength < 0.01) continue;
+      const alpha = 0.05 + strength * 0.22;
+      ctx.fillStyle = t > 0 ? `rgba(245,158,11,${alpha})` : `rgba(37,99,235,${alpha})`;
+      ctx.fillRect(marginLeft + gx * cellW, marginTop + gy * cellH, cellW + 0.05, cellH + 0.05);
+    }
+  }
+  ctx.restore();
+}
+
+// Controllers on the active channel are drawn solid; the rest stay visible but
+// faint, so switching channels never loses track of what else is on the sheet.
+function drawControllers(
+  ctx,
+  { fields, selectedControllerId, activeChannel, imageElements, sheetW, sheetH, baseScale, dark }
+) {
+  // prettier-ignore
+  const px = 1 / baseScale;
+  const byId = new Map(fields.controllers.map(c => [c.id, c]));
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, sheetW, sheetH);
+  ctx.clip();
+  const ordered = [...fields.controllers].sort((a, b) => (a.channel === activeChannel ? 1 : 0) - (b.channel === activeChannel ? 1 : 0)); // prettier-ignore
+  for (const controller of ordered) {
+    const active = controller.channel === activeChannel;
+    const selected = active && controller.id === selectedControllerId;
+    ctx.globalAlpha = controller.enabled === false ? 0.25 : active ? 1 : 0.28;
+    // What is drawn has to be what is measured. A synced controller reads the
+    // geometry it follows, so drawing its own points would put a reach band
+    // where there is no field and hand the user handles that drive nothing.
+    drawController(ctx, controller, { source: resolveSyncedGeometry(controller, byId), selected, active, imageElements, px, dark }); // prettier-ignore
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// The translucent reach band is drawn as a fat stroke, so a reach approaching the
+// panel size covers everything at a uniform tint that says nothing. Fading it as
+// it widens keeps a small reach legible and a huge one out of the way; the
+// controller's own path stays fully opaque either way.
+const bandAlpha = radius => 0.1 * Math.max(0.22, Math.min(1, 40 / Math.max(1, radius || 1)));
+
+const CHANNEL_COLOR = {
+  size: { dark: "#60a5fa", light: "#2563eb" },
+  spacing: { dark: "#34d399", light: "#059669" },
+  angle: { dark: "#fbbf24", light: "#d97706" },
+  shape: { dark: "#f472b6", light: "#db2777" },
+};
+
+function drawController(ctx, controller, { source = controller, selected, active, imageElements, px, dark }) {
+  const palette = CHANNEL_COLOR[controller.channel] || CHANNEL_COLOR.size;
+  const color = dark ? palette.dark : palette.light;
+  const ink = dark ? "#0f0f11" : "#ffffff";
+
+  if (controller.kind === "image") {
+    const placement = controller.image?.placement;
+    if (!placement) return;
+    const corners = placementCorners(placement);
+    const image = imageElements?.[controller.image.assetId];
+    if (image) {
+      ctx.save();
+      ctx.translate(placement.x + placement.w / 2, placement.y + placement.h / 2);
+      ctx.rotate(((placement.rotation || 0) * Math.PI) / 180);
+      ctx.globalAlpha *= 0.45;
+      ctx.drawImage(image, -placement.w / 2, -placement.h / 2, placement.w, placement.h);
+      ctx.restore();
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = (selected ? 1.6 : 1) * px;
+    ctx.setLineDash(image ? [] : [3 * px, 3 * px]);
+    ctx.beginPath();
+    ctx.moveTo(corners[0].x, corners[0].y);
+    for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.setLineDash([]);
+  } else {
+    const path = controllerPolyline(controller, source);
+    if (!path.length) return;
+    if (path.length > 1) {
+      // The reach, as a band around the path — the shape of the field, drawn
+      // with a fat translucent stroke rather than by offsetting the polyline.
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.globalAlpha *= bandAlpha(controller.radius);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(0.2, (controller.radius || 1) * 2);
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = (selected ? 1.8 : 1.2) * px;
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
+      ctx.stroke();
+    } else {
+      ctx.save();
+      ctx.globalAlpha *= bandAlpha(controller.radius);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(path[0].x, path[0].y, Math.max(0.1, controller.radius || 1), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = (selected ? 1.4 : 0.9) * px;
+      ctx.setLineDash([3 * px, 3 * px]);
+      ctx.beginPath();
+      ctx.arc(path[0].x, path[0].y, Math.max(0.1, controller.radius || 1), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // A one-sided controller shows which way it faces, once, at the middle.
+    if (controller.oneSided && path.length > 1) {
+      const mid = Math.floor((path.length - 1) / 2);
+      const a = path[mid],
+        b = path[mid + 1] || path[mid];
+      const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const nx = (-(b.y - a.y) / len) * controller.oneSided;
+      const ny = ((b.x - a.x) / len) * controller.oneSided;
+      const ox = (a.x + b.x) / 2,
+        oy = (a.y + b.y) / 2;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.2 * px;
+      ctx.beginPath();
+      ctx.moveTo(ox, oy);
+      ctx.lineTo(ox + nx * 9 * px, oy + ny * 9 * px);
+      ctx.stroke();
+    }
+  }
+
+  if (!active) return;
+  for (const handle of controllerHandles(controller, source)) {
+    const r = (handle.role === "radius" || handle.role === "rotate" ? 4 : handle.role === "mid" ? 3.4 : 4.6) * px;
+    const hollow = handle.role === "radius" || handle.role === "rotate" || handle.role === "size";
+    ctx.beginPath();
+    ctx.arc(handle.x, handle.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = hollow ? ink : color;
+    ctx.fill();
+    ctx.strokeStyle = hollow ? color : ink;
+    ctx.lineWidth = (selected ? 1.6 : 1.2) * px;
+    ctx.stroke();
+  }
 }

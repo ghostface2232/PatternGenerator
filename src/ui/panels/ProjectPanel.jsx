@@ -100,6 +100,12 @@ export function ProjectPanel() {
           )}
         </button>
       </div>
+      {project.shareDropsImages && (
+        <div style={{ fontSize: 9, color: theme.textSecondary, marginBottom: 10, lineHeight: 1.6 }}>
+          A share link and the recent list leave out the controller images — they would not fit in a URL, and ten of
+          them would not fit in this browser&apos;s storage. Save the {project.fileExtension} file to keep them.
+        </div>
+      )}
       <input
         ref={fileInput}
         type="file"

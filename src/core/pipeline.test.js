@@ -576,3 +576,112 @@ test("no module let, var or ambient global in generateHoles' import closure", ()
     assert.equal(ambient, null, `${name} reads \`${ambient?.[0]}\`, which no document controls`);
   }
 });
+
+// ─── Phase 2: field controllers ───────────────────────────────────────
+
+const controller = (patch = {}) => ({
+  id: "c1",
+  channel: "size",
+  kind: "point",
+  enabled: true,
+  geometry: { points: [{ x: 100, y: 100 }] }, // the centre of the default 200×200 sheet
+  target: 1.6,
+  radius: 60,
+  falloff: "smooth",
+  oneSided: 0,
+  strength: 1,
+  syncWith: null,
+  image: null,
+  ...patch,
+});
+const withField = (controllers, patch = {}) =>
+  doc({ "fields.enabled": true, "fields.controllers": controllers, ...patch });
+
+test("a disabled fields block leaves the pattern exactly where it was", () => {
+  const off = computePattern(doc({ "fields.controllers": [controller()] })); // enabled defaults to false
+  const base = computePattern(createDocument());
+  assert.equal(off.activeHoles.length, base.activeHoles.length);
+  assert.equal(fixed(off.stats.displayOAR), fixed(base.stats.displayOAR));
+  assert.equal(off.stats.useCountedOAR, false);
+  // And so does an enabled block with nothing in it.
+  const empty = computePattern(doc({ "fields.enabled": true }));
+  assert.equal(empty.stats.useCountedOAR, false);
+  assert.equal(fixed(empty.stats.displayOAR), fixed(base.stats.displayOAR));
+});
+
+test("a size controller grows the holes it reaches and lifts the open area", () => {
+  const base = computePattern(createDocument());
+  const { holes, stats } = computePattern(withField([controller({ target: 1.6, radius: 60 })]));
+  assert.equal(holes.length, base.holes.length, "size never adds or drops a hole");
+  const at = (x, y) => holes.reduce((best, h) => (Math.hypot(h.x - x, h.y - y) < Math.hypot(best.x - x, best.y - y) ? h : best)); // prettier-ignore
+  const middle = at(100, 100);
+  const corner = at(5, 5);
+  assert.ok(middle.w > 7.9 && middle.w < 8.01, `centre hole should be ~1.6× of 5 mm, got ${middle.w}`);
+  assert.ok(Math.abs(corner.w - 5) < 1e-9, `a hole outside the reach must keep its size, got ${corner.w}`);
+  assert.ok(middle.area > corner.area * 2.5);
+  // The unit-cell shortcut is off, and the counted area went up.
+  assert.equal(stats.useCountedOAR, true);
+  assert.ok(stats.displayOAR > base.stats.displayOAR, `${stats.displayOAR} should exceed ${base.stats.displayOAR}`);
+});
+
+test("an angle controller turns the holes it reaches, and only shapes that can turn", () => {
+  const rect = { "hole.shape": "Rectangle", "hole.w": 8, "hole.h": 3, "layout.type": "Straight" };
+  const { holes } = computePattern(withField([controller({ channel: "angle", target: 90, radius: 60 })], rect));
+  const at = (x, y) => holes.reduce((best, h) => (Math.hypot(h.x - x, h.y - y) < Math.hypot(best.x - x, best.y - y) ? h : best)); // prettier-ignore
+  assert.ok(Math.abs(at(100, 100).angle - Math.PI / 2) < 1e-9, "the centre rectangle should stand on end");
+  assert.ok(!at(5, 5).angle, "a rectangle outside the reach keeps its own rotation");
+  // A circle cannot show a rotation, so it is not given one — an angle it cannot
+  // draw would still widen the box estimateVisibleHoleArea samples over.
+  const circles = computePattern(withField([controller({ channel: "angle", target: 90, radius: 60 })]));
+  assert.ok(circles.holes.every(h => !h.angle));
+});
+
+test("a shape controller morphs the superellipse and leaves the fixed shapes alone", () => {
+  const superDoc = { "hole.shape": "Superellipse", "hole.shapeMix": 0.5 };
+  const { holes, stats } = computePattern(
+    withField([controller({ channel: "shape", target: 1, radius: 60 })], superDoc)
+  );
+  const at = (x, y) => holes.reduce((best, h) => (Math.hypot(h.x - x, h.y - y) < Math.hypot(best.x - x, best.y - y) ? h : best)); // prettier-ignore
+  assert.ok(Math.abs(at(100, 100).superN - 8) < 1e-9, "the centre hole should reach the near-square end");
+  assert.ok(Math.abs(at(5, 5).superN - 2) < 1e-9, "a hole outside the reach keeps the document's own mix");
+  // Squarer holes of the same width cover more area.
+  assert.ok(at(100, 100).area > at(5, 5).area);
+  assert.equal(stats.useCountedOAR, true);
+  // The same controller over Circles does nothing: only Superellipse morphs.
+  const circles = computePattern(withField([controller({ channel: "shape", target: 1, radius: 60 })]));
+  assert.ok(circles.holes.every(h => h.superN === undefined));
+  assert.equal(fixed(circles.stats.displayOAR), fixed(computePattern(createDocument()).stats.displayOAR));
+});
+
+test("the superellipse document computes and exports like any other shape", () => {
+  for (const mix of [0, 0.5, 1]) {
+    const { stats, activeHoles, params } = computePattern(doc({ "hole.shape": "Superellipse", "hole.shapeMix": mix }));
+    assert.ok(activeHoles.length > 0);
+    assert.ok(stats.displayOAR > 0 && stats.displayOAR <= 100, `mix ${mix}: OAR ${stats.displayOAR}`);
+    assert.ok(stats.minLigament >= 0);
+    assert.ok(activeHoles.every(h => Number.isFinite(h.area) && h.area > 0));
+    const svg = generateSVGString(activeHoles, params);
+    assert.equal(svg.match(/<polygon /g).length, activeHoles.length);
+  }
+  // The mix moves the area monotonically, which is what makes it a usable slider.
+  const area = mix => computePattern(doc({ "hole.shape": "Superellipse", "hole.shapeMix": mix })).stats.singleHoleArea;
+  assert.ok(area(0) < area(0.5) && area(0.5) < area(1));
+});
+
+test("controllers never invalidate the removed-hole indices", () => {
+  // Nothing about a field moves a centre, so the removals a user made survive
+  // adding, editing and enabling one. This is the property that keeps `fields`
+  // out of PLACEMENT_PARAMS.
+  const base = doc({ removedHoles: [4, 9] });
+  for (const patch of [
+    { "fields.enabled": true },
+    { "fields.controllers": [controller()] },
+    { "fields.enabled": true, "fields.controllers": [controller({ channel: "angle", target: 90 })] },
+    { "hole.shapeMix": 0.9 },
+    { assets: { a: { name: "x", dataURL: "data:image/png;base64,AAAA", width: 1, height: 1 } } },
+  ]) {
+    assert.equal(patternSignature(patchIn(base, patch)), patternSignature(base), JSON.stringify(patch));
+  }
+  // But the morph shape itself is a shape swap, and that does move holes.
+  assert.notEqual(patternSignature(doc({ "hole.shape": "Superellipse" })), patternSignature(createDocument()));
+});
