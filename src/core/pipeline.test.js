@@ -826,3 +826,55 @@ test("the new layout modes report an honest open area", () => {
     assert.equal(computePattern(doc({ "layout.type": type })).stats.useCountedOAR, true, type);
   }
 });
+
+test("the staggered unit cell is the lattice that was actually drawn", () => {
+  // The staggered modes push their rows apart far enough that the DIAGONAL
+  // clearance is the gap that was asked for, which for a hole that is not square
+  // lifts the row pitch well above the nominal one. The theoretical open-area
+  // ratio used to divide by the nominal cell anyway: a 3 × 8 mm rectangle on
+  // Staggered 60° at a 3 mm gap read 77.0% open, and — being a clean infinite
+  // pattern — took the theoretical path and put that in the readout. It is
+  // 38.0% open.
+  //
+  // Pinned against the counted figure rather than against a constant, because
+  // the counted figure is arrived at completely differently (sampling the holes
+  // that are actually there) and the two agreeing IS the property.
+  for (const patch of [
+    { "hole.shape": "Rectangle", "hole.w": 3, "hole.h": 8, "layout.type": "Staggered 60°" },
+    { "hole.shape": "Rectangle", "hole.w": 8, "hole.h": 3, "layout.type": "Staggered 45°" },
+    { "hole.shape": "Pill", "hole.w": 9, "hole.h": 3, "layout.type": "Staggered 60°" },
+    { "hole.diameter": 5, "layout.type": "Staggered 60°" },
+    { "hole.diameter": 4, "layout.type": "Staggered 45°" },
+    { "hole.shape": "Hexagon", "layout.type": "Staggered 60°" },
+    { "layout.type": "Straight" },
+    { "layout.type": "Custom Angle" },
+  ]) {
+    const { stats } = computePattern(doc(patch));
+    assert.ok(
+      Math.abs(stats.theoreticalOAR - stats.countedOAR) < 1,
+      `${JSON.stringify(patch)}: theoretical ${stats.theoreticalOAR.toFixed(2)} against counted ${stats.countedOAR.toFixed(2)}` // prettier-ignore
+    );
+  }
+});
+
+test("the panel and the generator agree on the lattice", () => {
+  // deriveGeometry reports the row pitch the panel prints; generateHoles walks
+  // it. They were two independent derivations, and disagreed for Staggered 45°.
+  for (const patch of [
+    {},
+    { "layout.type": "Staggered 45°" },
+    { "layout.type": "Straight" },
+    { "layout.type": "Custom Angle" },
+    { "hole.shape": "Hexagon" },
+    { "hole.shape": "Rectangle", "hole.w": 9, "hole.h": 3, "layout.type": "Staggered 45°" },
+  ]) {
+    const d = doc(patch);
+    const g = deriveGeometry(d);
+    const holes = generateHoles(buildParams(d, g));
+    const rows = [...new Set(holes.map(h => h.y))].sort((a, b) => a - b);
+    const drawn = rows[1] - rows[0];
+    assert.ok(Math.abs(drawn - g.effPitchY) < 1e-9, `${JSON.stringify(patch)}: drew ${drawn}, reported ${g.effPitchY}`);
+    const columns = [...new Set(holes.filter(h => h.y === rows[0]).map(h => h.x))].sort((a, b) => a - b);
+    assert.ok(Math.abs(columns[1] - columns[0] - g.inRowPitchX) < 1e-9, JSON.stringify(patch));
+  }
+});

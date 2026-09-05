@@ -15,8 +15,9 @@ import { calcHoleArea, getShape } from "../geometry/shapes.js";
 import { superNFromMix } from "../geometry/superellipse.js";
 import { estimateVisibleHoleArea, perfBoundsArea, perfBoundsFromParams } from "../geometry/boundary.js";
 import { calcMinLigament, findOverlaps } from "../geometry/ligament.js";
-import { calcTheoreticalOAR } from "../geometry/oar.js";
+import { calcCellOAR } from "../geometry/oar.js";
 import { LAYOUTS, generateHoles, layoutFamily, layoutReadsSpacing, tilingFlags } from "../layouts/index.js";
+import { gridLattice } from "../layouts/grid.js";
 import { MIN_CROSS_SIN } from "../layouts/crosshatch.js";
 import { getRadialShapeExtents, getRadialShapeOuterRadius } from "../layouts/radial-engine.js";
 import { evaluateVariationField, variationScaleAt } from "../fields/variation-engine.js";
@@ -96,19 +97,19 @@ export function deriveGeometry(doc) {
 
   // Effective pitchY for staggered patterns (auto-derived). In staggered layouts the
   // nearest neighbour is diagonal at (pitchX/2, effPY).
-  const sHalfPX = pitchX / 2;
-  const sMinGap = Math.min(layout.edgeGapX, layout.edgeGapY);
-  const sHoleDim = Math.max(effW, effH);
-  const sMinDist = sHoleDim + sMinGap;
-  const sMinPY = Math.sqrt(Math.max(effH * effH, sMinDist * sMinDist - sHalfPX * sHalfPX));
+  // From `gridLattice`, which is what the generator itself walks. Working these
+  // out again here is exactly how the panel came to report a 45° row pitch the
+  // generator had never used, and how the theoretical open-area ratio came to
+  // divide by a cell that did not exist.
+  const { inRowPitchX, rowPitch: effPitchY } = gridLattice({
+    holeW: effW,
+    holeH: effH,
+    patternType,
+    pitchX,
+    pitchY,
+    isHexHoneycomb,
+  });
   const effPitchX = honeyPitchX;
-  const effPitchY = isHexHoneycomb
-    ? honeyPitchY
-    : patternType === "Staggered 60°"
-      ? Math.max((pitchX * Math.sqrt(3)) / 2, sMinPY)
-      : patternType === "Staggered 45°"
-        ? Math.max(pitchX, sMinPY)
-        : pitchY;
   // Spacing readouts for the uniform-ligament modes (hex / triangle / diamond)
   const uniformColPitch = isTriTiling ? (effW * triCellK) / 2 : isDiamondLattice ? effW * diaCellK : effPitchX;
   const uniformRowPitch = isTriTiling ? effH * triCellK : isDiamondLattice ? (effH * diaCellK) / 2 : effPitchY;
@@ -166,6 +167,9 @@ export function deriveGeometry(doc) {
     taperInset,
     effPitchX,
     effPitchY,
+    inRowPitchX,
+    // The unit cell of the grid family: one hole per (in-row pitch × row pitch).
+    gridCellArea: inRowPitchX * effPitchY,
     uniformColPitch,
     uniformRowPitch,
     polyCornerMax,
@@ -373,7 +377,7 @@ export function filterActive(holes, removedSet) {
 }
 
 export function computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps, field = NO_FIELD }) {
-  const { hole, layout, sheet, boundary, variation } = doc;
+  const { hole, sheet, boundary, variation } = doc;
   const shape = hole.shape;
   const baseSuperN = shape === MORPH_SHAPE ? superNFromMix(hole.shapeMix ?? 0.5) : undefined;
   const { effW, effH, taperActive, taperInset } = g;
@@ -422,14 +426,16 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   // expanded by gap/2), so the unit cell is simply that cell's area. Cross-hatch
   // brings its own parallelogram cell for the same reason: pitch × pitch is the
   // right cell only where the two families cross at a right angle.
-  const uniformCellArea = g.isTriTiling
-    ? ((effW * effH) / 2) * g.triCellK * g.triCellK
-    : g.isDiamondLattice
-      ? ((effW * effH) / 2) * g.diaCellK * g.diaCellK
-      : g.crossCellArea;
-  const theoreticalOAR = uniformCellArea
-    ? Math.min((theoreticalHoleArea / uniformCellArea) * 100, 100)
-    : calcTheoreticalOAR(layout.type, g.honeyPitchX, g.honeyPitchY, theoreticalHoleArea);
+  const uniformCellArea = !g.hasUnitCell
+    ? null
+    : g.isTriTiling
+      ? ((effW * effH) / 2) * g.triCellK * g.triCellK
+      : g.isDiamondLattice
+        ? ((effW * effH) / 2) * g.diaCellK * g.diaCellK
+        : g.isCrosshatch
+          ? g.crossCellArea
+          : g.gridCellArea;
+  const theoreticalOAR = calcCellOAR(uniformCellArea, theoreticalHoleArea);
   const countedOAR = perforatedArea > 0 ? (totalHoleArea / perforatedArea) * 100 : 0;
   const nominalOAR = useCountedOAR ? countedOAR : theoreticalOAR;
 
@@ -466,9 +472,7 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
     theoreticalExitW > 0 && theoreticalExitH > 0
       ? calcHoleArea(shape, theoreticalExitW, theoreticalExitH, theoreticalExitRadius, baseSuperN)
       : 0;
-  const theoreticalEffOAR = uniformCellArea
-    ? Math.min((theoreticalExitArea / uniformCellArea) * 100, 100)
-    : calcTheoreticalOAR(layout.type, g.honeyPitchX, g.honeyPitchY, theoreticalExitArea);
+  const theoreticalEffOAR = calcCellOAR(uniformCellArea, theoreticalExitArea);
   const countedEffOAR = perforatedArea > 0 ? (totalExitHoleArea / perforatedArea) * 100 : 0;
   const effectiveOAR = useCountedOAR ? countedEffOAR : theoreticalEffOAR;
   const oarDelta = taperActive ? effectiveOAR - nominalOAR : 0;

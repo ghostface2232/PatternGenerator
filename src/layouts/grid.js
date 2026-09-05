@@ -76,6 +76,47 @@ function rowPositions(cy, yTop, yBottom, pitch, sampleRow) {
   return above.concat(cy >= yTop && cy <= yBottom ? [[cy, 0, pitch]] : [], below);
 }
 
+// The lattice the grid family actually draws: the pitch along a row, and the
+// pitch between rows. Exported because `deriveGeometry` needs the same two
+// numbers — for the panel's readouts and for the unit cell the theoretical
+// open-area ratio divides by — and it used to work them out again, differently.
+// Its copy read the 45° row pitch as `pitchX` where this reads `pitchX/√2`, so
+// the panel reported a row pitch the generator had never used and the open-area
+// figure divided by a cell 40% too large.
+//
+// `rowPitch` is not simply the requested pitch: in the staggered modes the
+// nearest neighbour is diagonal, so the rows are pushed apart far enough that
+// the DIAGONAL clearance is the gap that was asked for. For a hole that is not
+// square that lifts the row pitch well above the nominal one, which is exactly
+// the case the two copies disagreed on.
+export function gridLattice({ holeW, holeH, patternType, pitchX, pitchY, isHexHoneycomb }) {
+  const is45 = patternType === "Staggered 45°";
+  // Hexagon + 60° staggered → true honeycomb. Pointy-top hexagons share an edge with all
+  // six neighbours, so the requested edge gap becomes a uniform ligament between facing
+  // parallel edges. Circumradius R = holeW/2 (corner-to-corner), apothem = R·√3/2;
+  // touching centres sit 2·apothem apart, so centre spacing = 2·apothem + gap and rows
+  // step by spacing·√3/2 to keep the lattice equilateral (every neighbour the same gap).
+  const hexSpacing = (holeW * Math.sqrt(3)) / 2 + Math.max(0, pitchX - holeW);
+  // For 45° staggered, pitchX is the nearest-neighbor (diagonal) distance t.
+  // The actual in-row horizontal pitch = t√2, offset = t/√2, vertical pitch = t/√2.
+  // This produces a true 45° angle: arctan((t/√2) / (t/√2)) = 45°.
+  // For 60° staggered, pitchX = in-row pitch = nearest-neighbor distance (equilateral).
+  const inRowPitchX = isHexHoneycomb ? hexSpacing : is45 ? pitchX * Math.SQRT2 : pitchX;
+  if (isHexHoneycomb) {
+    // Equilateral hex lattice: row spacing = inRowPitchX·√3/2 gives a uniform gap on every edge.
+    return { inRowPitchX, rowPitch: (inRowPitchX * Math.sqrt(3)) / 2 };
+  }
+  if (patternType !== "Staggered 60°" && !is45) return { inRowPitchX, rowPitch: pitchY };
+  // Adjacent rows are offset by inRowPitchX/2 horizontally, so the nearest
+  // neighbour is diagonal: use the Euclidean distance for the minimum-gap check
+  // rather than the purely vertical one, which over-constrains the spacing.
+  const halfPX = inRowPitchX / 2;
+  const minDist = Math.max(holeW, holeH) + Math.max(0, Math.min(pitchX - holeW, pitchY - holeH));
+  const staggeredMinPY = Math.sqrt(Math.max(holeH * holeH, minDist * minDist - halfPX * halfPX));
+  const nominal = patternType === "Staggered 60°" ? (pitchX * Math.sqrt(3)) / 2 : pitchX / Math.SQRT2;
+  return { inRowPitchX, rowPitch: Math.max(nominal, staggeredMinPY) };
+}
+
 export function generateGridHoles(options) {
   const { holeShape, holeW, holeH, patternType, pitchX, pitchY, bounds, pad, flatTheta, customAngle, spacing, isHexHoneycomb } = options; // prettier-ignore
   const { xMin, xMax, yMin, yMax } = bounds;
@@ -135,26 +176,10 @@ export function generateGridHoles(options) {
     return holes;
   }
 
-  // For 45° staggered, pitchX is the nearest-neighbor (diagonal) distance t.
-  // The actual in-row horizontal pitch = t√2, offset = t/√2, vertical pitch = t/√2.
-  // This produces a true 45° angle: arctan((t/√2) / (t/√2)) = 45°.
-  // For 60° staggered, pitchX = in-row pitch = nearest-neighbor distance (equilateral).
-  const is45 = patternType === "Staggered 45°";
-  const holeHeight = holeH;
-  const holeWidth = holeW;
-
-  // Hexagon + 60° staggered → true honeycomb. Pointy-top hexagons share an edge with all
-  // six neighbours, so the requested edge gap becomes a uniform ligament between facing
-  // parallel edges. Circumradius R = holeWidth/2 (corner-to-corner), apothem = R·√3/2;
-  // touching centres sit 2·apothem apart, so centre spacing = 2·apothem + gap and rows
-  // step by spacing·√3/2 to keep the lattice equilateral (every neighbour the same gap).
   // Which shape/mode pairs land on which tiling is `tilingFlags` in index.js —
-  // one answer, read here as an argument rather than re-derived.
-  const hexGap = Math.max(0, pitchX - holeWidth);
-  const hexSpacing = (holeWidth * Math.sqrt(3)) / 2 + hexGap;
-
-  let inRowPitchX = is45 ? pitchX * Math.SQRT2 : pitchX;
-  if (isHexHoneycomb) inRowPitchX = hexSpacing;
+  // one answer, read here as an argument rather than re-derived. The lattice
+  // itself is `gridLattice` above, shared with deriveGeometry for the same reason.
+  const { inRowPitchX, rowPitch } = gridLattice({ holeW, holeH, patternType, pitchX, pitchY, isHexHoneycomb });
 
   // The offset takes the row's own advance as well as its parity, because Custom
   // Angle's offset IS a slope: shear = rise × tan(angle). Using the nominal
@@ -162,38 +187,15 @@ export function generateGridHoles(options) {
   // a 55° one — the one slider in the app that names an angle, no longer naming
   // it. The staggered modes' half-pitch offset is horizontal and unaffected.
   let offsetFn = () => 0;
-  if (patternType === "Staggered 60°" || is45) {
+  if (patternType === "Staggered 60°" || patternType === "Staggered 45°") {
     offsetFn = rowIdx => (rowIdx % 2 !== 0 ? inRowPitchX / 2 : 0);
   } else if (patternType === "Custom Angle") {
     const angleRad = (customAngle * Math.PI) / 180;
     offsetFn = (rowIdx, advance) => (rowIdx % 2 !== 0 ? advance * Math.tan(angleRad) : 0);
   }
 
-  const minEdgeGap = Math.min(pitchX - holeWidth, pitchY - holeHeight);
-  const safeMinGap = Math.max(0, minEdgeGap);
-
-  let effPY = pitchY;
-  if (isHexHoneycomb) {
-    // Equilateral hex lattice: row spacing = inRowPitchX·√3/2 gives a uniform gap on every edge.
-    effPY = (inRowPitchX * Math.sqrt(3)) / 2;
-  } else if (patternType === "Staggered 60°" || is45) {
-    // In staggered layouts, adjacent rows are offset by inRowPitchX/2 horizontally.
-    // The nearest neighbor is diagonal, so use Euclidean distance for min gap check
-    // instead of purely vertical distance which over-constrains the spacing.
-    const halfPX = inRowPitchX / 2;
-    const holeDim = Math.max(holeWidth, holeHeight);
-    const minDist = holeDim + safeMinGap;
-    const staggeredMinPY = Math.sqrt(Math.max(holeHeight * holeHeight, minDist * minDist - halfPX * halfPX));
-    if (patternType === "Staggered 60°") {
-      effPY = Math.max((pitchX * Math.sqrt(3)) / 2, staggeredMinPY);
-    } else {
-      // 45°: vertical pitch = t/√2 where t = pitchX (nearest-neighbor distance)
-      effPY = Math.max(pitchX / Math.SQRT2, staggeredMinPY);
-    }
-  }
-
   // Center-aligned: start from panel center, expand outward
-  for (const [y, rowIdx, advance] of rowPositions(cy, yTop, yBottom, effPY, sampleRow)) {
+  for (const [y, rowIdx, advance] of rowPositions(cy, yTop, yBottom, rowPitch, sampleRow)) {
     const off = offsetFn(rowIdx, advance);
     const colsLeft = Math.ceil((cx - xLeft) / inRowPitchX) + 1;
     const colsRight = Math.ceil((xRight - cx) / inRowPitchX) + 1;
