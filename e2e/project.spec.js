@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import LZString from "lz-string";
+import { COALESCE_MS } from "../src/core/history.js";
 
 // Persistence, sharing and undo/redo (Phase 1).
 
@@ -12,12 +13,16 @@ async function setSlider(page, label, value) {
 const stat = (page, id) => page.getByTestId(id);
 
 // One press-release gesture on a slider track, a fraction of the way along it.
-// The measuring and the pressing have to be the same act. The interface is laid
-// out in a web font fetched at run time, and the reflow when it lands drops the
-// Hole Diameter track 10 px — more than twice the 4 px it is tall — so a
-// coordinate captured before an earlier step points at empty panel afterwards
-// and the gesture is silently lost. Going through the locator re-measures,
-// waits for the box to hold still and checks the point really hits the control.
+// The press must be aimed by whatever the layout is at the moment it lands, not
+// by a box captured before an earlier step. The interface is laid out in a web
+// font fetched at run time, and the reflow when it arrives drops the Hole
+// Diameter track 10 px, while the control forgives about 6 px of vertical error
+// (the 12 px thumb overhanging a 4 px track). So a stale y lands on empty panel
+// and the gesture is lost in silence. Hence the locator: it re-measures, waits
+// for the box to hold still, and checks the point really hits the control.
+// The fraction is still read from a box measured a round trip earlier, which is
+// sound only because the sidebar is a fixed 440 px and the reflow moves nothing
+// horizontally — measured, x and width identical either side of the swap.
 async function clickSliderAt(slider, fraction) {
   const { width, height } = await slider.boundingBox();
   await slider.click({ position: { x: width * fraction, y: height / 2 } });
@@ -119,10 +124,13 @@ test("undo and redo walk through edits, and a slider drag is one step", async ({
 
   // A range-slider drag emits many changes but should undo in one step.
   const slider = page.locator('input[type="range"]').first(); // Hole Diameter
-  const { width } = await slider.boundingBox();
-  // Hover through the locator so the press lands on the track wherever the
-  // layout has settled; only then read the box the drag steps along.
-  await slider.hover({ position: { x: width * 0.23, y: 2 } });
+  const { width, height } = await slider.boundingBox();
+  // Hover through the locator so the pointer is put on the track wherever the
+  // layout has settled — the tightest aim Playwright offers for a press, since
+  // mouse.down() has no target of its own. A press that misses anyway shows up
+  // as the dragged value below, not as a pass. Read the box the drag steps along
+  // afterwards, from the settled layout.
+  await slider.hover({ position: { x: width * 0.23, y: height / 2 } });
   await page.mouse.down();
   const box = await slider.boundingBox();
   for (let i = 1; i <= 8; i++) await page.mouse.move(box.x + box.width * (0.23 + i * 0.05), box.y + box.height / 2);
@@ -138,13 +146,19 @@ test("two quick slider gestures remain separate undo steps", async ({ page }) =>
   const field = page.getByLabel("Hole Diameter", { exact: true });
   const start = await field.inputValue();
 
+  const startedAt = Date.now();
   await clickSliderAt(slider, 0.35);
   await expect(field).not.toHaveValue(start);
   const first = await field.inputValue();
   await clickSliderAt(slider, 0.65);
+  const gestureSpan = Date.now() - startedAt;
   await expect(field).not.toHaveValue(first);
+  // "Quick" is the premise, not decoration: two gestures far enough apart would
+  // be separate steps whatever closeGroup did, and the test would prove nothing.
+  // Round trips run to ~90 ms of the 1000 ms window, so this has room to spare.
+  expect(gestureSpan).toBeLessThan(COALESCE_MS);
 
-  // Both gestures fall inside COALESCE_MS, so this is what tells them apart from
+  // Both gestures fall inside that window, so this is what tells them apart from
   // one drag: the first undo gives back only the second gesture, the next only
   // the first.
   await page.keyboard.press("Control+z");
