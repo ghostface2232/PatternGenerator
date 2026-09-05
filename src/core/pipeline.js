@@ -19,8 +19,8 @@ import { calcMinLigament, findOverlaps } from "../geometry/ligament.js";
 import { calcCellOAR } from "../geometry/oar.js";
 import { LAYOUTS, generateHoles, layoutFamily, layoutPlacementChannels, layoutReadsSpacing, layoutSpacingModel, tilingFlags } from "../layouts/index.js"; // prettier-ignore
 import { gridLattice } from "../layouts/grid.js";
-import { MIN_CROSS_SIN } from "../layouts/crosshatch.js";
-import { getRadialShapeExtents, getRadialShapeOuterRadius } from "../layouts/radial-engine.js";
+import { MIN_CROSS_SIN, crosshatchPitches } from "../layouts/crosshatch.js";
+import { diamondFlatAngle, getRadialShapeExtents, getRadialShapeOuterRadius } from "../layouts/radial-engine.js";
 import { evaluateVariationField, variationScaleAt } from "../fields/variation-engine.js";
 import { CHANNEL_INFO, compileControllers, compiledDrivesChannel, evaluateCompiled } from "../fields/controllers.js";
 
@@ -100,17 +100,30 @@ export function deriveGeometry(doc) {
   const freeSpacingX = freeDiameter + Math.max(0, layout.edgeGapX);
   const freeSpacingY = freeDiameter + Math.max(0, layout.edgeGapY);
   // Cross-hatch: the lattice its two line families cut out. The cell is a
-  // parallelogram of side pitchX/|sin Δ| by pitchY, i.e. area pitchX·pitchY/|sin Δ|,
-  // which is what the theoretical open-area ratio divides by. At Δ = 90° it is
-  // the rectangular cell of the Straight grid, as it should be.
+  // parallelogram of area pitchA·pitchB/|sin Δ|, which is what the theoretical
+  // open-area ratio divides by; at Δ = 90° it is the rectangular cell of the
+  // Straight grid, as it should be. The line spacings are the ones the
+  // generator will actually use — from the hole's extent along each family's
+  // direction, not from the axis pitches — so the cell area and the panel's
+  // pitch readouts describe the pattern that is drawn.
   const crossAngleA = layout.crosshatch.angleA;
   const crossAngleB = layout.crosshatch.angleB;
-  const crossSin = Math.abs(Math.sin(((crossAngleB - crossAngleA) * Math.PI) / 180));
+  const cross = crosshatchPitches({
+    shape: sizeShape,
+    w: effW,
+    h: effH,
+    holeAngle: hole.shape === "Diamond" && hole.diamondOrient === "Flat up" ? diamondFlatAngle(effW, effH) : 0,
+    angleA: crossAngleA,
+    angleB: crossAngleB,
+    gapX: layout.edgeGapX,
+    gapY: layout.edgeGapY,
+  });
+  const crossSin = cross.sin;
   // Below MIN_CROSS_SIN the two families are near enough to parallel that their
   // lattice cell is a sliver, so the mode places nothing at all. Derived here
   // rather than in the panel so the threshold stays inside the layouts.
   const crossDegenerate = isCrosshatch && crossSin < MIN_CROSS_SIN;
-  const crossCellArea = isCrosshatch && !crossDegenerate ? (pitchX * pitchY) / crossSin : null;
+  const crossCellArea = isCrosshatch && !crossDegenerate ? (cross.pitchA * cross.pitchB) / crossSin : null;
 
   const perfW = sheet.w - margins.left - margins.right;
   const perfH = sheet.h - margins.top - margins.bottom;
@@ -182,6 +195,8 @@ export function deriveGeometry(doc) {
     crossSin,
     crossDegenerate,
     crossCellArea,
+    crossPitchA: cross.pitchA,
+    crossPitchB: cross.pitchB,
     flowAngle: layout.flow.angle,
     freeDiameter,
     freeSpacingX,

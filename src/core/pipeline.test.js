@@ -833,16 +833,54 @@ test("the new layout modes report an honest open area", () => {
     doc({ "layout.type": "Cross-hatch", "layout.crosshatch.angleA": 90, "layout.crosshatch.angleB": 0 })
   );
   assert.equal(fixed(right.stats.displayOAR), fixed(computePattern(doc({ "layout.type": "Straight" })).stats.displayOAR)); // prettier-ignore
-  // A 60° crossing spreads the same lines over a larger cell, so the open area
-  // falls — the ratio is exactly sin 60°, which is what the cell area divides by.
+  // At a 60° crossing round holes one gap apart along both families are also
+  // one gap apart across the cell's short diagonal — the rhombus of the
+  // staggered 60° lattice — so the cell is side² · sin 60° and the open area
+  // RISES by 1/sin 60° over the square cell. The counted figure agrees.
   const sixty = computePattern(
     doc({ "layout.type": "Cross-hatch", "layout.crosshatch.angleA": 90, "layout.crosshatch.angleB": 30 })
   );
-  assert.ok(Math.abs(sixty.stats.theoreticalOAR / right.stats.theoreticalOAR - Math.sin(Math.PI / 3)) < 1e-9);
+  assert.ok(Math.abs(sixty.stats.theoreticalOAR / right.stats.theoreticalOAR - 1 / Math.sin(Math.PI / 3)) < 1e-9);
+  assert.ok(Math.abs(sixty.stats.theoreticalOAR - sixty.stats.countedOAR) < 1);
 
   for (const type of ["Scatter", "Spiral", "Fibonacci"]) {
     assert.equal(computePattern(doc({ "layout.type": type })).stats.useCountedOAR, true, type);
   }
+});
+
+test("cross-hatch leaves the requested gap along both families and across the diagonal", () => {
+  // The line spacings used to be the axis pitches (width + gap, height + gap)
+  // whatever the two directions, which is only right at right angles: a
+  // 20 × 2 mm slot with 3 mm gaps at 0°/30° put every hole on top of its
+  // neighbour along the 0° lines and read a ligament of 0. Each family's
+  // spacing now comes from the hole's clearance along the other family's
+  // direction, and the short diagonal — the closest neighbour once the crossing
+  // is sharper than 60° — is held to the smaller gap. So the smallest ligament
+  // is the smaller of the two gaps, exactly, for every shape and any crossing.
+  for (const [patch, expected] of [
+    [{ "hole.shape": "Rectangle", "hole.w": 20, "hole.h": 2, "layout.edgeGapX": 3, "layout.edgeGapY": 3, "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 30 }, 3], // prettier-ignore
+    [{ "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 30 }, 3],
+    [{ "hole.shape": "Pill", "hole.w": 12, "hole.h": 4, "layout.edgeGapX": 2, "layout.edgeGapY": 4, "layout.crosshatch.angleA": 15, "layout.crosshatch.angleB": 70 }, 2], // prettier-ignore
+    [{ "hole.shape": "Diamond", "hole.w": 8, "hole.h": 4, "hole.diamondOrient": "Flat up", "layout.crosshatch.angleA": 10, "layout.crosshatch.angleB": 50 }, 3], // prettier-ignore
+    [{ "hole.shape": "Triangle", "hole.w": 6, "hole.h": 6, "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 30 }, 3], // prettier-ignore
+  ]) {
+    const result = computePattern(doc({ "layout.type": "Cross-hatch", ...patch }));
+    assert.ok(result.activeHoles.length > 100, JSON.stringify(patch));
+    assert.equal(result.overlaps.size, 0, JSON.stringify(patch));
+    assert.ok(Math.abs(result.stats.minLigament - expected) < 1e-6, `${JSON.stringify(patch)}: ${result.stats.minLigament}`); // prettier-ignore
+    // The theoretical open area is the cell that was actually drawn.
+    assert.ok(Math.abs(result.stats.theoreticalOAR - result.stats.countedOAR) < 1, JSON.stringify(patch));
+  }
+  // A right-angled crossing is the Straight grid, pitch for pitch, and a slot
+  // that is 20 mm along one family and 2 mm along the other keeps its two
+  // pitches apart on the panel even with the gaps linked.
+  const slot = { "hole.shape": "Rectangle", "hole.w": 20, "hole.h": 2, "layout.edgeGapX": 3, "layout.edgeGapY": 1 };
+  const right = deriveGeometry(doc({ "layout.type": "Cross-hatch", "layout.crosshatch.angleA": 90, "layout.crosshatch.angleB": 0, ...slot })); // prettier-ignore
+  assert.ok(Math.abs(right.crossPitchA - 23) < 1e-9 && Math.abs(right.crossPitchB - 3) < 1e-9);
+  assert.equal(
+    computePattern(doc({ "layout.type": "Cross-hatch", "layout.crosshatch.angleA": 90, "layout.crosshatch.angleB": 0, ...slot })).activeHoles.length, // prettier-ignore
+    computePattern(doc({ "layout.type": "Straight", ...slot })).activeHoles.length
+  );
 });
 
 test("the staggered unit cell is the lattice that was actually drawn", () => {

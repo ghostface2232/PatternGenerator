@@ -5,6 +5,8 @@ import {
   getRadialShapeExtents,
   getRadialShapeOuterRadius,
   projectedShapeGap,
+  shapeExtent,
+  shapeReach,
 } from "./radial-engine.js";
 
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -246,4 +248,56 @@ test("6k rosette preserves projected gaps for every radial hole shape", () => {
     }
     assert.ok(minimum >= 3 - 1e-6, `${shape} 6k Rosette gap was ${minimum}`);
   }
+});
+
+test("shapeReach is the centre distance at which two holes are the gap apart", () => {
+  // Along a hole's own axis the reach is its width plus the gap, for every
+  // shape; off-axis it is the exit of the hole's difference body, which is
+  // shorter than the extent — a 20 × 2 mm slot shifted along 30° clears its
+  // twin after 4 mm (the 2 mm height over sin 30°), not after the 18.3 mm it
+  // is wide along that direction.
+  const rad = deg => (deg * Math.PI) / 180;
+  assert.equal(shapeReach("Circle", 5, 5, 0, rad(37), 3), 8);
+  assert.ok(Math.abs(shapeReach("Rectangle", 20, 2, 0, 0, 3) - 23) < 1e-9);
+  assert.ok(Math.abs(shapeReach("Rectangle", 20, 2, 0, rad(90), 1) - 3) < 1e-9);
+  assert.ok(Math.abs(shapeReach("Rectangle", 20, 2, 0, rad(30), 0) - 4) < 1e-9);
+  assert.ok(Math.abs(shapeExtent("Rectangle", 20, 2, 0, rad(30)) - (20 * Math.cos(rad(30)) + 2 * Math.sin(rad(30)))) < 1e-9); // prettier-ignore
+  // Turning the hole with the direction leaves the reach unchanged.
+  assert.ok(Math.abs(shapeReach("Rectangle", 20, 2, rad(30), rad(60), 0) - 4) < 1e-9);
+  // The pill's closed form agrees with the exact reading of it as a polygon:
+  // along its axis the caps meet, across it the flanks do, and in between the
+  // gap is measured round the cap.
+  assert.ok(Math.abs(shapeReach("Pill", 12, 4, 0, 0, 2) - 14) < 1e-9);
+  assert.ok(Math.abs(shapeReach("Pill", 12, 4, 0, rad(90), 2) - 6) < 1e-9);
+  assert.ok(Math.abs(shapeReach("Pill", 4, 12, 0, 0, 2) - 6) < 1e-9);
+  const pillGap = (t, theta) => {
+    // Clearance of a 12 × 4 stadium from its translate by t along theta: the
+    // distance between the two 8 mm core segments, less the two radii.
+    const dx = t * Math.cos(theta),
+      dy = t * Math.sin(theta);
+    let best = Infinity;
+    for (const ax of [-4, 4]) for (const bx of [-4, 4]) best = Math.min(best, Math.hypot(bx + dx - ax, dy));
+    const foot = Math.min(4, Math.max(-4, dx - 4)),
+      foot2 = Math.min(4, Math.max(-4, -dx - 4));
+    best = Math.min(best, Math.hypot(dx - 4 - foot, dy), Math.hypot(-dx - 4 - foot2, dy));
+    return best - 4;
+  };
+  for (const deg of [10, 25, 45, 70]) {
+    const t = shapeReach("Pill", 12, 4, 0, rad(deg), 1.5);
+    assert.ok(Math.abs(pillGap(t, rad(deg)) - 1.5) < 1e-9, `${deg}°: ${pillGap(t, rad(deg))}`);
+  }
+  // The polygons are the ones the holes are drawn with. A 6 mm triangle
+  // shifted along its base clears after its base width, and slid along its
+  // slant only once the whole edge has passed — the slant's length, which is
+  // longer than the base. A pointy-top hexagon meets its neighbour flat to
+  // flat across, corner to corner up.
+  assert.ok(Math.abs(shapeReach("Triangle", 6, 6, 0, 0, 0) - 6) < 1e-9);
+  assert.ok(Math.abs(shapeReach("Triangle", 6, 6, 0, Math.atan2(-6, 3), 0) - Math.hypot(3, 6)) < 1e-9);
+  assert.ok(Math.abs(shapeReach("Hexagon", 6, 6, 0, 0, 0) - 3 * Math.sqrt(3)) < 1e-9);
+  assert.ok(Math.abs(shapeReach("Hexagon", 6, 6, 0, rad(90), 0) - 6) < 1e-9);
+  assert.ok(Math.abs(shapeReach("Diamond", 8, 4, 0, rad(90), 1) - 5) < 1e-9);
+  // Never more than the extent plus the gap, which is what it replaces.
+  for (const shape of ["Rectangle", "Hexagon", "Diamond", "Triangle", "Superellipse"])
+    for (const deg of [0, 17, 45, 80, 130])
+      assert.ok(shapeReach(shape, 9, 4, 0.3, rad(deg), 2) <= shapeExtent(shape, 9, 4, 0.3, rad(deg)) + 2 + 1e-9, `${shape} ${deg}°`); // prettier-ignore
 });

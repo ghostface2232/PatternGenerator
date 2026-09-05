@@ -20,7 +20,7 @@ import { isInsideRoundedRect } from "../geometry/rounded-rect.js";
 import { forEachLatticePoint } from "./lattice.js";
 import { diamondLatticeBasis, generateGridHoles } from "./grid.js";
 import { diamondFlatAngle, generateRadialHoles } from "./radial-engine.js";
-import { generateCrosshatchHoles } from "./crosshatch.js";
+import { crosshatchPitches, generateCrosshatchHoles } from "./crosshatch.js";
 import { generateScatterHoles } from "./scatter.js";
 import { generateSpiralHoles } from "./spiral.js";
 import { generateFibonacciHoles } from "./fibonacci.js";
@@ -202,12 +202,25 @@ export function generateHoles(params, placement = null) {
   }
 
   if (patternType === "Cross-hatch") {
+    // The edge gaps are the axis pitches less the hole, which is how buildParams
+    // made them; the line spacings that actually leave those gaps depend on
+    // the two directions, and crosshatchPitches works them out.
+    const { pitchA, pitchB } = crosshatchPitches({
+      shape: holeShape,
+      w: hw * 2,
+      h: hh * 2,
+      holeAngle: flatTheta,
+      angleA: crossAngleA,
+      angleB: crossAngleB,
+      gapX: pitchX - hw * 2,
+      gapY: pitchY - hh * 2,
+    });
     return clipToBoundary(
       generateCrosshatchHoles({
         angleA: crossAngleA,
         angleB: crossAngleB,
-        pitchA: pitchX,
-        pitchB: pitchY,
+        pitchA,
+        pitchB,
         bounds: padded,
         spacing: field,
         holeAngle: flatTheta,

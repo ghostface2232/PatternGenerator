@@ -39,6 +39,11 @@ export function DimensionsPanel() {
   // chosen hole — its orientation and its corner radius — have nothing to act
   // on. The size sliders stay: they still set how big a cell is.
   const imposedShape = g.holeShape !== hole.shape;
+  // Cross-hatch derives each family's line spacing from the hole's shape along
+  // the other family's direction, so a hole that is not round can put the two
+  // families at different pitches even with the gaps linked; both are shown
+  // whenever they differ.
+  const crossPitchesMatch = Math.abs(g.crossPitchA - g.crossPitchB) < 1e-9;
 
   return (
     <Section title="Dimensions" theme={theme}>
@@ -664,22 +669,20 @@ export function DimensionsPanel() {
             unit="mm"
             dark={dark}
           />
-          <PitchInfo label={layout.gapLinked ? "line pitch" : "A line pitch"} value={g.pitchX} dark={dark} />
+          <PitchInfo label={crossPitchesMatch ? "line pitch" : "A line pitch"} value={g.crossPitchA} dark={dark} />
           {!layout.gapLinked && (
-            <>
-              <SliderRow
-                label="B Edge Gap"
-                value={layout.edgeGapY}
-                min={0}
-                max={50}
-                step={0.1}
-                onChange={actions.setEdgeGapY}
-                unit="mm"
-                dark={dark}
-              />
-              <PitchInfo label="B line pitch" value={g.pitchY} dark={dark} />
-            </>
+            <SliderRow
+              label="B Edge Gap"
+              value={layout.edgeGapY}
+              min={0}
+              max={50}
+              step={0.1}
+              onChange={actions.setEdgeGapY}
+              unit="mm"
+              dark={dark}
+            />
           )}
+          {!crossPitchesMatch && <PitchInfo label="B line pitch" value={g.crossPitchB} dark={dark} />}
         </>
       ) : g.uniformGapMode ? (
         <>

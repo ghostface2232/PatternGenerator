@@ -18,6 +18,7 @@
 // coarser pattern but a strip of holes in one corner of a blank sheet: the line
 // lists were cut at their cap and the hole loop returned mid-scan, both in
 // line-A order. A mode that cannot draw what it was asked for has to say so.
+import { shapeReach } from "./radial-engine.js";
 import { strongestAlong } from "./field-sampling.js";
 
 // Below this the two families are near enough to parallel that their lattice
@@ -41,6 +42,54 @@ const MAX_CROSS_PAIRS = 20_000_000;
 const MAX_LINES = 100_000;
 // Samples per line when the spacing field is read. See field-sampling.js.
 const SPACING_SAMPLES = 32;
+
+// The perpendicular spacing of each family's lines, from the hole and the two
+// edge gaps.
+//
+// A hole's neighbours along a family-A line are where consecutive family-B
+// lines cross it, and they sit pitchB/|sin Δ| apart ALONG that line — so the
+// metal between them depends on the hole's shape measured along the line, not
+// along an axis. Taking the axis pitches unchanged (width + gap, height + gap)
+// is right only at right angles: a 20 × 2 mm slot with 3 mm gaps at 0°/30°
+// came out with every hole overlapping its neighbour and a ligament of 0. So
+// each family's spacing is the centre distance along the OTHER family's lines
+// at which the holes are the gap apart (shapeReach), and at 90°/0° it is
+// exactly the pair it always was: `gapX` pairs with family A, whose lines are
+// the vertical ones at the orthogonal default and whose spacing is therefore
+// the X pitch.
+//
+// The lattice has a third neighbour, across the cell's short diagonal, and
+// once the crossing is sharper than 60° that one is the closest: two circles
+// spaced exactly one gap apart along 30° lines sit half a diameter apart
+// across the diagonal. Both families are then widened together, by the least
+// factor that leaves the smaller of the two gaps across each diagonal, which
+// keeps the crossing's proportions and never touches a right-angled family.
+export function crosshatchPitches({ shape, w, h, holeAngle = 0, angleA, angleB, gapX, gapY }) {
+  const radA = (angleA * Math.PI) / 180,
+    radB = (angleB * Math.PI) / 180;
+  const sin = Math.abs(Math.sin(radB - radA));
+  const gX = Math.max(0, gapX),
+    gY = Math.max(0, gapY);
+  // The lattice vectors: u steps along a family-A line, v along a family-B one.
+  const lenU = shapeReach(shape, w, h, holeAngle, radA, gY);
+  const lenV = shapeReach(shape, w, h, holeAngle, radB, gX);
+  const ux = lenU * Math.cos(radA),
+    uy = lenU * Math.sin(radA);
+  const vx = lenV * Math.cos(radB),
+    vy = lenV * Math.sin(radB);
+  const gapD = Math.min(gX, gY);
+  let scale = 1;
+  for (const [dx, dy] of [
+    [ux - vx, uy - vy],
+    [ux + vx, uy + vy],
+  ]) {
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) continue;
+    const need = shapeReach(shape, w, h, holeAngle, Math.atan2(dy, dx), gapD);
+    if (need > len * scale) scale = need / len;
+  }
+  return { pitchA: lenV * sin * scale, pitchB: lenU * sin * scale, sin };
+}
 
 // The offsets t of one family's lines, covering [tMin, tMax] and always
 // including the centre line t0. With no spacing field this is the arithmetic
