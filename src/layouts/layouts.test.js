@@ -748,6 +748,50 @@ test("a closed path divides its own loop instead of leaving a seam", () => {
   }
 });
 
+test("a closed path fits its loop under a spacing field that varies along it", () => {
+  // The loop's fit used to estimate its phase from one field sample per
+  // authored segment — the midpoint — while the walk claims the step at every
+  // hole. A square with an unsmoothed side is one segment, so a 0.2× region
+  // 30 mm across on one corner was never sampled at all, and the walk came
+  // back 80 mm short of its start: the fit is now the walk itself, run dry.
+  // The seam is checked as the walk's own rule — the last hole's claim is the
+  // step at ITS position — against the spacing of the pair before it, which
+  // sits on the same straight side with no corner between.
+  const square = [{ points: [{ x: 50, y: 50 }, { x: 150, y: 50 }, { x: 150, y: 150 }, { x: 50, y: 150 }], closed: true }]; // prettier-ignore
+  const loop = controller => {
+    const d = withSpacing(
+      { "layout.type": "Path", "layout.path.smooth": false, "layout.path.paths": square },
+      controller
+    );
+    const holes = place(d);
+    const { spacing } = compilePlacement(d);
+    const first = holes[0],
+      last = holes[holes.length - 1],
+      prev = holes[holes.length - 2];
+    assert.equal(first.x, 50);
+    assert.equal(first.y, 50);
+    assert.equal(last.x, 50, "the walk has to come back up the left side");
+    const seam = Math.hypot(first.x - last.x, first.y - last.y);
+    const expected = Math.hypot(prev.x - last.x, prev.y - last.y) * (spacing.sample(last.x, last.y) / spacing.sample(prev.x, prev.y)); // prettier-ignore
+    return { holes, seam, expected };
+  };
+  for (const controller of [
+    { target: 0.2, radius: 30, falloff: "smooth", geometry: { points: [{ x: 150, y: 150 }] } },
+    { target: 2, radius: 90 },
+    { target: 0.5, radius: 40, falloff: "linear", geometry: { points: [{ x: 100, y: 50 }] } },
+  ]) {
+    const { holes, seam, expected } = loop(controller);
+    assert.ok(holes.length > 30, `${holes.length} holes`);
+    assert.ok(Math.abs(seam - expected) < 1e-6, `${JSON.stringify(controller)}: seam ${seam} against ${expected}`);
+  }
+  // A hard edge in the field moves a whole hole's claim at once as the fit
+  // shifts holes across it, so no one scale can close the loop exactly; the
+  // seam is still the local step give or take that jump, never a gap of tens
+  // of millimetres and never a hole on top of the first.
+  const hard = loop({ target: 0.2, radius: 20, falloff: "hard", geometry: { points: [{ x: 150, y: 100 }] } });
+  assert.ok(hard.seam > hard.expected * 0.5 && hard.seam < hard.expected * 1.5, `hard: seam ${hard.seam} against ${hard.expected}`); // prettier-ignore
+});
+
 test("turning holes along a path turns them on top of the shape's own rotation", () => {
   // Diamond "Flat up" is a rotation the shape carries before any layout touches
   // it. Replacing it rather than composing with it dropped the orientation
