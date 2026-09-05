@@ -331,6 +331,12 @@ Spacing을 "9종 모두"로 적었던 애초의 기준은 잘못이었습니다.
 
 ## 7. Phase 4: 임의 경계와 커스텀 홀 형상
 
+상태 (2026-09-05): 완료. 산출물은 src/geometry/boundary.js(영역 컴파일), boundary-gizmo.js, rings.js(다중 링 외곽선), offset.js(polygon-clipping 위의 침식과 불리언), svg-path.js와 svg-import.js(SVG 파싱과 임포트), shape-presets.js(프리셋 형상 9종), custom-shape.js(불리언 편집기 수학), src/ui/panels/BoundaryPanel.jsx, src/ui/ShapeEditor.jsx이며 문서 스키마는 6으로 올렸습니다. 의존성으로 polygon-clipping 하나를 더했습니다.
+
+경계는 하나의 영역 객체(compileBoundary)로 컴파일되어 생성기, 통계, 캔버스, 내보내기가 같은 답을 읽습니다. 직사각형과 타원은 정확한 원시 도형으로, 다각형과 컷아웃이 있는 영역은 0.02 mm로 평탄화한 폴리곤으로 넓이와 클립을 잽니다. 다각형 경계는 링을 짝홀 규칙으로 읽으므로 로고의 카운터가 유지되며, 판 밖은 잘립니다. 평범한 직사각형은 배치 입력이 아니고(params가 이미 서명), 그 밖의 영역은 compilePlacement가 서명합니다. Voronoi는 경계에 걸친 셀만 polygon-clipping으로 잘라 gap/2만큼 침식하므로 타원이나 컷아웃 둘레의 금속 띠도 리거먼트와 같은 폭이고, Flow Lines는 슬롯 반폭의 여유를 지킵니다. 컷아웃은 원, 회전·모서리 반경이 있는 사각형, 다각형이며 캔버스에서 드래그하고, 다각형 경계는 정점 드래그와 변 더블클릭(추가), 정점 더블클릭(삭제)으로 편집합니다. SVG 임포트는 파일이 물리 단위를 밝히면 그대로, 아니면 폭을 한 번 묻습니다. trim은 판을 경계로 자르는 옵션으로, 캔버스와 내보내기(outline 그룹)만 바꾸고 서명하지 않습니다.
+
+홀 형상은 프리셋 9종(Star, Plus, Cross, Ring, Hex Nut, Crescent, Slots, Teardrop, Heart)과 Custom 하나를 더했고, 모두 단위 공간의 링 외곽선을 읽는 레지스트리 항목 하나(UnitShape)로 처리합니다. 넓이는 unitArea × w × h로 정확하고, 클리어런스는 회전을 반영한 링 간 거리입니다. 프리셋은 hole.ratio와 hole.count 하나씩을 읽으며, 원점 기준으로 맞춰 파라미터 슬라이더가 홀을 옮기지 않게 했습니다. Custom은 SVG 파일에서 읽거나 불리언 편집기(합집합/차집합 레이어 스택, 모달)에서 만들며, 합성 결과 링을 문서에 캐시해 파이프라인은 클리퍼를 돌리지 않습니다. 7.1이 언급한 DXF 엔티티는 Phase 5의 몫으로 남겼습니다.
+
 ### 7.1 경계 (boundary.js)
 
 ```js
