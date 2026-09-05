@@ -523,8 +523,9 @@ function decorateOutline(base, { scale, scaleAt, effW, effH, taperActive, taperI
     // was drawn. There is one exit per hole and the exporters trace it as one
     // outline, so a slot cut anywhere along its length is reported closed —
     // with the exit box zeroed, the way a round hole's is when its exit
-    // vanishes, so the exit side is neither drawn nor counted.
-    const closed = strokeMinWidth(exitStroke) <= 0;
+    // vanishes, so the exit side is neither drawn nor counted. Without a taper
+    // the exit IS the entry, which the size floor keeps open everywhere.
+    const closed = taperActive && strokeMinWidth(exitStroke) <= 0;
     return {
       outline: { stroke, exitStroke },
       entry: stroke,
