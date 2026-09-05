@@ -14,10 +14,9 @@ import { segmentClearance } from "./stroke.js";
 // and local, so one grid over them finds the same neighbours the point search
 // finds for ordinary holes, at the same cost — and the clearance between two
 // slots is by definition the clearance between their closest pair of segments.
-// Pairs from the same slot are skipped: a line is not its own ligament.
-function forEachSegmentPair(holes, shape, nominalSpacing, visit) {
+function collectSegments(holes, shape) {
   const segmentsOf = getShape(shape).segments;
-  if (!segmentsOf) return false;
+  if (!segmentsOf) return null;
   const segments = [];
   let longest = 0,
     widest = 0;
@@ -28,14 +27,55 @@ function forEachSegmentPair(holes, shape, nominalSpacing, visit) {
       segments.push({ ...segment, hole: index, x: (segment.ax + segment.bx) / 2, y: (segment.ay + segment.by) / 2 });
     }
   });
-  if (segments.length < 2) return true;
-  // Midpoints are what the grid holds, so two segments whose ends nearly touch
-  // are up to one segment plus both widths plus the gap apart at their middles.
-  const cellSize = Math.max(0.001, longest + 2 * widest + Math.max(0, nominalSpacing));
+  return { segments, longest, widest };
+}
+
+// Every pair of segments from DIFFERENT holes whose clearance could be below
+// `within`, at a grid sized for exactly that question.
+//
+// Midpoints are what the grid holds, so two segments whose capsules come within
+// `within` of each other are at most `within + both widths + one segment` apart
+// at their middles — that is the bound, and it is why the caller has to say what
+// distance it cares about. The old spelling passed the layout's nominal spacing
+// instead, which is neither an upper bound (it does not track the spacing field)
+// nor a cheap one: on a 200 mm panel of 1 mm slots it made every cell hold about
+// 150 segments and cost 6.8 s in the ligament search and another 7.1 s in the
+// overlap search, on a pattern of 199 holes that nothing downstream throttles.
+function forEachSegmentPair({ segments, longest, widest }, within, visit) {
+  const cellSize = Math.max(0.001, Math.max(0, within) + 2 * widest + longest);
   forEachNeighbourPair(segments, cellSize, (i, j) => {
-    if (segments[i].hole !== segments[j].hole) visit(segments[i], segments[j]);
+    const a = segments[i],
+      b = segments[j];
+    // A slot is not measured against itself. It is ONE continuous cut, so two
+    // pieces of it never have metal between them — the space is filled by the
+    // rest of the slot, which a pairwise test of two capsules cannot see: two
+    // pieces 8 mm apart along a nearly straight line read as 2.73 mm of
+    // "ligament" through the middle of a 3 mm one. Keeping a line away from
+    // itself is the generator's job and it does it (flowlines.js), the same way
+    // no other shape here measures its own two ends against each other.
+    if (a.hole === b.hole) return;
+    // One hypot to reject a pair the exact test would only confirm is far: the
+    // same bounding-circle bound the point search uses, with the segment's own
+    // half length standing in for its extent.
+    if (Math.hypot(b.x - a.x, b.y - a.y) - longest - a.r - b.r > within) return;
+    visit(a, b);
   });
-  return true;
+}
+
+// The diagonal of everything in a list, which is the distance past which a
+// neighbour search has visited every pair there is.
+function extentOf(items) {
+  let xMin = Infinity,
+    xMax = -Infinity,
+    yMin = Infinity,
+    yMax = -Infinity;
+  for (const item of items) {
+    if (item.x < xMin) xMin = item.x;
+    if (item.x > xMax) xMax = item.x;
+    if (item.y < yMin) yMin = item.y;
+    if (item.y > yMax) yMax = item.y;
+  }
+  return Math.hypot(xMax - xMin, yMax - yMin);
 }
 
 // A radius about each hole's own origin that contains the whole of it, so that
@@ -95,16 +135,21 @@ function neighbourDistanceFloor(holes) {
 }
 
 // Indices (into `holes`) of every hole that overlaps at least one neighbour.
-export function findOverlaps(holes, shape, nominalSpacing = 0) {
+export function findOverlaps(holes, shape) {
   const overlaps = new Set();
   if (holes.length > PERF_MODE_HOLE_LIMIT) return overlaps;
-  const segmented = forEachSegmentPair(holes, shape, nominalSpacing, (p, q) => {
-    if (segmentClearance(p, q) < -0.001) {
-      overlaps.add(p.hole);
-      overlaps.add(q.hole);
-    }
-  });
-  if (segmented) return overlaps;
+  const curved = collectSegments(holes, shape);
+  if (curved) {
+    // Overlap is a clearance below zero, so the interaction distance is zero and
+    // the grid can be as small as the segments themselves.
+    forEachSegmentPair(curved, 0, (p, q) => {
+      if (segmentClearance(p, q) < -0.001) {
+        overlaps.add(p.hole);
+        overlaps.add(q.hole);
+      }
+    });
+    return overlaps;
+  }
   const gridSize = Math.max(0.001, ...holes.map(h => Math.max(h.w, h.h)));
   const reach = holeReaches(holes, shape);
   forEachNeighbourPair(holes, gridSize, (i, j) => {
@@ -124,11 +169,27 @@ export function findOverlaps(holes, shape, nominalSpacing = 0) {
 export function calcMinLigament(holes, shape, nominalSpacing = 0) {
   if (holes.length < 2 || holes.length > PERF_MODE_HOLE_LIMIT) return null;
   let minGap = Infinity;
-  const segmented = forEachSegmentPair(holes, shape, nominalSpacing, (p, q) => {
-    const g = segmentClearance(p, q);
-    if (g < minGap) minGap = g;
-  });
-  if (segmented) return minGap === Infinity ? null : Math.max(0, minGap);
+  const curved = collectSegments(holes, shape);
+  if (curved) {
+    // The narrowest bridge is not known before the search, so the distance the
+    // grid is sized for is PROVED rather than guessed: search at one, and if the
+    // answer that comes back is inside it, no pair the grid left out could have
+    // beaten it. Otherwise widen and search again. Dense patterns — the ones
+    // where the cost is — settle on the first pass; only a sparse one grows, and
+    // a sparse one is cheap. Capped at the extent of the whole set, where every
+    // pair has been visited and the answer is exact by exhaustion, so the loop
+    // always ends.
+    if (curved.segments.length < 2) return null;
+    const span = extentOf(curved.segments);
+    for (let within = Math.max(1e-6, curved.longest + 2 * curved.widest); ; within *= 4) {
+      minGap = Infinity;
+      forEachSegmentPair(curved, within, (p, q) => {
+        const g = segmentClearance(p, q);
+        if (g < minGap) minGap = g;
+      });
+      if (minGap <= within || within >= span) return minGap === Infinity ? null : Math.max(0, minGap);
+    }
+  }
   const maxExtent = Math.max(0.001, ...holes.map(h => Math.max(h.w, h.h)));
   const gridSize = Math.max(maxExtent * 2, nominalSpacing * 1.5, neighbourDistanceFloor(holes) * 2);
   const reach = holeReaches(holes, shape);

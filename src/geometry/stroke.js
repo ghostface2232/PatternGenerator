@@ -16,10 +16,6 @@ import { polyArea, segmentGap } from "./polygon.js";
 // Chords per end cap. Six reads as round at any zoom the editor offers and keeps
 // the exported path short — a document can hold hundreds of these.
 const CAP_SEGMENTS = 6;
-// How far a corner's offset may be stretched to keep the outline's two sides
-// parallel to the centreline through a bend. Past this the bend is sharp enough
-// that a mitre would fire off a spike, and a blunt corner is the better lie.
-const MAX_MITRE = 3;
 
 export const strokeOf = value =>
   value && Array.isArray(value.pts) && value.pts.length >= 2 && Array.isArray(value.halfW) ? value : null;
@@ -48,22 +44,19 @@ export function strokeOutline(stroke) {
   const { pts, halfW } = s;
   const tan = tangents(pts);
   const width = i => Math.max(0, halfW[Math.min(i, halfW.length - 1)] ?? 0);
-  // The offset at a vertex follows the average tangent, stretched by 1/cos of
-  // the half-turn so the two sides stay the full width apart through a bend.
+  // The offset at a vertex is a plain half-width along the averaged normal, NOT
+  // stretched by a mitre to keep the two sides a full width apart through a
+  // bend. The stretched version is the prettier outline and the wrong one to
+  // measure: it puts metal outside the capsule the ligament search models, so a
+  // pattern reported at 3.000 mm was drawn at 2.958. Without it the outline sits
+  // inside the capsule everywhere, which makes the reported figure a lower bound
+  // on what is really cut — the only direction a manufacturing readout may err.
+  // The cost is a corner blunted by at most 3.4% of the half width, since a step
+  // may turn by at most MAX_TURN.
   const side = (i, sign) => {
     const [tx, ty] = tan[i];
-    const nx = -ty * sign,
-      ny = tx * sign;
     const w = width(i);
-    let mitre = 1;
-    if (i > 0 && i < pts.length - 1) {
-      const dx = pts[i][0] - pts[i - 1][0],
-        dy = pts[i][1] - pts[i - 1][1];
-      const len = Math.hypot(dx, dy) || 1;
-      // cos of the angle between the incoming segment and the averaged tangent.
-      mitre = clamp(1 / Math.max(1e-3, (dx / len) * tx + (dy / len) * ty), 1, MAX_MITRE);
-    }
-    return [pts[i][0] + nx * w * mitre, pts[i][1] + ny * w * mitre];
+    return [pts[i][0] - ty * sign * w, pts[i][1] + tx * sign * w];
   };
   // The half turn from the side just left, round the end of the line, to the
   // other side — outward, past the last vertex. Sweeping the other way would cut
@@ -118,6 +111,30 @@ export const strokeMaxWidth = stroke => {
   const s = strokeOf(stroke);
   return s ? 2 * Math.max(0, ...s.halfW) : 0;
 };
+
+// The widest a slot may be at each vertex of a centreline before its own turn
+// closes over it.
+//
+// A curve offset by more than the radius it is turning through folds: the inner
+// side crosses itself, and what is left is not a slot at all. The area then
+// reads off a self-intersecting shoelace — measured, 10% over what the canvas
+// actually fills — while the fill shows a pinch. The size channel reaches 4× and
+// the variation field 2.5×, so this is two sliders away, not a corner case.
+// The limit is the circumcircle of each vertex and its two neighbours, which for
+// three points on a curve is that curve's radius there.
+export function curvatureLimit(pts) {
+  return pts.map((p, i) => {
+    if (i === 0 || i === pts.length - 1) return Infinity;
+    const a = pts[i - 1],
+      c = pts[i + 1];
+    const twiceArea = Math.abs((a[0] - p[0]) * (c[1] - p[1]) - (a[1] - p[1]) * (c[0] - p[0]));
+    if (twiceArea < 1e-12) return Infinity; // straight through: no limit
+    const ab = Math.hypot(p[0] - a[0], p[1] - a[1]),
+      bc = Math.hypot(c[0] - p[0], c[1] - p[1]),
+      ca = Math.hypot(c[0] - a[0], c[1] - a[1]);
+    return (ab * bc * ca) / (2 * twiceArea);
+  });
+}
 
 // Half-width where the point (px, py) projects onto the centreline, so a tapered
 // slot is tested against the width it actually has there rather than its widest.
@@ -194,10 +211,6 @@ export function strokeVisibleArea(hole, stroke, exactArea, inside) {
   const width = i => Math.max(0, halfW[Math.min(i, halfW.length - 1)] ?? 0);
   let total = 0,
     visible = 0;
-  const count = (measure, isInside) => {
-    total += measure;
-    if (isInside) visible += measure;
-  };
   for (let i = 1; i < pts.length; i++) {
     const ax = hole.x + pts[i - 1][0],
       ay = hole.y + pts[i - 1][1];
@@ -205,12 +218,50 @@ export function strokeVisibleArea(hole, stroke, exactArea, inside) {
       by = hole.y + pts[i][1];
     const length = Math.hypot(bx - ax, by - ay);
     if (!(length > 0)) continue;
-    count(length * (width(i - 1) + width(i)), inside((ax + bx) / 2, (ay + by) / 2));
+    // Across the width as well as along the length. The generator keeps the
+    // CENTRELINE half a nominal width inside the boundary, but the size channel
+    // widens the slot afterwards without moving it — so a slot hanging off the
+    // panel edge was counted whole, and the open-area figure went past 100%.
+    //
+    // Four samples across, at the quarter points of the width and each standing
+    // for a quarter of it: the midpoint rule, so a boundary anywhere across the
+    // slot is answered to within an eighth of its width, and one running exactly
+    // down the middle gives exactly half. Sampling the centreline and the two
+    // edges instead would put a sample ON that boundary and answer three
+    // quarters.
+    const w = (width(i - 1) + width(i)) / 2;
+    const mx = (ax + bx) / 2,
+      my = (ay + by) / 2;
+    const nx = (-(by - ay) / length) * w,
+      ny = ((bx - ax) / length) * w;
+    let share = 0;
+    for (const across of [-0.75, -0.25, 0.25, 0.75]) {
+      if (inside(mx + nx * across, my + ny * across)) share += 0.25;
+    }
+    total += length * 2 * w;
+    visible += length * 2 * w * share;
   }
-  // The two end caps, each a half-disc.
-  for (const i of [0, pts.length - 1]) {
+  // The two end caps, each a half-disc, sampled over the half-disc rather than at
+  // the vertex it turns about — that vertex is the one point of the cap that is
+  // NOT out at the end, so on a long thin slot it answered for the cap by
+  // measuring the middle of the slot instead.
+  const tan = tangents(pts);
+  for (const [i, sign] of [
+    [0, -1],
+    [pts.length - 1, 1],
+  ]) {
     const w = width(i);
-    if (w > 0) count((Math.PI * w * w) / 2, inside(hole.x + pts[i][0], hole.y + pts[i][1]));
+    if (!(w > 0)) continue;
+    const [tx, ty] = tan[i];
+    const from = Math.atan2(ty * sign, tx * sign);
+    let share = 0;
+    for (const off of [-0.375, -0.125, 0.125, 0.375]) {
+      const a = from + off * Math.PI;
+      // Half the radius: the midpoint of a half-disc's area lies well inside it.
+      if (inside(hole.x + pts[i][0] + Math.cos(a) * w * 0.5, hole.y + pts[i][1] + Math.sin(a) * w * 0.5)) share += 0.25;
+    }
+    total += (Math.PI * w * w) / 2;
+    visible += ((Math.PI * w * w) / 2) * share;
   }
   return total > 0 ? (exactArea * visible) / total : 0;
 }

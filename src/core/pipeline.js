@@ -12,7 +12,7 @@ import { CUSTOM_SIZE_SHAPES, DOC_LIMITS, MORPH_SHAPE, PERF_MODE_HOLE_LIMIT } fro
 import { clamp, DEG } from "./math.js";
 import { basePolyVerts, insetConvexPoly, maxCornerRadius, polyBBox, polyCentroid, triInradius } from "../geometry/polygon.js"; // prettier-ignore
 import { calcHoleArea, getShape } from "../geometry/shapes.js";
-import { strokeBBox, strokeMaxWidth } from "../geometry/stroke.js";
+import { curvatureLimit, strokeBBox, strokeMaxWidth } from "../geometry/stroke.js";
 import { superNFromMix } from "../geometry/superellipse.js";
 import { estimateVisibleHoleArea, perfBoundsArea, perfBoundsFromParams } from "../geometry/boundary.js";
 import { calcMinLigament, findOverlaps } from "../geometry/ligament.js";
@@ -480,7 +480,13 @@ function decorateOutline(base, { scale, scaleAt, effW, effH, taperActive, taperI
   }
   if (base.stroke) {
     const pts = base.stroke.pts;
-    const halfW = pts.map(([dx, dy]) => Math.max(0, (effW / 2) * scaleAt(base.x + dx, base.y + dy)));
+    // Capped at what the curve can carry: a slot wider than the radius it turns
+    // through folds over itself, and then neither its area nor its picture is a
+    // slot any more. See curvatureLimit.
+    const limit = curvatureLimit(pts);
+    const halfW = pts.map(([dx, dy], i) =>
+      Math.min(Math.max(0, (effW / 2) * scaleAt(base.x + dx, base.y + dy)), limit[i] * 0.99)
+    );
     const stroke = { pts, halfW };
     const exitStroke = taperActive ? { pts, halfW: halfW.map(value => Math.max(0, value - taperInset / 2)) } : stroke;
     const box = strokeBBox(stroke),
@@ -714,7 +720,7 @@ export function computePattern(doc, ctx = {}) {
   const holes = decorateHoles(baseHoles, doc, g, field);
   const removedSet = new Set(doc.removedHoles);
   const activeHoles = filterActive(holes, removedSet);
-  const overlaps = findOverlaps(activeHoles, g.holeShape, g.nominalSpacing);
+  const overlaps = findOverlaps(activeHoles, g.holeShape);
   const stats = computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps, field });
   return { geometry: g, params, baseHoles, holes, activeHoles, removedSet, overlaps, stats, field, placement };
 }

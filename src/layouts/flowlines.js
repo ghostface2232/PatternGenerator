@@ -259,6 +259,13 @@ export function generateFlowLines({ bounds, cornerRadius = 0, width, separation,
   if (!insideBoundary(middle.x, middle.y)) return [];
   seed(middle);
   while (pending.size > 0 && !full()) seed(pending.pop());
+  // Stopped with candidates still queued means a cap cut the fill off part way,
+  // and the lines grow outward from the first one — so what is left is a band of
+  // pattern beside a bare strip of panel. The vertex cap is checked up front,
+  // but the line cap cannot be: a 1000 × 50 panel of half-millimetre slots hits
+  // it at 1000 lines with a twentieth of the panel still blank. Refuse, like
+  // every other mode that cannot draw what it was asked for.
+  if (pending.size > 0) return [];
 
   // Each line becomes one hole, placed at the middle of its own extent so that
   // the field controllers sample it somewhere near it, and carrying its

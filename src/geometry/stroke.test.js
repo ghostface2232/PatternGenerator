@@ -84,3 +84,34 @@ test("a slot measures its own visible area rather than sampling a box round it",
     0
   );
 });
+
+test("a slot hanging over the boundary is counted across its width, not only along it", () => {
+  // The generator keeps the CENTRELINE half a nominal width inside the boundary,
+  // and the size channel widens the slot afterwards without moving it — so a
+  // widened slot can hang off the panel. Testing the centreline alone said it
+  // was wholly inside, and the open-area figure went past 100%.
+  const s = straight(2);
+  const hole = slot(0, 0, s);
+  const exact = calcHoleArea("Stroke", 0, 0, 0, s);
+  // The boundary is the line y = 0, straight down the middle of the slot.
+  near(
+    strokeVisibleArea(hole, s, exact, (x, y) => y <= 0),
+    exact / 2,
+    exact * 0.02
+  );
+  // A quarter of the way across, and clear of it either way.
+  near(
+    strokeVisibleArea(hole, s, exact, (x, y) => y <= -1),
+    exact / 4,
+    exact * 0.05
+  );
+  near(
+    strokeVisibleArea(hole, s, exact, (x, y) => y <= 5),
+    exact,
+    1e-9
+  );
+  assert.equal(
+    strokeVisibleArea(hole, s, exact, (x, y) => y <= -5),
+    0
+  );
+});

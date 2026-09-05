@@ -13,7 +13,8 @@ import { defaultPathPoints, flattenPath, polylineLength } from "./path.js";
 import { diamondFlatAngle } from "./radial-engine.js";
 import { generateFibonacciHoles } from "./fibonacci.js";
 import { holeVertices, isPointInsideHole } from "../geometry/shapes.js";
-import { signedPolyArea } from "../geometry/polygon.js";
+import { distPointSeg, signedPolyArea } from "../geometry/polygon.js";
+import { curvatureLimit, strokeOutline } from "../geometry/stroke.js";
 import { boundaryPolygon } from "./voronoi.js";
 import { compileControllers, imageChannels } from "../fields/controllers.js";
 import { DOC_LIMITS, MAX_PATHS, MAX_PATH_POINTS } from "../core/constants.js";
@@ -1168,4 +1169,98 @@ test("the voronoi boundary polygon is a simple, correctly wound convex outline",
   const inside = activeHoles.filter(h => isPointInsideHole(h.x, h.y, h, "Polygon"));
   assert.ok(inside.length > activeHoles.length * 0.9, `${inside.length} of ${activeHoles.length} cells contain a click on their own site`); // prettier-ignore
   assert.equal(isPointInsideHole(-50, -50, activeHoles[0], "Polygon"), false);
+});
+
+test("flow lines refuse a line count they cannot finish, rather than leaving a bare strip", () => {
+  // The vertex cap is checked before the first line is drawn; the line cap
+  // cannot be, so it is caught by the fill stopping with candidates still
+  // queued. A 1000 × 50 panel of half-millimetre slots reaches 1000 lines with
+  // a twentieth of the panel still blank, which is not a coarser pattern — it
+  // is a band of pattern beside a bare strip.
+  const long = doc({
+    "layout.type": "Flow Lines",
+    "sheet.w": 1000,
+    "sheet.h": 50,
+    "hole.diameter": 0.5,
+    "layout.edgeGapX": 0.45,
+    "layout.flow.angle": 90,
+    "boundary.margins.top": 0,
+    "boundary.margins.bottom": 0,
+    "boundary.margins.left": 0,
+    "boundary.margins.right": 0,
+  });
+  assert.equal(place(long).length, 0);
+  // The same panel at a separation it can finish draws all of it.
+  const drawn = place(patchIn(long, { "layout.edgeGapX": 4 }));
+  assert.ok(drawn.length > 20, `${drawn.length} lines`);
+  const xs = drawn.flatMap(h => h.stroke.pts.map(([dx]) => h.x + dx));
+  assert.ok(Math.min(...xs) < 10 && Math.max(...xs) > 990, "the fill reaches both ends of the panel");
+});
+
+test("the ligament a flow-lines document reports is never more than the metal it draws", () => {
+  // The search models a slot as a capsule about its centreline; the canvas and
+  // the exporters draw an offset outline. Pushing that outline out by a mitre at
+  // each bend put metal OUTSIDE the capsule, so a pattern reported at 3.000 mm
+  // was drawn at 2.958 — the one direction a manufacturing readout may not err.
+  const { activeHoles, stats } = computePattern(
+    withSpacing({ "layout.type": "Flow Lines" }, { channel: "angle", target: 180, radius: 30 })
+  );
+  const outlines = activeHoles.map(hole => strokeOutline(hole.stroke).map(([x, y]) => [hole.x + x, hole.y + y]));
+  let drawn = Infinity;
+  for (let i = 0; i < outlines.length; i++) {
+    for (let j = i + 1; j < outlines.length; j++) {
+      for (const [px, py] of outlines[i]) {
+        for (let k = 0; k < outlines[j].length; k++) {
+          const a = outlines[j][k],
+            b = outlines[j][(k + 1) % outlines[j].length];
+          drawn = Math.min(drawn, distPointSeg(px, py, a[0], a[1], b[0], b[1]));
+        }
+      }
+    }
+  }
+  assert.ok(drawn >= stats.minLigament - 1e-9, `reported ${stats.minLigament}, drawn ${drawn}`);
+});
+
+test("a slot is never wider than the curve it follows can carry", () => {
+  // Offset a curve by more than the radius it turns through and the inner side
+  // of the outline crosses itself: the shape stops being a slot, and its area
+  // reads off a self-intersecting shoelace. The size channel reaches 4× and the
+  // variation field 2.5×, so this is two sliders away.
+  const { activeHoles } = computePattern(
+    doc({
+      "layout.type": "Flow Lines",
+      "sheet.w": 400,
+      "sheet.h": 400,
+      "hole.diameter": 20,
+      "layout.edgeGapX": 0,
+      "fields.enabled": true,
+      "fields.controllers": [
+        spacingController({ id: "s", channel: "size", target: 4, radius: 2000, falloff: "hard", geometry: { points: [{ x: 200, y: 200 }] } }), // prettier-ignore
+        spacingController({ id: "a", channel: "angle", target: 180, radius: 60, geometry: { points: [{ x: 200, y: 200 }] } }), // prettier-ignore
+      ],
+    })
+  );
+  assert.ok(activeHoles.length > 5);
+  for (const hole of activeHoles) {
+    const limit = curvatureLimit(hole.stroke.pts);
+    hole.stroke.halfW.forEach((w, i) => {
+      assert.ok(w <= limit[i] + 1e-9, `${w} mm of half width where the curve turns through ${limit[i]}`);
+    });
+  }
+});
+
+test("squeezing a flow-lines pattern past its own width is reported, not hidden", () => {
+  // The separation is the slot's width plus the edge gap, and the spacing
+  // channel multiplies the whole of it while the size channel multiplies the
+  // width alone — so either one, pushed far enough, asks for slots that cannot
+  // fit beside each other. That is what those sliders mean in every mode; what
+  // matters is that the statistics say so rather than the mode pretending.
+  const uniform = extra => ({ radius: 2000, falloff: "hard", ...extra });
+  for (const controller of [uniform({ target: 0.2 }), uniform({ channel: "size", target: 4 })]) {
+    const squeezed = computePattern(withSpacing({ "layout.type": "Flow Lines" }, controller));
+    assert.ok(squeezed.activeHoles.length > 5);
+    assert.ok(squeezed.overlaps.size > 0, `${JSON.stringify(controller)}: overlaps unreported`);
+    assert.equal(squeezed.stats.minLigament, 0);
+    assert.equal(squeezed.stats.hasOverlap, true);
+  }
 });
