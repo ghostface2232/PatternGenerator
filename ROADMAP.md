@@ -272,23 +272,29 @@ Spacing 채널은 EDITABLE_CHANNELS에 들어왔고, 격자 계열은 6.2절이 
 
 ### 6.1 공통 인터페이스
 
-구현된 형태는 아래와 같으며, 계획 단계에서 적어 둔 ctx 객체와는 다릅니다. 실제 인터페이스는 이미 존재하던 평면 params 레코드를 그대로 쓰고, 여기에 spacing 필드 하나를 두 번째 인자로 더한 것입니다.
+구현된 형태는 아래와 같으며, 계획 단계에서 적어 둔 ctx 객체와는 다릅니다. 실제 인터페이스는 이미 존재하던 평면 params 레코드를 그대로 쓰고, 원시값이 아닌 배치 입력을 한 덩어리로 묶은 placement를 두 번째 인자로 더한 것입니다.
 
 ```js
 // layouts/index.js
 export const LAYOUTS = {
-  "Straight":      { family: "grid",       spacing: true,  theoretical: true },
-  "Staggered 60°": { family: "grid",       spacing: true,  theoretical: true },
-  "Staggered 45°": { family: "grid",       spacing: true,  theoretical: true },
-  "Radial":        { family: "radial",     spacing: false, theoretical: false },
-  "Custom Angle":  { family: "grid",       spacing: true,  theoretical: true },
-  "Cross-hatch":   { family: "crosshatch", spacing: true,  theoretical: true },
-  "Scatter":       { family: "free",       spacing: true,  theoretical: false },
-  "Spiral":        { family: "free",       spacing: true,  theoretical: false },
-  "Fibonacci":     { family: "free",       spacing: true,  theoretical: false },
+  "Straight":      { family: "grid",       spacingModel: "grid",   spacing: true,  theoretical: true },
+  "Staggered 60°": { family: "grid",       spacingModel: "grid",   spacing: true,  theoretical: true },
+  "Staggered 45°": { family: "grid",       spacingModel: "grid",   spacing: true,  theoretical: true },
+  "Radial":        { family: "radial",     spacingModel: "radial", spacing: false, theoretical: false },
+  "Custom Angle":  { family: "grid",       spacingModel: "grid",   spacing: true,  theoretical: true },
+  "Cross-hatch":   { family: "crosshatch", spacingModel: "grid",   spacing: true,  theoretical: true },
+  "Scatter":       { family: "free",       spacingModel: "free",   spacing: true,  theoretical: false },
+  "Spiral":        { family: "free",       spacingModel: "free",   spacing: true,  theoretical: false },
+  "Fibonacci":     { family: "free",       spacingModel: "free",   spacing: true,  theoretical: false },
+  "Path":          { family: "path",       spacingModel: "free",   spacing: true,  theoretical: false },
+  "Voronoi":       { family: "voronoi",    spacingModel: "free",   spacing: true,  theoretical: false },
+  "Flow Lines":    { family: "flow",       spacingModel: "grid",   spacing: true,  theoretical: false },
 };
-// generateHoles(params, spacing) → [{ x, y, angle? }]
+// generateHoles(params, placement) → [{ x, y, angle?, poly?, stroke? }]
+// placement = compilePlacement(doc) = { spacing, angle, path, signature } | null
 ```
+
+spacingModel은 그 모드가 홀 사이 거리를 어디서 재는지입니다. "grid"는 폭·높이에 edge gap을 더한 값, "free"는 외접원 지름에 더한 값(서로 임의의 각도로 놓이는 모드들), "radial"은 자기 링에서 잽니다. poly와 stroke는 레이아웃이 홀별 형상을 강제하는 두 모드(Voronoi, Flow Lines)만 채웁니다.
 
 계획과 달라진 이유는 두 가지입니다. 첫째, params는 원시값만 담는 평면 레코드여야 합니다. PLACEMENT_PARAMS가 generateHoles의 구조 분해와 정확히 일치한다는 것이 removedHoles 규칙의 근거이고, 그 목록은 문자열로 서명되어야 하므로 샘플러 함수가 그 안에 들어갈 수 없습니다. 그래서 spacing은 두 번째 인자이고, patternSignature가 그 서명을 따로 붙입니다. 둘째, 키를 grid/staggered 같은 새 이름이 아니라 문서가 이미 쓰던 layout.type 문자열 그대로 둔 것은, 그 문자열이 곧 파일 포맷이기 때문입니다. 이름을 바꾸면 저장된 모든 문서가 로드 시 기본값으로 떨어집니다.
 

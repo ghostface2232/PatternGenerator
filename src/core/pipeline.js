@@ -721,7 +721,7 @@ export function computePattern(doc, ctx = {}) {
 // rests on.
 //
 // What makes this sound is structural, not empirical: generateHoles is pure in
-// (params, spacing) — it reads no module state, and every sub-generator receives
+// (params, placement) — it reads no module state, and every sub-generator receives
 // only values derived from these — so a list equal to its destructuring, plus
 // the spacing signature, cannot miss a placement input. pipeline.test.js asserts
 // that equality directly by parsing layouts/index.js, and separately sweeps

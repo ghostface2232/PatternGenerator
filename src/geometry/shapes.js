@@ -21,9 +21,10 @@
 // Two entries carry an optional operation beyond the five, because for them the
 // generic answer is not merely slower but wrong:
 //
-//   verts(hole, w, h, n)          absolute outline, for a shape no w × h box bounds
-//   visibleArea(hole, n, inside)  area inside the boundary, for a shape whose
-//                                 bounding box is most of the panel
+//   verts(hole, w, h, n)             absolute outline, for a shape no w × h box bounds
+//   segments(hole, n)                the pieces a curve-shaped hole is near things by
+//   visibleArea(hole, n, area, in)   area inside the boundary, for a shape whose
+//                                    bounding box is most of the panel
 import {
   basePolyVerts,
   convexPolyGap,

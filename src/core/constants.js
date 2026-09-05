@@ -23,9 +23,9 @@ export const PATTERN_TYPES = [
   "Flow Lines",
 ];
 // The shapes the dropdown offers. The SHAPES registry in geometry/shapes.js has
-// one more — `Polygon`, the per-hole outline the Voronoi layout imposes — which
-// is deliberately not here: no document may name it, because no document decides
-// it. See effectiveHoleShape in core/pipeline.js.
+// two more — `Polygon`, the cell Voronoi imposes, and `Stroke`, the slot Flow
+// Lines imposes — which are deliberately not here: no document may name them,
+// because no document decides them. See effectiveHoleShape in core/pipeline.js.
 export const HOLE_SHAPES = ["Circle", "Rectangle", "Pill", "Hexagon", "Diamond", "Triangle", "Superellipse"];
 export const CUSTOM_SIZE_SHAPES = ["Rectangle", "Pill", "Diamond", "Triangle", "Superellipse"];
 // The one shape whose outline the `shape` field channel can morph per hole.
