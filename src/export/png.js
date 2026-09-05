@@ -1,9 +1,20 @@
 // High-resolution raster export of the sheet (default 8 px per mm).
 import { holeExitOutline, holeOutline, traceHolePath } from "../geometry/shapes.js";
-import { tracePerfBoundary } from "../geometry/boundary.js";
+import { regionFromParams } from "../geometry/boundary.js";
 
-export async function renderPNGBlob({ activeHoles, params, holeColor, bgColor, dark, pixelsPerMm = 8 }) {
+export async function renderPNGBlob({
+  activeHoles,
+  params,
+  region = null,
+  trim = false,
+  holeColor,
+  bgColor,
+  dark,
+  pixelsPerMm = 8,
+}) {
+  // prettier-ignore
   const { sheetW, sheetH, holeShape } = params;
+  const bounds = region ?? regionFromParams(params);
   const taperActive = params.thickness > 0 && params.taperAngle > 0;
   const oc = document.createElement("canvas");
   oc.width = sheetW * pixelsPerMm;
@@ -12,11 +23,23 @@ export async function renderPNGBlob({ activeHoles, params, holeColor, bgColor, d
   if (!ctx) throw new Error("2D canvas is unavailable");
   const s = Math.min(oc.width / sheetW, oc.height / sheetH);
   ctx.fillStyle = bgColor;
-  ctx.fillRect(0, 0, oc.width, oc.height);
+  // Trimmed, the material is the region and the rest of the image stays
+  // transparent; otherwise the whole sheet is metal.
+  if (trim) {
+    ctx.save();
+    ctx.scale(s, s);
+    ctx.beginPath();
+    bounds.trace(ctx);
+    ctx.fill(bounds.fillRule);
+    ctx.restore();
+  } else {
+    ctx.fillRect(0, 0, oc.width, oc.height);
+  }
   ctx.save();
   ctx.scale(s, s);
-  tracePerfBoundary(ctx, params);
-  ctx.clip();
+  ctx.beginPath();
+  bounds.trace(ctx);
+  ctx.clip(bounds.fillRule);
   activeHoles.forEach(h => {
     ctx.beginPath();
     traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, holeOutline(h));

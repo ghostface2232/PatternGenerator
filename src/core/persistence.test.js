@@ -304,7 +304,13 @@ test("a v1 document upgrades to the current schema with every later block inert"
   delete v1.layout.scatter;
   delete v1.layout.path;
   const upgraded = migrateDocument(v1);
-  assert.equal(upgraded.schemaVersion, 5);
+  assert.equal(upgraded.schemaVersion, 6);
+  // Phase 4's boundary fields default to the rectangle the document already
+  // described, with nothing taken out of it.
+  assert.equal(upgraded.boundary.shape, "Rectangle");
+  assert.deepEqual(upgraded.boundary.rings, []);
+  assert.deepEqual(upgraded.boundary.cutouts, []);
+  assert.equal(upgraded.boundary.trim, false);
   assert.deepEqual(upgraded.fields, { enabled: false, controllers: [] });
   assert.deepEqual(upgraded.assets, {});
   assert.equal(upgraded.hole.shapeMix, fresh.hole.shapeMix);
@@ -435,4 +441,79 @@ test("share links and the recent list travel without the images", () => {
   // The autosave, which a reload reads back, keeps them.
   saveCurrent(storage, doc);
   assert.deepEqual(loadCurrent(storage).assets, doc.assets);
+});
+
+test("the boundary's shape, rings, cutouts and trim flag are validated field by field", () => {
+  const doc = validateDocument({
+    boundary: {
+      shape: "Blob",
+      rings: [
+        [[0, 0], [100, 0], [100, 100]], // prettier-ignore
+        [
+          [0, 0],
+          [1, 1],
+        ], // two vertices: not a ring
+        [
+          [0, 0],
+          ["x", 0],
+          [1, 1],
+        ], // a vertex that is not a number: dropped whole
+        [
+          { x: 5, y: 5 },
+          { x: 50, y: 5 },
+          { x: 50, y: 50 },
+        ], // objects are read as pairs
+        "nonsense",
+      ],
+      cutouts: [
+        { id: "a", shape: "Circle", x: 50, y: 50, w: 9000, h: -1 },
+        { id: "a", shape: "Rectangle", x: "20", y: 20, w: 10, h: 5, rotation: 400, cornerRadius: -2 },
+        {
+          shape: "Polygon",
+          points: [
+            [0, 0],
+            [10, 0],
+          ],
+        }, // not a ring
+        {
+          shape: "Polygon",
+          points: [
+            [0, 0],
+            [10, 0],
+            [10, 10],
+          ],
+        },
+        { shape: "Hexagon", x: 0, y: 0 },
+        null,
+      ],
+      trim: "yes",
+    },
+  });
+  assert.equal(doc.boundary.shape, "Rectangle");
+  assert.deepEqual(doc.boundary.rings, [
+    [[0, 0], [100, 0], [100, 100]], // prettier-ignore
+    [[5, 5], [50, 5], [50, 50]], // prettier-ignore
+  ]);
+  assert.equal(doc.boundary.cutouts.length, 3);
+  const [circle, rect, poly] = doc.boundary.cutouts;
+  assert.equal(circle.id, "a");
+  assert.equal(circle.w, DOC_LIMITS["cutout.size"][1]);
+  assert.equal(circle.h, DOC_LIMITS["cutout.size"][0]);
+  assert.equal(rect.id, "a-2", "a duplicate id is made unique");
+  assert.equal(rect.x, 20, "a numeric string is read");
+  assert.equal(rect.rotation, DOC_LIMITS["cutout.rotation"][1]);
+  assert.equal(rect.cornerRadius, 0);
+  assert.equal(poly.shape, "Polygon");
+  assert.deepEqual(poly.points, [[0, 0], [10, 0], [10, 10]]); // prettier-ignore
+  assert.equal(doc.boundary.trim, false);
+  // The whole block survives a file round trip, and the pattern with it.
+  const grille = patchIn(createDocument(), {
+    "boundary.shape": "Ellipse",
+    "boundary.trim": true,
+    "boundary.cutouts": [{ id: "cut-1", shape: "Circle", x: 100, y: 100, w: 40, h: 40, rotation: 0, cornerRadius: 0, points: [] }], // prettier-ignore
+  });
+  const back = deserializeDocument(serializeDocument(grille));
+  assert.deepEqual(back, grille);
+  assert.equal(computePattern(back).activeHoles.length, computePattern(grille).activeHoles.length);
+  assert.ok(computePattern(back).activeHoles.length < 739, "the ellipse and the cutout took holes away");
 });

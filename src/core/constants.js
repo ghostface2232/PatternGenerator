@@ -31,6 +31,20 @@ export const CUSTOM_SIZE_SHAPES = ["Rectangle", "Pill", "Diamond", "Triangle", "
 // The one shape whose outline the `shape` field channel can morph per hole.
 export const MORPH_SHAPE = "Superellipse";
 export const DIAMOND_ORIENTATIONS = ["Point up", "Flat up"];
+// The perforation boundary's outline (Phase 4). Rectangle and Ellipse fill the
+// margin-inset rectangle; Polygon is any closed outline — drawn on the canvas or
+// read out of an SVG file — held as rings under the even-odd rule, so a logo
+// keeps its counters. Like the pattern types these are part of the file format.
+export const BOUNDARY_SHAPES = ["Rectangle", "Ellipse", "Polygon"];
+// Keep-out regions inside the boundary: a screw hole, a badge, a slot.
+export const CUTOUT_SHAPES = ["Circle", "Rectangle", "Polygon"];
+export const MAX_CUTOUTS = 32;
+// A polygon boundary's rings and the vertices of each. Both are what the canvas
+// can show handles for and what a containment query can afford per hole, not a
+// limit the geometry needs: an import that arrives finer is simplified to fit.
+export const MAX_BOUNDARY_RINGS = 16;
+export const MAX_BOUNDARY_POINTS = 400;
+export const MAX_CUTOUT_POINTS = 200;
 export const RADIAL_LAYOUTS = ["Concentric", "Sunflower", "6k Rosette"];
 export const RADIAL_MODES = ["Full", "Circle"];
 export const TAPER_DIRECTIONS = ["Top larger", "Bottom larger"];
@@ -83,6 +97,13 @@ export const DOC_LIMITS = {
   "sheet.h": [10, 1000],
   "boundary.margins": [0, 50],
   "boundary.cornerRadius": [0, 500],
+  // A polygon boundary's vertices and a cutout's geometry live in sheet
+  // millimetres and may be dragged off the sheet, so like a controller's they
+  // are bounded by the largest sheet rather than by the current one.
+  "boundary.coord": [-2000, 2000],
+  "cutout.size": [0.5, 2000],
+  "cutout.rotation": [-180, 180],
+  "cutout.cornerRadius": [0, 1000],
   "hole.diameter": [0.5, 20],
   "hole.w": [0.5, 30],
   "hole.h": [0.5, 30],

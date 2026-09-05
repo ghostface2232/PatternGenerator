@@ -112,7 +112,17 @@ function limitTurn(px, py, nx, ny) {
   return [Math.cos(a), Math.sin(a)];
 }
 
-export function generateFlowLines({ bounds, cornerRadius = 0, width, separation, baseAngle = 0, angle, spacing }) {
+export function generateFlowLines({
+  bounds,
+  cornerRadius = 0,
+  region = null,
+  width,
+  separation,
+  baseAngle = 0,
+  angle,
+  spacing,
+}) {
+  // prettier-ignore
   const { xMin, xMax, yMin, yMax } = bounds;
   if (!(xMax > xMin) || !(yMax > yMin) || !(separation > 0)) return [];
 
@@ -135,8 +145,12 @@ export function generateFlowLines({ bounds, cornerRadius = 0, width, separation,
     const radians = ((baseAngle + (angle ? angle.sample(x, y) : 0)) * Math.PI) / 180;
     return [Math.cos(radians), Math.sin(radians)];
   };
-  const insideBoundary = (x, y) =>
-    isInsideRoundedRect(x, y, inner.xMin, inner.yMin, inner.xMax, inner.yMax, innerRadius);
+  // A region that is not the plain rectangle answers the same question — is
+  // this point at least half a slot width inside — against its own outline,
+  // cutouts and all.
+  const insideBoundary = region
+    ? (x, y) => region.containsWithClearance(x, y, half)
+    : (x, y) => isInsideRoundedRect(x, y, inner.xMin, inner.yMin, inner.xMax, inner.yMax, innerRadius);
   // A point of a line, carrying the clearance the field asks for there.
   const at = (x, y) => ({ x, y, r: sepAt(x, y) * SEPARATIONS });
 
@@ -255,8 +269,26 @@ export function generateFlowLines({ bounds, cornerRadius = 0, width, separation,
     offerSeeds(points);
   };
 
-  const middle = at((xMin + xMax) / 2, (yMin + yMax) / 2);
-  if (!insideBoundary(middle.x, middle.y)) return [];
+  // The first line starts at the middle of the frame — or, where the middle is
+  // not perforated (a cutout there, a boundary shaped like a ring), at the
+  // point of a coarse grid nearest to it that is. Nothing random: the seed is
+  // a function of the region, as the pattern has to be of the document.
+  let middle = at((xMin + xMax) / 2, (yMin + yMax) / 2);
+  if (!insideBoundary(middle.x, middle.y)) {
+    let best = null;
+    const steps = 32;
+    for (let j = 0; j <= steps; j++) {
+      for (let i = 0; i <= steps; i++) {
+        const x = xMin + ((xMax - xMin) * i) / steps,
+          y = yMin + ((yMax - yMin) * j) / steps;
+        if (!insideBoundary(x, y)) continue;
+        const d = Math.hypot(x - middle.x, y - middle.y);
+        if (!best || d < best.d) best = { x, y, d };
+      }
+    }
+    if (!best) return [];
+    middle = at(best.x, best.y);
+  }
   seed(middle);
   while (pending.size > 0 && !full()) seed(pending.pop());
   // Stopped with candidates still queued means a cap cut the fill off part way,

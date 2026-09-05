@@ -54,8 +54,7 @@ export function CanvasView() {
   const pathBlock = doc.layout.path;
   const { variation, fields } = doc;
   const { holeColor, bgColor } = doc.appearance;
-  const { marginLeft, marginTop } = params;
-  const { perfW, perfH, taperActive } = geometry;
+  const { perfX: marginLeft, perfY: marginTop, perfW, perfH, taperActive } = geometry;
 
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -116,6 +115,7 @@ export function CanvasView() {
       pathBlock,
       pathEditMode,
       selectedPath,
+      trim: doc.boundary.trim,
     }),
     [
       dark,
@@ -145,6 +145,7 @@ export function CanvasView() {
       pathBlock,
       pathEditMode,
       selectedPath,
+      doc.boundary.trim,
     ]
   );
 

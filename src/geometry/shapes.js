@@ -36,6 +36,7 @@ import {
   tracePolyPath,
   unitToward,
 } from "./polygon.js";
+import { ringsArea, ringsContains, ringsGap, ringsSVGPath, ringsTrace } from "./rings.js";
 import { hexEdgeReach, hexVertices } from "./hexagon.js";
 import { strokeArea, strokeContains, strokeGap, strokeOutline, strokeSegments, strokeVisibleArea } from "./stroke.js"; // prettier-ignore
 import { isInsideRoundedRect } from "./rounded-rect.js";
@@ -298,40 +299,62 @@ const polyShape = name => ({
 // the search grid in ligament.js, the sampling box in boundary.js, the size
 // floor the variation cull reads — needs some measure of how big a hole is.
 //
-// Convex by construction (a Voronoi cell clipped by half-planes is), which is
-// what lets it borrow the same containment and clearance code the Diamond and
-// Triangle use. A concave outline would silently read as its convex hull here.
+// The outline is one ring — `[[x, y], …]` — or, where a boundary or a cutout
+// has cut the cell into something a single ring cannot describe, a list of
+// rings `[[[x, y], …], …]` read by the even-odd rule (a cutout wholly inside
+// a cell leaves it with a bore). A single ring may be concave (a cell clipped
+// by a notch in the boundary) and every operation reads it as it is: the
+// polygon helpers settle containment by the even-odd rule and clearance by
+// crossings, and take the SAT shortcut only where both outlines are convex.
+// The corner radius applies to a single ring only.
 const NO_POLY = [];
-const outlineOf = value => (Array.isArray(value) && value.length >= 3 ? value : NO_POLY);
+const isRingList = value => Array.isArray(value) && value.length > 0 && Array.isArray(value[0]) && Array.isArray(value[0][0]); // prettier-ignore
+const outlineOf = value => (Array.isArray(value) && value.length >= 3 && !isRingList(value) ? value : NO_POLY);
+const ringsOf = value => (isRingList(value) ? value : NO_POLY);
 const absolutePoly = (verts, hole) => verts.map(([x, y]) => [hole.x + x, hole.y + y]);
 
 const Polygon = {
   area(w, h, holeRadius, poly) {
+    const rings = ringsOf(poly);
+    if (rings.length) return ringsArea(rings);
     const verts = outlineOf(poly);
     return verts.length ? roundedPolyArea(verts, holeRadius) : 0;
   },
   trace(ctx, cx, cy, w, h, holeRadius, poly) {
+    const rings = ringsOf(poly);
+    if (rings.length) return ringsTrace(ctx, rings, cx, cy);
     const verts = outlineOf(poly);
     if (verts.length) tracePolyPath(ctx, cx, cy, verts, holeRadius);
   },
   svg(x, y, w, h, holeRadius, poly) {
+    const rings = ringsOf(poly);
+    if (rings.length) return `<path d="${ringsSVGPath(rings, x, y)}" fill-rule="evenodd"`;
     const verts = outlineOf(poly);
     return `<path d="${verts.length ? roundedPolySVGPath(x, y, verts, holeRadius) : ""}"`;
   },
   contains(x, y, w, h, holeRadius, poly) {
+    const rings = ringsOf(poly);
+    if (rings.length) return ringsContains(rings, x, y);
     const verts = outlineOf(poly);
     return verts.length > 0 && isInsideRoundedPoly(x, y, verts, holeRadius);
   },
   gap(h1, h2) {
-    const a = outlineOf(h1.poly),
-      b = outlineOf(h2.poly);
+    const a = ringsOf(h1.poly).length ? ringsOf(h1.poly) : outlineOf(h1.poly).length ? [outlineOf(h1.poly)] : NO_POLY; // prettier-ignore
+    const b = ringsOf(h2.poly).length ? ringsOf(h2.poly) : outlineOf(h2.poly).length ? [outlineOf(h2.poly)] : NO_POLY; // prettier-ignore
     // No outline is not "these two touch": a hole with nothing to draw cannot
     // be the narrowest bridge on the sheet, and Infinity is what leaves the
     // minimum to the pairs that do have one.
     if (!a.length || !b.length) return Infinity;
-    return convexPolyGap(absolutePoly(a, h1), absolutePoly(b, h2));
+    return ringsGap(
+      a.map(ring => absolutePoly(ring, h1)),
+      b.map(ring => absolutePoly(ring, h2))
+    );
   },
-  verts: (hole, w, h, poly) => absolutePoly(outlineOf(poly), hole),
+  verts: (hole, w, h, poly) => {
+    const rings = ringsOf(poly);
+    if (rings.length) return rings.flatMap(ring => absolutePoly(ring, hole));
+    return absolutePoly(outlineOf(poly), hole);
+  },
   rotates: false,
   polygon: true,
 };

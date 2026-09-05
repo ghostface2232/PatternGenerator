@@ -3,7 +3,6 @@
 // Returns the view transform so pointer handlers can map client → sheet space.
 import { holeExitOutline, holeOutline, traceHolePath } from "../geometry/shapes.js";
 import { strokeMaxWidth } from "../geometry/stroke.js";
-import { tracePerfBoundary } from "../geometry/boundary.js";
 import { evaluateVariationField } from "../fields/variation-engine.js";
 import { computeGizmo } from "../fields/gizmo.js";
 import { channelBase, evaluateCompiled, resolveSyncedGeometry } from "../fields/controllers.js";
@@ -41,11 +40,14 @@ export function drawScene(canvas, scene) {
     pathBlock,
     pathEditMode,
     selectedPath,
+    trim,
   } = scene;
-  const { sheetW, sheetH, marginLeft, marginTop, marginRight, marginBottom, cornerRadius, patternType, radialMode } =
-    params;
-  const { perfW, perfH, hasAnyMargin } = geometry;
-  const isRadialPattern = patternType === "Radial";
+  const { sheetW, sheetH } = params;
+  const { perfW, perfH, region } = geometry;
+  // The frame the variation gizmo, the heat maps and the default path are laid
+  // out in: the region's bounding rectangle.
+  const marginLeft = geometry.perfX,
+    marginTop = geometry.perfY;
 
   const ctx = canvas.getContext("2d");
   const rect = canvas.getBoundingClientRect();
@@ -67,53 +69,57 @@ export function drawScene(canvas, scene) {
   ctx.scale(baseScale, baseScale);
   ctx.translate(-sheetW / 2, -sheetH / 2);
 
-  // Sheet shadow
+  // The material, with its shadow: the whole sheet, or — trimmed — the region
+  // itself, which is then the part that is cut out and nothing else is drawn.
   ctx.shadowColor = dark ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.15)";
   ctx.shadowBlur = 20 / baseScale;
   ctx.shadowOffsetX = 3 / baseScale;
   ctx.shadowOffsetY = 3 / baseScale;
   ctx.fillStyle = bgColor;
-  ctx.fillRect(0, 0, sheetW, sheetH);
-  ctx.shadowColor = "transparent";
-
-  ctx.fillStyle = bgColor;
-  ctx.fillRect(0, 0, sheetW, sheetH);
+  if (trim) {
+    ctx.beginPath();
+    region.trace(ctx);
+    ctx.fill(region.fillRule);
+    ctx.shadowColor = "transparent";
+    ctx.fill(region.fillRule);
+  } else {
+    ctx.fillRect(0, 0, sheetW, sheetH);
+    ctx.shadowColor = "transparent";
+    ctx.fillRect(0, 0, sheetW, sheetH);
+  }
 
   {
-    const mx = marginLeft,
-      my = marginTop;
-    const mw = sheetW - marginLeft - marginRight,
-      mh = sheetH - marginTop - marginBottom;
-    const cr = Math.min(cornerRadius, mw / 2, mh / 2);
-    const isCircleMode = isRadialPattern && radialMode === "Circle";
-    const showBoundary = showHud && (hasAnyMargin || cornerRadius > 0 || isCircleMode);
+    const showBoundary = showHud && region.clips && !region.empty;
     if (showBoundary) {
       ctx.strokeStyle = dark ? "rgba(100,160,250,0.15)" : "rgba(37,99,235,0.1)";
       ctx.lineWidth = 0.3;
       ctx.setLineDash([2, 2]);
       ctx.beginPath();
-      if (isCircleMode) {
-        const cRadius = Math.min(mw, mh) / 2;
-        ctx.arc(mx + mw / 2, my + mh / 2, cRadius, 0, Math.PI * 2);
-      } else {
-        ctx.roundRect(mx, my, mw, mh, cr);
-      }
+      region.trace(ctx);
       ctx.stroke();
       ctx.setLineDash([]);
-      // Shade outside
-      ctx.fillStyle = dark ? "rgba(100,160,250,0.04)" : "rgba(37,99,235,0.03)";
-      ctx.fillRect(0, 0, sheetW, sheetH);
-      ctx.save();
-      ctx.globalCompositeOperation = "destination-out";
-      ctx.beginPath();
-      if (isCircleMode) {
-        const cRadius = Math.min(mw, mh) / 2;
-        ctx.arc(mx + mw / 2, my + mh / 2, cRadius, 0, Math.PI * 2);
-      } else {
-        ctx.roundRect(mx, my, mw, mh, cr);
+      if (!trim) {
+        // Shade the metal outside the region: the sheet and the region in one
+        // even-odd path, so the shade lands wherever the crossing count is
+        // odd — outside the outline and inside a cutout — and nowhere else.
+        ctx.fillStyle = dark ? "rgba(100,160,250,0.04)" : "rgba(37,99,235,0.03)";
+        ctx.beginPath();
+        ctx.rect(0, 0, sheetW, sheetH);
+        region.trace(ctx);
+        ctx.fill("evenodd");
       }
-      ctx.fill();
-      ctx.restore();
+    }
+    if (showHud && region.cutouts.length) {
+      // Keep-outs read as what they are: an outline of their own, a little
+      // firmer than the boundary's, since a screw hole is a feature and not a
+      // margin.
+      ctx.strokeStyle = dark ? "rgba(251,191,36,0.55)" : "rgba(180,83,9,0.5)";
+      ctx.lineWidth = 0.35;
+      ctx.setLineDash([1.5, 1.5]);
+      ctx.beginPath();
+      region.traceCutouts(ctx);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
   }
 
@@ -141,8 +147,9 @@ export function drawScene(canvas, scene) {
 
   // Clip holes to the actual perforation boundary so preview, OAR and exports agree.
   ctx.save();
-  tracePerfBoundary(ctx, params);
-  ctx.clip();
+  ctx.beginPath();
+  region.trace(ctx);
+  ctx.clip(region.fillRule);
 
   if (perfMode) {
     ctx.fillStyle = holeColor;
@@ -257,7 +264,13 @@ export function drawScene(canvas, scene) {
 
   ctx.strokeStyle = dark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.15)";
   ctx.lineWidth = 0.5;
-  ctx.strokeRect(0, 0, sheetW, sheetH);
+  if (trim) {
+    ctx.beginPath();
+    region.trace(ctx);
+    ctx.stroke();
+  } else {
+    ctx.strokeRect(0, 0, sheetW, sheetH);
+  }
 
   if (variation.enabled && variationEditMode && selectedVariationLayer && showHud) {
     drawGizmo(ctx, selectedVariationLayer, { marginLeft, marginTop, perfW, perfH }, sheetW, sheetH, baseScale, dark);

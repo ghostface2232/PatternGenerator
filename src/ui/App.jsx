@@ -224,8 +224,8 @@ export default function App() {
   const selectedControllerId = selectedController?.id ?? null;
   // Where a new controller is placed, and the frame the panel reports in.
   const perfArea = useMemo(
-    () => ({ x: params.marginLeft, y: params.marginTop, w: geometry.perfW, h: geometry.perfH }),
-    [params.marginLeft, params.marginTop, geometry.perfW, geometry.perfH]
+    () => ({ x: geometry.perfX, y: geometry.perfY, w: geometry.perfW, h: geometry.perfH }),
+    [geometry.perfX, geometry.perfY, geometry.perfW, geometry.perfH]
   );
 
   // ─── Autosave (localStorage) ──────────────────────────────────────
@@ -749,7 +749,7 @@ export default function App() {
     try {
       // Blob from the chunks, never one joined string: a multi-million-hole
       // document overruns the maximum string length.
-      const parts = generateSVGParts(activeHoles, { ...params, holeColor, bgColor });
+      const parts = generateSVGParts(activeHoles, { ...params, holeColor, bgColor }, geometry.region, { trim: doc.boundary.trim }); // prettier-ignore
       downloadBlob(new Blob(parts, { type: "image/svg+xml" }), `${fileStem(doc)}.svg`);
     } catch (err) {
       console.error("SVG export failed:", err);
@@ -757,9 +757,9 @@ export default function App() {
         `Could not export this pattern as SVG (${activeHoles.length.toLocaleString()} holes): ${err.message}`
       );
     }
-  }, [activeHoles, params, holeColor, bgColor, doc]);
+  }, [activeHoles, params, holeColor, bgColor, doc, geometry.region]);
   const exportPNG = useCallback(() => {
-    renderPNGBlob({ activeHoles, params, holeColor, bgColor, dark })
+    renderPNGBlob({ activeHoles, params, region: geometry.region, trim: doc.boundary.trim, holeColor, bgColor, dark })
       .then(blob => {
         if (!blob) throw new Error("the image could not be rendered at this size");
         downloadBlob(blob, `${fileStem(doc)}.png`);
@@ -768,7 +768,7 @@ export default function App() {
         console.error("PNG export failed:", err);
         window.alert(`Could not export this pattern as PNG: ${err.message}`);
       });
-  }, [activeHoles, params, holeColor, bgColor, dark, doc]);
+  }, [activeHoles, params, holeColor, bgColor, dark, doc, geometry.region]);
 
   // ─── Project: new / open / save / share / recent ──────────────────
   const loadDocument = useCallback(

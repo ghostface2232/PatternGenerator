@@ -600,7 +600,9 @@ test("no module let, var or ambient global in generateHoles' import closure", ()
   assert.deepEqual(files, [
     "src/core/math.js",
     "src/core/rng.js",
+    "src/geometry/offset.js",
     "src/geometry/polygon.js",
+    "src/geometry/rings.js",
     "src/geometry/rounded-rect.js",
     "src/geometry/spatial-hash.js",
     "src/layouts/crosshatch.js",
@@ -941,4 +943,147 @@ test("the panel and the generator agree on the lattice", () => {
     const columns = [...new Set(holes.filter(h => h.y === rows[0]).map(h => h.x))].sort((a, b) => a - b);
     assert.ok(Math.abs(columns[1] - columns[0] - g.inRowPitchX) < 1e-9, JSON.stringify(patch));
   }
+});
+
+// ─── Phase 4: the boundary region ─────────────────────────────────────
+
+const grille = {
+  "layout.type": "Scatter",
+  "boundary.shape": "Ellipse",
+  "boundary.cutouts": [{ id: "cut-1", shape: "Circle", x: 100, y: 100, w: 40, h: 40, rotation: 0, cornerRadius: 0, points: [] }], // prettier-ignore
+};
+const logo = {
+  "layout.type": "Scatter",
+  "boundary.shape": "Polygon",
+  // An H: two uprights and a bar, as one concave ring, with a small counter.
+  "boundary.rings": [
+    [[20, 20], [70, 20], [70, 80], [130, 80], [130, 20], [180, 20], [180, 180], [130, 180], [130, 120], [70, 120], [70, 180], [20, 180]], // prettier-ignore
+    [[30, 30], [40, 30], [40, 40], [30, 40]], // prettier-ignore
+  ],
+};
+
+test("a speaker grille: an ellipse with a cutout, filled with a scatter and exported", () => {
+  const { activeHoles, stats, params, region } = computePattern(doc(grille));
+  assert.ok(activeHoles.length > 200, `${activeHoles.length} holes`);
+  assert.ok(
+    activeHoles.every(h => region.contains(h.x, h.y)),
+    "every centre is inside the region"
+  );
+  assert.ok(
+    activeHoles.every(h => Math.hypot(h.x - 100, h.y - 100) > 20),
+    "none in the cutout"
+  );
+  assert.ok(activeHoles.every(h => ((h.x - 100) / 100) ** 2 + ((h.y - 100) / 100) ** 2 <= 1), "none outside the ellipse"); // prettier-ignore
+  assert.equal(stats.useCountedOAR, true);
+  assert.ok(stats.displayOAR > 10 && stats.displayOAR < 50, `${stats.displayOAR}`);
+  // The region with a cutout is measured on its polygon form, flattened at
+  // 0.02 mm: a few square millimetres under the exact figure on a 628 mm
+  // perimeter, and a hundredth of an open-area point.
+  assert.ok(Math.abs(stats.perforatedArea - (Math.PI * 100 * 100 - Math.PI * 400)) < 15);
+  const svg = generateSVGString(activeHoles, params, region);
+  assert.equal(svg.match(/<circle /g).length, activeHoles.length);
+  assert.match(svg, /<clipPath id="perf-boundary"><path d="M [^"]+" fill-rule="evenodd" clip-rule="evenodd" \/><\/clipPath>/); // prettier-ignore
+  assert.match(svg, /<g id="keepout"/);
+  // Trimmed, the region is the material: its outline is the background and
+  // goes out as a cut path of its own.
+  const trimmed = generateSVGString(activeHoles, params, region, { trim: true });
+  assert.match(trimmed, /<g id="outline">/);
+  assert.doesNotMatch(trimmed, /<rect width="200" height="200"/);
+});
+
+test("a logo-shaped boundary: a concave polygon with a counter, in every mode that fills an area", () => {
+  for (const type of [
+    "Straight",
+    "Staggered 60°",
+    "Radial",
+    "Cross-hatch",
+    "Scatter",
+    "Spiral",
+    "Fibonacci",
+    "Voronoi",
+    "Flow Lines",
+  ]) {
+    // prettier-ignore
+    const { activeHoles, stats, region, params } = computePattern(doc({ ...logo, "layout.type": type }));
+    assert.ok(activeHoles.length > 30, `${type}: ${activeHoles.length} holes`);
+    if (!activeHoles[0].poly && !activeHoles[0].stroke) {
+      assert.ok(
+        activeHoles.every(h => region.contains(h.x, h.y)),
+        `${type}: a centre escaped the region`
+      );
+      assert.ok(activeHoles.every(h => !(h.x > 70 && h.x < 130 && (h.y < 80 || h.y > 120))), `${type}: the bar's sides`); // prettier-ignore
+    }
+    assert.equal(stats.useCountedOAR, true, type);
+    assert.ok(stats.displayOAR > 5 && stats.displayOAR < 100, `${type}: ${stats.displayOAR}`);
+    assert.ok(generateSVGString(activeHoles, params, region).length > 1000, type);
+  }
+});
+
+test("the boundary is a placement input: every edit to it that moves a hole changes the signature", () => {
+  const positions = d => JSON.stringify(generateHoles(buildParams(d, deriveGeometry(d)), compilePlacement(d)));
+  const cutout = { id: "cut-1", shape: "Circle", x: 60, y: 60, w: 30, h: 30, rotation: 0, cornerRadius: 0, points: [] };
+  const bases = [{}, { "layout.type": "Straight" }, { "layout.type": "Voronoi" }, { "layout.type": "Flow Lines" }, { "layout.type": "Radial" }, grille, logo]; // prettier-ignore
+  const edits = [
+    { "boundary.shape": "Ellipse" },
+    { "boundary.shape": "Polygon" },
+    { "boundary.shape": "Rectangle" },
+    { "boundary.rings": [[[10, 10], [190, 10], [100, 190]]] }, // prettier-ignore
+    { "boundary.rings": [[[10, 10], [190, 10], [100, 150]]] }, // prettier-ignore
+    { "boundary.cutouts": [cutout] },
+    { "boundary.cutouts": [{ ...cutout, w: 31 }] },
+    { "boundary.cutouts": [{ ...cutout, shape: "Rectangle", rotation: 30 }] },
+    { "boundary.cutouts": [{ ...cutout, shape: "Polygon", points: [[50, 50], [80, 50], [65, 80]] }] }, // prettier-ignore
+    { "boundary.margins.top": 12 },
+    { "boundary.cornerRadius": 25 },
+    { "layout.radial.mode": "Circle" },
+    // Drawn differently, placed identically: the trim flag is a matter for the
+    // exporters, and must NOT clear a removal.
+    { "boundary.trim": true },
+  ];
+  let moved = 0;
+  for (const basePatch of bases) {
+    const base = doc(basePatch);
+    for (const edit of edits) {
+      const next = patchIn(base, edit);
+      const changed = positions(next) !== positions(base);
+      if (edit["boundary.trim"] !== undefined) {
+        assert.equal(changed, false, "trim must not move a hole");
+        assert.equal(patternSignature(next), patternSignature(base), "trim must not change the signature");
+        continue;
+      }
+      if (!changed) continue;
+      moved++;
+      assert.notEqual(patternSignature(next), patternSignature(base), `${JSON.stringify(basePatch)} + ${JSON.stringify(edit)}`); // prettier-ignore
+    }
+  }
+  assert.ok(moved > 40, `expected the sweep to move holes often, got ${moved}`);
+});
+
+test("the plain rectangle is not a placement input at all", () => {
+  // Margins, a corner radius and Radial's circle fill are params, and were
+  // always signed as such; the region only travels when it is more than that.
+  assert.equal(compilePlacement(createDocument()), null);
+  assert.equal(compilePlacement(doc({ "boundary.margins.top": 5, "boundary.cornerRadius": 10 })), null);
+  assert.equal(compilePlacement(doc({ "layout.type": "Radial", "layout.radial.mode": "Circle" })), null);
+  assert.equal(compilePlacement(doc({ "boundary.shape": "Polygon" })), null, "a polygon with nothing drawn yet");
+  assert.ok(compilePlacement(doc({ "boundary.shape": "Ellipse" }))?.boundary);
+  assert.ok(compilePlacement(doc(grille))?.boundary);
+});
+
+test("the variation field and the controllers frame themselves on the region's box", () => {
+  // A polygon in the top-left quarter: the variation field's (0, 0) is that
+  // quarter's corner, and its centre the quarter's centre, not the sheet's.
+  const quarter = doc({
+    ...logo,
+    "layout.type": "Straight",
+    "boundary.rings": [[[0, 0], [100, 0], [100, 100], [0, 100]]], // prettier-ignore
+    "variation.enabled": true,
+    "variation.minScale": 0.2,
+    "variation.maxScale": 1,
+  });
+  const g = deriveGeometry(quarter);
+  assert.deepEqual([g.perfX, g.perfY, g.perfW, g.perfH], [0, 0, 100, 100]);
+  const { holes } = computePattern(quarter);
+  assert.ok(holes.every(h => h.x <= 100 + 3 && h.y <= 100 + 3));
+  assert.ok(new Set(holes.map(h => h.scale.toFixed(3))).size > 5, "the field varies across the quarter");
 });

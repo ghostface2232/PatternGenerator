@@ -10,11 +10,13 @@
 //   computeStats(...)                OAR (theoretical or counted), ligament, overlaps
 import { CUSTOM_SIZE_SHAPES, DOC_LIMITS, MORPH_SHAPE, PERF_MODE_HOLE_LIMIT } from "./constants.js";
 import { clamp, DEG } from "./math.js";
-import { basePolyVerts, insetConvexPoly, maxCornerRadius, polyBBox, polyCentroid, triInradius } from "../geometry/polygon.js"; // prettier-ignore
+import { basePolyVerts, insetConvexPoly, isConvexPoly, isInsidePoly, maxCornerRadius, polyBBox, polyCentroid, triInradius } from "../geometry/polygon.js"; // prettier-ignore
+import { ringsBBox } from "../geometry/rings.js";
+import { erodeRings } from "../geometry/offset.js";
 import { calcHoleArea, getShape } from "../geometry/shapes.js";
 import { curvatureLimit, strokeBBox, strokeMaxWidth, strokeMinWidth } from "../geometry/stroke.js";
 import { superNFromMix } from "../geometry/superellipse.js";
-import { estimateVisibleHoleArea, perfBoundsArea, perfBoundsFromParams } from "../geometry/boundary.js";
+import { compileBoundary, estimateVisibleHoleArea } from "../geometry/boundary.js";
 import { calcMinLigament, findOverlaps } from "../geometry/ligament.js";
 import { calcCellOAR } from "../geometry/oar.js";
 import { LAYOUTS, generateHoles, layoutFamily, layoutPlacementChannels, layoutReadsSpacing, layoutSpacingModel, tilingFlags } from "../layouts/index.js"; // prettier-ignore
@@ -36,7 +38,6 @@ export const effectiveHoleShape = doc => IMPOSED_SHAPES[doc.layout.type] ?? doc.
 
 export function deriveGeometry(doc) {
   const { hole, layout, sheet, boundary, taper } = doc;
-  const { margins } = boundary;
   const patternType = layout.type;
   // A mode that imposes its own hole shape sizes it from ONE number. The shape
   // dropdown is not driving anything there, so neither are its width and height
@@ -125,9 +126,19 @@ export function deriveGeometry(doc) {
   const crossDegenerate = isCrosshatch && crossSin < MIN_CROSS_SIN;
   const crossCellArea = isCrosshatch && !crossDegenerate ? (cross.pitchA * cross.pitchB) / crossSin : null;
 
-  const perfW = sheet.w - margins.left - margins.right;
-  const perfH = sheet.h - margins.top - margins.bottom;
-  const hasAnyMargin = margins.top > 0 || margins.bottom > 0 || margins.left > 0 || margins.right > 0;
+  // The perforation region (geometry/boundary.js): its frame is the rectangle
+  // every layout fills and the variation field is normalised over — the
+  // margin-inset rectangle for the Rectangle and Ellipse outlines, a polygon's
+  // own bounding box, clipped to the sheet, for Polygon.
+  const region = compileBoundary(sheet, boundary, patternType === "Radial" && radial.mode === "Circle");
+  const perfX = region.frame.xMin;
+  const perfY = region.frame.yMin;
+  const perfW = region.w;
+  const perfH = region.h;
+  // Less than the whole sheet is perforated: margins, a corner radius, an
+  // outline that is not the rectangle, a cutout, or Radial's circle fill. What
+  // decides the counted open-area path and whether the canvas draws the edge.
+  const boundaryClips = region.clips;
 
   const taperActive = taper.enabled && taper.thickness > 0 && taper.angle > 0;
   const taperInset = taperActive ? 2 * taper.thickness * Math.tan((taper.angle * Math.PI) / 180) : 0;
@@ -208,9 +219,12 @@ export function deriveGeometry(doc) {
     circumSpacing,
     sunflowerGap,
     sunflowerSpacing,
+    region,
+    perfX,
+    perfY,
     perfW,
     perfH,
-    hasAnyMargin,
+    boundaryClips,
     taperActive,
     taperInset,
     effPitchX,
@@ -369,18 +383,29 @@ export function compileSpacing(fields) {
 // hole removals for nothing.
 export function compilePlacement(doc) {
   const channels = layoutPlacementChannels(doc.layout.type);
+  // The boundary region, when it is anything but the plain rectangle the
+  // params already describe (see isPlainRect): an ellipse, a polygon or a
+  // cutout moves holes and is not a primitive, so it travels here and is signed
+  // here, like the Path layout's curves.
+  const compiledRegion = compileBoundary(
+    doc.sheet,
+    doc.boundary,
+    doc.layout.type === "Radial" && doc.layout.radial.mode === "Circle"
+  );
+  const boundary = compiledRegion.isPlainRect ? null : compiledRegion;
   const spacing =
     channels.includes("spacing") && layoutReadsSpacing(effectiveHoleShape(doc), doc.layout.type)
       ? compileSpacing(doc.fields)
       : null;
   const angle = channels.includes("angle") ? compileChannelField(doc.fields, "angle") : null;
   const path = doc.layout.type === "Path" ? doc.layout.path : null;
-  if (!spacing && !angle && !path) return null;
+  if (!spacing && !angle && !path && !boundary) return null;
   return {
     spacing,
     angle,
     path,
-    signature: JSON.stringify([spacing?.signature ?? "", angle?.signature ?? "", path ?? null]),
+    boundary,
+    signature: JSON.stringify([spacing?.signature ?? "", angle?.signature ?? "", path ?? null, boundary?.signature ?? ""]), // prettier-ignore
   };
 }
 
@@ -470,6 +495,12 @@ export const anyFieldChannel = active => active.size || active.angle || active.s
 // width, not the length of the panel it crosses.
 function decorateOutline(base, { scale, scaleAt, effW, effH, taperActive, taperInset }) {
   if (base.poly) {
+    // A cell is one ring, or — where the boundary or a cutout cut it into
+    // something one ring cannot say — a list of rings (see the Polygon entry in
+    // geometry/shapes.js). The list form scales about its largest ring's
+    // centroid and erodes by the general route.
+    const rings = Array.isArray(base.poly[0]?.[0]) ? base.poly : null;
+    const ring = rings ? rings.reduce((best, r) => (r.length > best.length ? r : best), rings[0]) : base.poly;
     // Scaled about the cell's own centroid, not about the site.
     //
     // Shrinking a hole must never move it closer to its neighbour, and scaling
@@ -479,15 +510,30 @@ function decorateOutline(base, { scale, scaleAt, effW, effH, taperActive, taperI
     // puts two sites closer together than the edge gap leaves the site on the
     // far side of that bisector's inset edge, and scaling toward it dragged the
     // cell at its neighbour. Measured: a 20 mm ligament came back 17.96 mm at
-    // half size. A convex polygon's centroid is always inside it.
-    const centre = polyCentroid(base.poly);
-    const poly = base.poly.map(([px, py]) => [
-      centre[0] + (px - centre[0]) * scale,
-      centre[1] + (py - centre[1]) * scale,
-    ]);
-    const exitPoly = taperActive ? insetConvexPoly(poly, taperInset / 2) : poly;
-    const box = polyBBox(poly),
-      exitBox = polyBBox(exitPoly);
+    // half size. A convex polygon's centroid is always inside it; a concave
+    // one's need not be, and then the site is tried, and failing that a vertex
+    // — for a notched cell the guarantee is only that the hole does not grow.
+    let centre = polyCentroid(ring);
+    if (!isInsidePoly(centre[0], centre[1], ring)) {
+      centre = isInsidePoly(0, 0, ring) ? [0, 0] : ring[0];
+    }
+    const scaleRing = r => r.map(([px, py]) => [centre[0] + (px - centre[0]) * scale, centre[1] + (py - centre[1]) * scale]); // prettier-ignore
+    const poly = rings ? rings.map(scaleRing) : scaleRing(ring);
+    // The exact erosion, by the route the outline allows: half-plane clipping
+    // for one convex ring, the capsule difference for anything else. An
+    // erosion can split a notched cell in two; the pieces stay one hole (one
+    // list of rings), which the exporters trace as one path.
+    let exitPoly = poly;
+    if (taperActive) {
+      if (!rings && isConvexPoly(poly)) exitPoly = insetConvexPoly(poly, taperInset / 2);
+      else {
+        const eroded = erodeRings(rings ? poly : [poly], taperInset / 2).flat();
+        exitPoly = eroded.length ? eroded : [];
+      }
+    }
+    const exitRings = Array.isArray(exitPoly[0]?.[0]);
+    const box = rings ? ringsBBox(poly) : polyBBox(poly),
+      exitBox = exitRings ? ringsBBox(exitPoly) : polyBBox(exitPoly);
     const w = Math.max(0.01, box.right - box.left),
       h = Math.max(0.01, box.bottom - box.top);
     return {
@@ -499,7 +545,7 @@ function decorateOutline(base, { scale, scaleAt, effW, effH, taperActive, taperI
       exitW: exitBox.right - exitBox.left,
       exitH: exitBox.bottom - exitBox.top,
       minSize: Math.min(w, h),
-      closed: exitPoly.length < 3,
+      closed: exitPoly.length < 3 && !exitRings,
     };
   }
   if (base.stroke) {
@@ -550,17 +596,16 @@ function decorateOutline(base, { scale, scaleAt, effW, effH, taperActive, taperI
 // Apply size variation, the field channels, taper exit sizes and the size-floor
 // cull to raw centres. `field` is the output of compileDocumentField.
 export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
-  const { variation, hole, boundary } = doc;
-  const { margins } = boundary;
-  const { effW, effH, perfW, perfH, taperActive, taperInset, holeShape } = g;
+  const { variation, hole } = doc;
+  const { effW, effH, perfX, perfY, perfW, perfH, taperActive, taperInset, holeShape } = g;
   const holeRadius = hole.cornerRadius;
   const morphs = holeShape === MORPH_SHAPE;
   const baseMix = hole.shapeMix ?? 0.5;
   const baseSuperN = morphs ? superNFromMix(baseMix) : undefined;
   const { size: hasSize, angle: hasAngle, shape: hasShape } = activeFieldChannels(doc, field);
   return baseHoles.map((base, index) => {
-    const nx = perfW > 0 ? clamp((base.x - margins.left) / perfW, 0, 1) : 0.5;
-    const ny = perfH > 0 ? clamp((base.y - margins.top) / perfH, 0, 1) : 0.5;
+    const nx = perfW > 0 ? clamp((base.x - perfX) / perfW, 0, 1) : 0.5;
+    const ny = perfH > 0 ? clamp((base.y - perfY) / perfH, 0, 1) : 0.5;
     // Controllers are placed in sheet millimetres, so they are sampled at the
     // hole's real position — not at the normalised (nx, ny) the variation field
     // uses, which would move every controller when a margin changes.
@@ -571,8 +616,8 @@ export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
     // of setting a width for the whole of it from wherever its middle happens to
     // be. Called at the hole's origin, it is exactly the value it always was.
     const scaleAt = (px, py) => {
-      const vx = perfW > 0 ? clamp((px - margins.left) / perfW, 0, 1) : 0.5;
-      const vy = perfH > 0 ? clamp((py - margins.top) / perfH, 0, 1) : 0.5;
+      const vx = perfW > 0 ? clamp((px - perfX) / perfW, 0, 1) : 0.5;
+      const vy = perfH > 0 ? clamp((py - perfY) / perfH, 0, 1) : 0.5;
       return variationScaleAt(vx, vy, variation, index + 1) * (hasSize ? evaluateCompiled(field, "size", px, py) : 1);
     };
     const scale = scaleAt(base.x, base.y);
@@ -609,22 +654,22 @@ export function filterActive(holes, removedSet) {
   return holes.filter((hole, i) => !removedSet.has(i) && !hole.culled);
 }
 
-export function computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps, field = NO_FIELD }) {
+export function computeStats({ doc, g, holes, activeHoles, removedSet, overlaps, field = NO_FIELD }) {
   const { hole, sheet, boundary, variation } = doc;
   const shape = g.holeShape;
   const baseSuperN = shape === MORPH_SHAPE ? superNFromMix(hole.shapeMix ?? 0.5) : undefined;
-  const { effW, effH, taperActive, taperInset } = g;
-  const perfBounds = perfBoundsFromParams(params);
+  const { effW, effH, taperActive, taperInset, region } = g;
   const activeHoleCount = activeHoles.length;
   const holeCount = holes.length;
   const culledHoleCount = holes.reduce((n, h, i) => n + (h.culled && !removedSet.has(i) ? 1 : 0), 0);
-  const grossArea = sheet.w * sheet.h;
-  const perforatedArea = perfBoundsArea(perfBounds);
+  // The material: the sheet, or — trimmed to the boundary — the region itself.
+  const grossArea = boundary.trim ? region.area : sheet.w * sheet.h;
+  const perforatedArea = region.area;
 
   const visible = activeHoles.reduce(
     (totals, h) => ({
-      nominal: totals.nominal + estimateVisibleHoleArea(h, shape, perfBounds, false),
-      exit: totals.exit + estimateVisibleHoleArea(h, shape, perfBounds, true),
+      nominal: totals.nominal + estimateVisibleHoleArea(h, shape, region, false),
+      exit: totals.exit + estimateVisibleHoleArea(h, shape, region, true),
     }),
     { nominal: 0, exit: 0 }
   );
@@ -653,7 +698,7 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   // a Cross-hatch whose two line families are parallel places nothing, and used
   // to report the straight grid's 30.7% over an empty sheet.
   const useCountedOAR =
-    variation.enabled || hasFieldControllers || hasRemovedHoles || g.hasAnyMargin || boundary.cornerRadius > 0 || !g.hasUnitCell || holeCount === 0; // prettier-ignore
+    variation.enabled || hasFieldControllers || hasRemovedHoles || g.boundaryClips || !g.hasUnitCell || holeCount === 0; // prettier-ignore
   const theoreticalHoleArea = calcHoleArea(shape, effW, effH, hole.cornerRadius, baseSuperN);
   // Triangle tiling / diamond lattice: one hole per tiling cell (the hole
   // expanded by gap/2), so the unit cell is simply that cell's area. Cross-hatch
@@ -715,7 +760,7 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
   const perfMode = holeCount > PERF_MODE_HOLE_LIMIT;
 
   return {
-    perfBounds,
+    region,
     activeHoleCount,
     holeCount,
     culledHoleCount,
@@ -757,7 +802,7 @@ export function computePattern(doc, ctx = {}) {
   const activeHoles = filterActive(holes, removedSet);
   const overlaps = findOverlaps(activeHoles, g.holeShape);
   const stats = computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps, field });
-  return { geometry: g, params, baseHoles, holes, activeHoles, removedSet, overlaps, stats, field, placement };
+  return { geometry: g, params, baseHoles, holes, activeHoles, removedSet, overlaps, stats, field, placement, region: g.region }; // prettier-ignore
 }
 
 // The params generateHoles actually reads — keep in step with its destructuring.

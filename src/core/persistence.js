@@ -4,10 +4,16 @@
 import LZString from "lz-string";
 import { DOC_SCHEMA_VERSION, createDocument, newDocumentId } from "./document.js";
 import {
+  BOUNDARY_SHAPES,
+  CUTOUT_SHAPES,
   DIAMOND_ORIENTATIONS,
   DIN_PRESETS,
   DOC_LIMITS,
   HOLE_SHAPES,
+  MAX_BOUNDARY_POINTS,
+  MAX_BOUNDARY_RINGS,
+  MAX_CUTOUT_POINTS,
+  MAX_CUTOUTS,
   MAX_ASSET_DATA_URL_CHARS,
   MAX_ASSET_TOTAL_CHARS,
   MAX_ASSETS,
@@ -67,6 +73,12 @@ const MIGRATIONS = {
   // validateDocument filling the block from the default reads its pattern back
   // unchanged.
   4: doc => ({ ...doc, schemaVersion: 5 }),
+  // 5 → 6: Phase 4 gives the boundary a shape (Rectangle, Ellipse, Polygon),
+  // its polygon rings, a list of cutouts and the trim flag. A v5 document has
+  // none of them and validateDocument fills all four from createDocument()'s
+  // defaults — a Rectangle with no cutouts, not trimmed — which is exactly the
+  // margin-inset rectangle it was saved with.
+  5: doc => ({ ...doc, schemaVersion: 6 }),
 };
 
 // ─── Validation ───────────────────────────────────────────────────────
@@ -295,6 +307,62 @@ function validatePaths(raw) {
   return paths;
 }
 
+// ─── Boundary ─────────────────────────────────────────────────────────
+// A ring is a list of [x, y] pairs in sheet millimetres. One vertex that is not
+// a number would poison every containment test the region answers, so a ring
+// that cannot be repaired is dropped whole, like a controller's geometry; a
+// ring longer than the cap is cut at it rather than dropped, since an outline
+// with its last vertices missing is still nearly the outline.
+function validateRing(raw, cap) {
+  if (!Array.isArray(raw)) return null;
+  const ring = [];
+  for (const p of raw.slice(0, cap)) {
+    const pair = Array.isArray(p) ? p : p && typeof p === "object" ? [p.x, p.y] : null;
+    if (!pair) return null;
+    const x = num(pair[0], NaN, "boundary.coord");
+    const y = num(pair[1], NaN, "boundary.coord");
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    ring.push([x, y]);
+  }
+  return ring.length >= 3 ? ring : null;
+}
+
+function validateRings(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .slice(0, MAX_BOUNDARY_RINGS)
+    .map(ring => validateRing(ring, MAX_BOUNDARY_POINTS))
+    .filter(Boolean);
+}
+
+function validateCutouts(raw) {
+  if (!Array.isArray(raw)) return [];
+  const cutouts = [];
+  const takenIds = new Set();
+  for (const [index, entry] of raw.slice(0, MAX_CUTOUTS).entries()) {
+    const c = obj(entry);
+    const shape = pick(c.shape, CUTOUT_SHAPES, null);
+    if (!shape) continue;
+    const points = shape === "Polygon" ? validateRing(c.points, MAX_CUTOUT_POINTS) : [];
+    if (shape === "Polygon" && !points) continue;
+    let id = typeof c.id === "string" && c.id ? c.id.slice(0, 64) : `cut-${index + 1}`;
+    while (takenIds.has(id)) id = `${id}-${index + 1}`;
+    takenIds.add(id);
+    cutouts.push({
+      id,
+      shape,
+      x: num(c.x, 0, "boundary.coord"),
+      y: num(c.y, 0, "boundary.coord"),
+      w: num(c.w, 10, "cutout.size"),
+      h: num(c.h, 10, "cutout.size"),
+      rotation: num(c.rotation, 0, "cutout.rotation"),
+      cornerRadius: num(c.cornerRadius, 0, "cutout.cornerRadius"),
+      points: points || [],
+    });
+  }
+  return cutouts;
+}
+
 function validateRemovedHoles(raw) {
   if (!Array.isArray(raw)) return [];
   const seen = new Set();
@@ -337,6 +405,10 @@ export function validateDocument(raw) {
       margins: { top: margin("top"), bottom: margin("bottom"), left: margin("left"), right: margin("right") },
       marginLinked: bool(obj(r.boundary).marginLinked, d.boundary.marginLinked),
       cornerRadius: num(obj(r.boundary).cornerRadius, d.boundary.cornerRadius, "boundary.cornerRadius"),
+      shape: pick(obj(r.boundary).shape, BOUNDARY_SHAPES, d.boundary.shape),
+      rings: validateRings(obj(r.boundary).rings),
+      cutouts: validateCutouts(obj(r.boundary).cutouts),
+      trim: bool(obj(r.boundary).trim, d.boundary.trim),
     },
     hole: {
       shape: pick(hole.shape, HOLE_SHAPES, d.hole.shape),

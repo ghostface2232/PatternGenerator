@@ -275,6 +275,7 @@ export function generateRadialHoles(options) {
     ringSpacing: legacyRingSpacing,
     circumSpacing: legacyCircumSpacing,
     center,
+    region = null,
   } = options;
   const { xMin, xMax, yMin, yMax } = bounds;
   if (!(xMax > xMin) || !(yMax > yMin)) return [];
@@ -302,7 +303,11 @@ export function generateRadialHoles(options) {
 
   const appendIfInside = hole => {
     let inside;
-    if (fillMode === "Circle") {
+    if (region) {
+      // A region that is not the plain rectangle answers for itself, the
+      // circle fill included: it was compiled with that mode.
+      inside = region.contains(hole.x, hole.y);
+    } else if (fillMode === "Circle") {
       inside = Math.hypot(hole.x - cx, hole.y - cy) <= circleRadius + EPS;
     } else if (cornerRadius > 0) {
       inside = isInsideRoundedRect(hole.x, hole.y, bounds, cornerRadius);

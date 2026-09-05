@@ -13,7 +13,7 @@ import { defaultPathPoints, flattenPath, polylineLength } from "./path.js";
 import { diamondFlatAngle } from "./radial-engine.js";
 import { generateFibonacciHoles } from "./fibonacci.js";
 import { holeVertices, isPointInsideHole } from "../geometry/shapes.js";
-import { distPointSeg, signedPolyArea } from "../geometry/polygon.js";
+import { distPointSeg, isConvexPoly, signedPolyArea } from "../geometry/polygon.js";
 import { curvatureLimit, strokeOutline } from "../geometry/stroke.js";
 import { boundaryPolygon } from "./voronoi.js";
 import { compileControllers, imageChannels } from "../fields/controllers.js";
@@ -1348,5 +1348,101 @@ test("squeezing a flow-lines pattern past its own width is reported, not hidden"
     assert.ok(squeezed.overlaps.size > 0, `${JSON.stringify(controller)}: overlaps unreported`);
     assert.equal(squeezed.stats.minLigament, 0);
     assert.equal(squeezed.stats.hasOverlap, true);
+  }
+});
+
+// ─── Phase 4: layouts inside a region that is not the rectangle ───────
+
+const ring = (cx, cy, r, n = 24) =>
+  Array.from({ length: n }, (_, i) => [
+    cx + r * Math.cos((2 * Math.PI * i) / n),
+    cy + r * Math.sin((2 * Math.PI * i) / n),
+  ]);
+const grille = {
+  "boundary.shape": "Ellipse",
+  "boundary.cutouts": [{ id: "cut-1", shape: "Circle", x: 100, y: 100, w: 50, h: 50, rotation: 0, cornerRadius: 0, points: [] }], // prettier-ignore
+};
+
+test("voronoi cells inside an ellipse with a cutout keep the edge gap, from the boundary too", () => {
+  for (const gap of [2, 5]) {
+    const d = doc({ ...grille, "layout.type": "Voronoi", "layout.edgeGapX": gap, "layout.edgeGapY": gap });
+    const { activeHoles, stats, overlaps, region } = computePattern(d);
+    assert.ok(activeHoles.length > 100, `${activeHoles.length} cells`);
+    assert.equal(overlaps.size, 0);
+    assert.ok(Math.abs(stats.minLigament - gap) < 0.02, `gap ${gap}: ligament ${stats.minLigament}`);
+    // Every cell vertex lies inside the region, half a gap from its edge.
+    for (const h of activeHoles) {
+      for (const [vx, vy] of holeVertices(h, "Polygon")) {
+        assert.ok(region.contains(vx, vy), `a vertex escaped the region`);
+        assert.ok(region.containsWithClearance(vx, vy, gap / 2 - 0.05), `a vertex is nearer the edge than ${gap / 2}`);
+      }
+    }
+    // The cutout is clear, and the cells around it are concave where it bit them.
+    assert.ok(activeHoles.every(h => Math.hypot(h.x - 100, h.y - 100) > 25 - 1e-9));
+    assert.ok(
+      activeHoles.some(h => !Array.isArray(h.poly[0][0]) && !isConvexPoly(h.poly)),
+      "some cell is notched"
+    );
+  }
+});
+
+test("a cutout wholly inside a voronoi cell leaves the cell with a bore", () => {
+  // Big cells, a tiny cutout at the centre: the cell around it keeps its
+  // outline and gains a hole through it, which the export writes as one path.
+  const d = doc({
+    "layout.type": "Voronoi",
+    "hole.diameter": 20,
+    "layout.edgeGapX": 2,
+    "layout.edgeGapY": 2,
+    "boundary.cutouts": [{ id: "cut-1", shape: "Circle", x: 100, y: 100, w: 3, h: 3, rotation: 0, cornerRadius: 0, points: [] }], // prettier-ignore
+  });
+  const { activeHoles, params, region } = computePattern(d);
+  const bored = activeHoles.filter(h => Array.isArray(h.poly[0][0]) && h.poly.length === 2);
+  assert.equal(bored.length, 1, "exactly one cell has a bore");
+  const cell = bored[0];
+  assert.equal(isPointInsideHole(100, 100, cell, "Polygon"), false, "the bore is metal");
+  assert.equal(isPointInsideHole(100, 100 + 6, cell, "Polygon"), true);
+  assert.ok(region.contains(cell.x, cell.y));
+  const svg = generateSVGString(activeHoles, params, region);
+  assert.match(svg, /fill-rule="evenodd"/);
+  assert.equal(svg.match(/<path /g).length, activeHoles.length + 2); // one per cell, plus the clip and the keep-out
+});
+
+test("flow lines stay half a slot inside an ellipse and clear of its cutout", () => {
+  const d = doc({ ...grille, "layout.type": "Flow Lines" });
+  const { activeHoles, region, stats } = computePattern(d);
+  assert.ok(activeHoles.length > 10, `${activeHoles.length} slots`);
+  for (const h of activeHoles) {
+    for (const [vx, vy] of h.stroke.pts) {
+      assert.ok(
+        region.containsWithClearance(h.x + vx, h.y + vy, 2.5 - 1e-6),
+        "a centreline vertex is too near the edge"
+      );
+    }
+  }
+  assert.ok(Math.abs(stats.minLigament - 3) < 0.05, `${stats.minLigament}`);
+});
+
+test("radial rings, a spiral and a path are clipped by a polygon boundary", () => {
+  const star = ring(100, 100, 80, 5).flatMap((p, i) => [p, [100 + 35 * Math.cos((2 * Math.PI * (i + 0.5)) / 5), 100 + 35 * Math.sin((2 * Math.PI * (i + 0.5)) / 5)]]); // prettier-ignore
+  for (const type of ["Radial", "Spiral", "Path", "Custom Angle", "Staggered 45°"]) {
+    const d = doc({ "layout.type": type, "boundary.shape": "Polygon", "boundary.rings": [star] });
+    const { activeHoles, region } = computePattern(d);
+    assert.ok(activeHoles.length > 10, `${type}: ${activeHoles.length}`);
+    assert.ok(
+      activeHoles.every(h => region.contains(h.x, h.y)),
+      `${type}: a hole escaped the star`
+    );
+  }
+  // Circle fill mode inside the star is the circle AND the star.
+  const circle = computePattern(doc({ "layout.type": "Radial", "layout.radial.mode": "Circle", "boundary.shape": "Polygon", "boundary.rings": [star] })); // prettier-ignore
+  assert.ok(circle.activeHoles.every(h => Math.hypot(h.x - 100, h.y - 100) <= 80 + 1e-9));
+  assert.ok(circle.activeHoles.every(h => circle.region.contains(h.x, h.y)));
+});
+
+test("a region that is not the rectangle still makes every mode a pure function of the document", () => {
+  for (const type of PATTERN_TYPES) {
+    const a = doc({ ...grille, "layout.type": type });
+    assert.equal(positions(a), positions(doc({ ...grille, "layout.type": type })), type);
   }
 });

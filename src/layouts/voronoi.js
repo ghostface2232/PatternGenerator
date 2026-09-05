@@ -19,7 +19,9 @@
 // relative to its site. Everything downstream reads it through
 // `holeOutline(hole)` and the SHAPES entry `Polygon` (geometry/shapes.js).
 import { SpatialHash } from "../geometry/spatial-hash.js";
-import { clipPolyHalfPlane, insetConvexPoly, polyArea } from "../geometry/polygon.js";
+import { clipPolyHalfPlane, insetConvexPoly, isConvexPoly, polyArea, polyBBox, polyCentroid } from "../geometry/polygon.js"; // prettier-ignore
+import { erodeRings, intersectPolygons } from "../geometry/offset.js";
+import { ringsArea, ringsContains } from "../geometry/rings.js";
 import { MAX_PACKING_DENSITY, generateScatterHoles } from "./scatter.js";
 
 // Chords per rounded corner of the boundary. They cut just inside the true arc,
@@ -115,7 +117,45 @@ function voronoiCell(siteIndex, sites, hash, frame, firstReach, limit) {
   }
 }
 
-export function generateVoronoiHoles({ bounds, cornerRadius = 0, minDist, gap, seed, spacing }) {
+// One cell against a region that is not the plain rectangle: the part of it
+// inside the region, eroded by half the gap, as the holes it leaves.
+//
+// The order is what the rectangle always did — clip, THEN inset — so a cell at
+// the edge pulls back half the gap from the boundary as well as from its
+// neighbours, and the metal rim round an ellipse or a cutout is the same width
+// as every ligament. A cell wholly inside the region keeps the cheap convex
+// route; one that straddles the outline goes through the polygon clipper, and
+// its pieces (a cutout can cut a cell in two, or leave a bore through it) are
+// eroded by the general route in geometry/offset.js. Each piece is a hole of
+// its own, carrying its outline as a single ring where one ring says it all
+// and as a ring list otherwise — see the Polygon entry in geometry/shapes.js.
+function clipCellToRegion(cell, site, region, inset, holes) {
+  const box = polyBBox(cell);
+  const where = region.classifyBox(box.left, box.top, box.right, box.bottom);
+  if (where === "outside") return;
+  const pieces = where === "inside" ? [[cell]] : intersectPolygons([[cell]], region.polygons);
+  for (const piece of pieces) {
+    let eroded;
+    if (piece.length === 1 && isConvexPoly(piece[0]))
+      eroded = inset > 0 ? [[insetConvexPoly(piece[0], inset)]] : [piece[0].slice()].map(r => [r]); // prettier-ignore
+    else eroded = erodeRings(piece, inset);
+    for (const rings of eroded) {
+      const kept = rings.filter(ring => ring.length >= 3);
+      if (!kept.length || ringsArea(kept) < MIN_CELL_AREA) continue;
+      // The hole's origin: the site when it is still in the piece's solid (not
+      // in its bore, if a cutout left one), else a point that is — the outline
+      // is stored relative to it, and the field controllers sample the hole
+      // there. A vertex is the last resort, and is at least on the outline.
+      const outer = kept[0];
+      const solid = ([x, y]) => ringsContains(kept, x, y);
+      const origin = [[site.x, site.y], polyCentroid(outer), ...outer].find(solid) ?? outer[0];
+      const relative = kept.map(ring => ring.map(([x, y]) => [x - origin[0], y - origin[1]]));
+      holes.push({ x: origin[0], y: origin[1], poly: relative.length === 1 ? relative[0] : relative });
+    }
+  }
+}
+
+export function generateVoronoiHoles({ bounds, cornerRadius = 0, region = null, minDist, gap, seed, spacing }) {
   const { xMin, xMax, yMin, yMax } = bounds;
   if (!(xMax > xMin) || !(yMax > yMin) || !(minDist > 0)) return [];
 
@@ -129,7 +169,10 @@ export function generateVoronoiHoles({ bounds, cornerRadius = 0, minDist, gap, s
   const sites = generateScatterHoles({ bounds, minDist, seed, spacing });
   if (sites.length < 1 || sites.length > MAX_VORONOI_CELLS) return [];
 
-  const frame = boundaryPolygon(bounds, cornerRadius);
+  // Against a region, the cells are built on the frame's plain rectangle and
+  // clipped to the region afterwards; the rounded rectangle is the one outline
+  // the half-plane clipper can take directly, and it always has.
+  const frame = boundaryPolygon(bounds, region ? 0 : cornerRadius);
   const limit = Math.hypot(xMax - xMin, yMax - yMin);
   // Bridson stops only when no further dart fits, so every point of the sheet is
   // within one LOCAL radius of a site and a cell reaches about that far. Twice
@@ -152,6 +195,10 @@ export function generateVoronoiHoles({ bounds, cornerRadius = 0, minDist, gap, s
   for (let i = 0; i < sites.length; i++) {
     const cell = voronoiCell(i, sites, hash, frame, firstReach(sites[i].x, sites[i].y), limit);
     if (!cell) continue;
+    if (region) {
+      clipCellToRegion(cell, sites[i], region, inset, holes);
+      continue;
+    }
     const kept = insetConvexPoly(cell, inset);
     if (kept.length < 3 || polyArea(kept) < MIN_CELL_AREA) continue;
     const site = sites[i];
