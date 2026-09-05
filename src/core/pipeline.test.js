@@ -677,7 +677,6 @@ test("controllers never invalidate the removed-hole indices", () => {
     { "fields.enabled": true },
     { "fields.controllers": [controller()] },
     { "fields.enabled": true, "fields.controllers": [controller({ channel: "angle", target: 90 })] },
-    { "fields.selectedId": "c1" },
     { "hole.shapeMix": 0.9 },
     { assets: { a: { name: "x", dataURL: "data:image/png;base64,AAAA", width: 1, height: 1 } } },
   ]) {

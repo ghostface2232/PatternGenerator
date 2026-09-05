@@ -177,12 +177,16 @@ SolidVents의 클라우드 저장소를 백엔드 없이 대체하는 단계입�
 
 ## 5. Phase 2: 컨트롤러 기반 4채널 필드 시스템
 
-상태 (2026-09-05): 구현 완료. 산출물은 src/fields/controllers.js, src/fields/image-map.js, src/fields/controller-gizmo.js, src/geometry/superellipse.js, src/ui/panels/FieldsPanel.jsx, src/ui/canvas/ToolRail.jsx, src/ui/useImageMaps.js이며 문서 스키마는 2로 올렸습니다.
+상태 (2026-09-05): 대부분 구현. 산출물은 src/fields/controllers.js, src/fields/image-map.js, src/fields/controller-gizmo.js, src/geometry/superellipse.js, src/ui/panels/FieldsPanel.jsx, src/ui/canvas/ToolRail.jsx, src/ui/useImageMaps.js이며 문서 스키마는 2로 올렸습니다.
 
-의도적으로 남긴 항목은 두 가지입니다.
+Size, Angle, Shape 채널이 point, line, curve, polyline, image 컨트롤러로 동작하고, 파일 저장과 URL 공유에 포함되며(이미지 데이터는 파일에만), 캔버스 핸들과 채널 히트맵으로 편집됩니다.
+
+크게 남긴 항목은 두 가지입니다.
 
 - Spacing 채널: 데이터 모델, 검증, 저장, 평가까지 모두 있지만 읽는 쪽이 없습니다. 이 채널만은 홀의 위치를 바꾸므로 레이아웃의 몫이고, 그것이 Phase 3의 인터페이스가 fields를 인자로 받는 이유입니다. 아무 일도 하지 않는 도구를 UI에 노출하는 편이 더 나쁘므로 EDITABLE_CHANNELS에서는 빼 두었습니다. 이 채널이 들어오는 순간 PLACEMENT_PARAMS와 removedHoles 규칙도 함께 손봐야 합니다.
 - Web Worker (5.5): 컨트롤러 수를 8개로 제한하는 쪽을 먼저 택했습니다. 워커로 옮기는 작업은 생성과 통계를 함께 옮기는 Phase 6와 같은 일이고, 그때 한 번에 하는 편이 낫습니다.
+
+작게 남긴 항목도 적어 둡니다. 5.4의 클릭 반복 polyline 작도와 line 중간 핸들을 당겨 curve로 승격하는 제스처는 넣지 않았습니다. polyline은 중앙에 놓고 핸들로 다듬으며, 정점 수는 인스펙터에서 조절합니다. 5.1의 kind: "procedural" 래핑은 하지 않았습니다. 5절 서두가 variation-engine.js를 그대로 두라고 하고 있고, size 채널이 그 결과에 곱해지는 것으로 하위 호환은 이미 충족됩니다. 5.3의 halftone 데모 템플릿은 템플릿 갤러리가 생기는 Phase 7의 몫입니다.
 
 기존 variation-engine.js는 그대로 두고, 그 위에 컨트롤러 개념을 얹어 하위 호환을 유지합니다.
 

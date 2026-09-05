@@ -5,7 +5,7 @@ import { traceHolePath } from "../geometry/shapes.js";
 import { tracePerfBoundary } from "../geometry/boundary.js";
 import { evaluateVariationField } from "../fields/variation-engine.js";
 import { computeGizmo } from "../fields/gizmo.js";
-import { channelBase, evaluateCompiled } from "../fields/controllers.js";
+import { channelBase, evaluateCompiled, resolveSyncedGeometry } from "../fields/controllers.js";
 import { controllerHandles, controllerPolyline } from "../fields/controller-gizmo.js";
 import { placementCorners } from "../fields/image-map.js";
 import { computeView } from "./view.js";
@@ -27,6 +27,7 @@ export function drawScene(canvas, scene) {
     variationEditMode,
     selectedVariationLayer,
     fields,
+    selectedControllerId,
     field,
     fieldEditMode,
     activeChannel,
@@ -130,9 +131,6 @@ export function drawScene(canvas, scene) {
   }
 
   const showFieldOverlay = fieldEditMode && showHud && fields?.enabled;
-  if (showFieldOverlay) {
-    drawChannelHeatmap(ctx, { field, activeChannel, marginLeft, marginTop, perfW, perfH, dark, fields });
-  }
 
   const showTaperRings = taperActive && !perfMode;
 
@@ -252,7 +250,11 @@ export function drawScene(canvas, scene) {
     drawGizmo(ctx, selectedVariationLayer, { marginLeft, marginTop, perfW, perfH }, sheetW, sheetH, baseScale, dark);
   }
   if (showFieldOverlay) {
-    drawControllers(ctx, { fields, activeChannel, imageElements, sheetW, sheetH, baseScale, dark });
+    // Over the holes, not under them: at 35% open area a third of the sheet is
+    // hole, and an overlay that answers "where does this reach, and which way"
+    // is useless with a third of it painted over.
+    drawChannelHeatmap(ctx, { field, activeChannel, marginLeft, marginTop, perfW, perfH, fields });
+    drawControllers(ctx, { fields, selectedControllerId, activeChannel, imageElements, sheetW, sheetH, baseScale, dark }); // prettier-ignore
   }
   ctx.restore();
 
@@ -361,7 +363,7 @@ function drawGizmo(ctx, layer, geom, sheetW, sheetH, baseScale, dark) {
 // strongest controller on the channel rather than by the slider range, so a
 // gentle field still reads — the overlay answers "where does this reach and how
 // hard", which a fixed scale would flatten to one colour on a subtle field.
-function drawChannelHeatmap(ctx, { field, activeChannel, marginLeft, marginTop, perfW, perfH, dark, fields }) {
+function drawChannelHeatmap(ctx, { field, activeChannel, marginLeft, marginTop, perfW, perfH, fields }) {
   const base = channelBase(activeChannel);
   let span = 0;
   for (const controller of fields.controllers) {
@@ -376,7 +378,12 @@ function drawChannelHeatmap(ctx, { field, activeChannel, marginLeft, marginTop, 
   const cellW = perfW / cols,
     cellH = perfH / rows;
   ctx.save();
-  ctx.globalCompositeOperation = dark ? "screen" : "multiply";
+  // Painted plainly, not through a blend mode. The variation overlay uses
+  // "screen" in the dark theme, which works there because it is monochrome — but
+  // the sheet is a light colour in BOTH themes, and screening a diverging warm /
+  // cool scale onto a light ground flattens it to roughly a third of the contrast
+  // it has in the light theme. This map encodes a sign, so that contrast is the
+  // information.
   for (let gy = 0; gy < rows; gy++) {
     for (let gx = 0; gx < cols; gx++) {
       const x = marginLeft + (gx + 0.5) * cellW;
@@ -385,15 +392,8 @@ function drawChannelHeatmap(ctx, { field, activeChannel, marginLeft, marginTop, 
       const t = (value - base) / span; // −1 … 1 over the strongest controller's pull
       const strength = Math.min(1, Math.abs(t));
       if (strength < 0.01) continue;
-      const alpha = 0.04 + strength * 0.16;
-      const warm = t > 0;
-      ctx.fillStyle = dark
-        ? warm
-          ? `rgba(251,191,36,${alpha})`
-          : `rgba(70,135,255,${alpha})`
-        : warm
-          ? `rgba(217,119,6,${alpha * 0.8})`
-          : `rgba(37,99,235,${alpha * 0.8})`;
+      const alpha = 0.05 + strength * 0.22;
+      ctx.fillStyle = t > 0 ? `rgba(245,158,11,${alpha})` : `rgba(37,99,235,${alpha})`;
       ctx.fillRect(marginLeft + gx * cellW, marginTop + gy * cellH, cellW + 0.05, cellH + 0.05);
     }
   }
@@ -402,8 +402,13 @@ function drawChannelHeatmap(ctx, { field, activeChannel, marginLeft, marginTop, 
 
 // Controllers on the active channel are drawn solid; the rest stay visible but
 // faint, so switching channels never loses track of what else is on the sheet.
-function drawControllers(ctx, { fields, activeChannel, imageElements, sheetW, sheetH, baseScale, dark }) {
+function drawControllers(
+  ctx,
+  { fields, selectedControllerId, activeChannel, imageElements, sheetW, sheetH, baseScale, dark }
+) {
+  // prettier-ignore
   const px = 1 / baseScale;
+  const byId = new Map(fields.controllers.map(c => [c.id, c]));
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, sheetW, sheetH);
@@ -411,13 +416,22 @@ function drawControllers(ctx, { fields, activeChannel, imageElements, sheetW, sh
   const ordered = [...fields.controllers].sort((a, b) => (a.channel === activeChannel ? 1 : 0) - (b.channel === activeChannel ? 1 : 0)); // prettier-ignore
   for (const controller of ordered) {
     const active = controller.channel === activeChannel;
-    const selected = active && controller.id === fields.selectedId;
+    const selected = active && controller.id === selectedControllerId;
     ctx.globalAlpha = controller.enabled === false ? 0.25 : active ? 1 : 0.28;
-    drawController(ctx, controller, { selected, active, imageElements, px, dark });
+    // What is drawn has to be what is measured. A synced controller reads the
+    // geometry it follows, so drawing its own points would put a reach band
+    // where there is no field and hand the user handles that drive nothing.
+    drawController(ctx, controller, { source: resolveSyncedGeometry(controller, byId), selected, active, imageElements, px, dark }); // prettier-ignore
   }
   ctx.globalAlpha = 1;
   ctx.restore();
 }
+
+// The translucent reach band is drawn as a fat stroke, so a reach approaching the
+// panel size covers everything at a uniform tint that says nothing. Fading it as
+// it widens keeps a small reach legible and a huge one out of the way; the
+// controller's own path stays fully opaque either way.
+const bandAlpha = radius => 0.1 * Math.max(0.22, Math.min(1, 40 / Math.max(1, radius || 1)));
 
 const CHANNEL_COLOR = {
   size: { dark: "#60a5fa", light: "#2563eb" },
@@ -426,7 +440,7 @@ const CHANNEL_COLOR = {
   shape: { dark: "#f472b6", light: "#db2777" },
 };
 
-function drawController(ctx, controller, { selected, active, imageElements, px, dark }) {
+function drawController(ctx, controller, { source = controller, selected, active, imageElements, px, dark }) {
   const palette = CHANNEL_COLOR[controller.channel] || CHANNEL_COLOR.size;
   const color = dark ? palette.dark : palette.light;
   const ink = dark ? "#0f0f11" : "#ffffff";
@@ -454,7 +468,7 @@ function drawController(ctx, controller, { selected, active, imageElements, px, 
     ctx.stroke();
     ctx.setLineDash([]);
   } else {
-    const path = controllerPolyline(controller);
+    const path = controllerPolyline(controller, source);
     if (!path.length) return;
     if (path.length > 1) {
       // The reach, as a band around the path — the shape of the field, drawn
@@ -462,7 +476,7 @@ function drawController(ctx, controller, { selected, active, imageElements, px, 
       ctx.save();
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-      ctx.globalAlpha *= 0.1;
+      ctx.globalAlpha *= bandAlpha(controller.radius);
       ctx.strokeStyle = color;
       ctx.lineWidth = Math.max(0.2, (controller.radius || 1) * 2);
       ctx.beginPath();
@@ -479,7 +493,7 @@ function drawController(ctx, controller, { selected, active, imageElements, px, 
       ctx.stroke();
     } else {
       ctx.save();
-      ctx.globalAlpha *= 0.1;
+      ctx.globalAlpha *= bandAlpha(controller.radius);
       ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(path[0].x, path[0].y, Math.max(0.1, controller.radius || 1), 0, Math.PI * 2);
@@ -513,7 +527,7 @@ function drawController(ctx, controller, { selected, active, imageElements, px, 
   }
 
   if (!active) return;
-  for (const handle of controllerHandles(controller)) {
+  for (const handle of controllerHandles(controller, source)) {
     const r = (handle.role === "radius" || handle.role === "rotate" ? 4 : handle.role === "mid" ? 3.4 : 4.6) * px;
     const hollow = handle.role === "radius" || handle.role === "rotate" || handle.role === "size";
     ctx.beginPath();

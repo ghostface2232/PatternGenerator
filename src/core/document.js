@@ -10,18 +10,6 @@ export const cloneVariation = variation => ({
   layers: (variation.layers || []).map(layer => ({ ...layer })),
 });
 
-// Deep-enough copy of the fields block for an edit that rewrites one controller.
-// Controllers nest two levels (geometry.points, image.placement), so a spread
-// alone would share the array an edit is about to replace.
-export const cloneFields = fields => ({
-  ...fields,
-  controllers: (fields?.controllers || []).map(controller => ({
-    ...controller,
-    geometry: { ...controller.geometry, points: (controller.geometry?.points || []).map(p => ({ ...p })) },
-    image: controller.image ? { ...controller.image, placement: { ...controller.image.placement } } : null,
-  })),
-});
-
 // Stable per-document id (used by the recent list). Falls back for old runtimes.
 export function newDocumentId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
@@ -68,8 +56,10 @@ export function createDocument() {
     presetIndex: 0,
     variation: cloneVariation(DEFAULT_VARIATION),
     // Field controllers (Phase 2). One flat list; each entry names the channel
-    // it drives. See fields/controllers.js for the shape of an entry.
-    fields: { enabled: false, selectedId: null, controllers: [] },
+    // it drives. See fields/controllers.js for the shape of an entry. Which
+    // controller is SELECTED is not here: selection is a view of the document,
+    // not part of it, and putting it here would spend one undo step per click.
+    fields: { enabled: false, controllers: [] },
     // Image data for the image controllers, keyed by assetId. Kept in the
     // document so a file save and a reload restore the picture; deliberately
     // stripped from share links and from the recent list (see persistence.js).

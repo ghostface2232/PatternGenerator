@@ -25,16 +25,25 @@ export function createImageMap(width, height, data) {
 }
 
 // Bilinear sample at (u, v) in 0..1, edges clamped.
+//
+// u maps onto texel EDGES (u·width − ½ lands on the first texel's centre at
+// u = ½/width), which is what `drawImage` does when it paints the preview.
+// Mapping onto texel centres instead — u·(width−1) — would stretch the sampled
+// field against the drawn one by width/(width−1): half a texel, about a quarter
+// of a percent of the placement, so the field would sit slightly off the picture
+// the user positioned it by.
 export function sampleImageMap(map, u, v) {
   const { width, height, data } = map;
-  const fx = clamp(u, 0, 1) * (width - 1);
-  const fy = clamp(v, 0, 1) * (height - 1);
-  const x0 = Math.floor(fx),
-    y0 = Math.floor(fy);
-  const x1 = Math.min(width - 1, x0 + 1),
-    y1 = Math.min(height - 1, y0 + 1);
-  const tx = fx - x0,
-    ty = fy - y0;
+  const fx = clamp(u, 0, 1) * width - 0.5;
+  const fy = clamp(v, 0, 1) * height - 0.5;
+  const ix = Math.floor(fx),
+    iy = Math.floor(fy);
+  const tx = fx - ix,
+    ty = fy - iy;
+  const x0 = clamp(ix, 0, width - 1),
+    x1 = clamp(ix + 1, 0, width - 1);
+  const y0 = clamp(iy, 0, height - 1),
+    y1 = clamp(iy + 1, 0, height - 1);
   const a = data[y0 * width + x0],
     b = data[y0 * width + x1];
   const c = data[y1 * width + x0],
@@ -48,6 +57,10 @@ export function placementUV(placement, x, y) {
   if (!placement || !(placement.w > 0) || !(placement.h > 0)) return null;
   const cx = placement.x + placement.w / 2;
   const cy = placement.y + placement.h / 2;
+  // A non-finite centre or rotation makes u and v NaN, and `NaN < 0` is false —
+  // so without this the "outside" test would pass and the controller would apply
+  // over the whole plane instead of over nothing.
+  if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(placement.rotation || 0)) return null;
   const angle = ((placement.rotation || 0) * Math.PI) / 180;
   const cos = Math.cos(-angle),
     sin = Math.sin(-angle);

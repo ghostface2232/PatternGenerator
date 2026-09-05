@@ -16,7 +16,7 @@
 //
 // All geometry is in millimetres, sheet space (origin = sheet top-left, y down),
 // the same frame the holes come out of `layouts/`.
-import { clamp, lerp } from "../core/math.js";
+import { clamp } from "../core/math.js";
 import { distPointSeg } from "../geometry/polygon.js";
 import { imageWeightAt } from "./image-map.js";
 
@@ -51,7 +51,10 @@ export const KIND_POINT_COUNT = {
 // Per-channel vocabulary: the neutral value a point with no controller reads,
 // the slider range for `target`, and how it is written in the UI.
 export const CHANNEL_INFO = {
-  size: { label: "Size", base: 1, unit: "×", min: 0.05, max: 4, step: 0.05, defaultTarget: 1.8, decimals: 2 },
+  // The default target is deliberately modest: 1.8× on the default document
+  // (⌀5 at pitch 8) overlaps on the first click, and a fresh controller that
+  // immediately reads "Holes overlap" teaches the wrong thing about the tool.
+  size: { label: "Size", base: 1, unit: "×", min: 0.05, max: 4, step: 0.05, defaultTarget: 1.4, decimals: 2 },
   spacing: { label: "Spacing", base: 1, unit: "×", min: 0.2, max: 4, step: 0.05, defaultTarget: 1.5, decimals: 2 },
   angle: { label: "Angle", base: 0, unit: "°", min: -180, max: 180, step: 1, defaultTarget: 45, decimals: 0 },
   shape: { label: "Shape", base: 0.5, unit: "", min: 0, max: 1, step: 0.01, defaultTarget: 1, decimals: 2 },
@@ -101,23 +104,52 @@ export function flattenCubic(points, segments = 24) {
   return out;
 }
 
-// Which side of a polyline a point falls on: the sign of the cross product with
-// the segment that is actually nearest, so the answer follows the geometry
-// rather than the chord between its ends.
-export function polylineSide(points, x, y) {
-  if (points.length < 2) return 0;
-  let best = Infinity,
-    side = 0;
+// Distance from a point to ONE segment, together with which side of it the point
+// is on — as a signed number in −1…1 rather than a bare sign. It is the sine of
+// the angle between the segment's direction and the offset to the point, so it
+// passes smoothly through 0 wherever the point lines up with the segment's own
+// direction beyond an end, instead of flipping there.
+//
+// That distinction is the whole point. Taking the bare sign of the nearest
+// segment tears: two legs of a polyline disagree about "which side" across the
+// locus where they are equidistant, and the tie is broken by whichever vertex
+// comes first in the list. On a 40 mm leg meeting a diagonal that put a 27° step
+// in the angle field 12 mm away from any geometry — a straight seam of abruptly
+// rotated holes across the sheet. It also made the mask depend on the direction
+// the polyline happened to be drawn in, which nothing about "one-sided" should.
+export function segmentProbe(ax, ay, bx, by, x, y) {
+  const dx = bx - ax,
+    dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 > 0 ? clamp(((x - ax) * dx + (y - ay) * dy) / len2, 0, 1) : 0;
+  const ox = x - (ax + t * dx),
+    oy = y - (ay + t * dy);
+  const distance = Math.hypot(ox, oy);
+  const len = Math.sqrt(len2);
+  return { distance, side: distance > 0 && len > 0 ? (dx * oy - dy * ox) / (len * distance) : 0 };
+}
+
+// The weight a path-shaped controller gives one sample point: the strongest
+// contribution over its segments, each gated by which side of that segment the
+// point is on. For `oneSided === 0` the gate is 1 throughout and this is exactly
+// falloff(nearest distance), since falloff never rises.
+export function polylineWeight(points, x, y, radius, falloff, oneSided) {
+  if (points.length === 1) {
+    return falloffWeight(falloff, Math.hypot(x - points[0].x, y - points[0].y) / radius);
+  }
+  let best = 0;
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i],
       b = points[i + 1];
-    const d = distPointSeg(x, y, a.x, a.y, b.x, b.y);
-    if (d < best) {
-      best = d;
-      side = Math.sign((b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x));
-    }
+    const probe = segmentProbe(a.x, a.y, b.x, b.y, x, y);
+    const weight = falloffWeight(falloff, probe.distance / radius);
+    // The gate is at most 1, so a segment whose ungated weight is already behind
+    // cannot come back ahead — worth skipping, since most segments are far away.
+    if (weight <= best) continue;
+    const gated = oneSided ? weight * clamp(oneSided * probe.side, 0, 1) : weight;
+    if (gated > best) best = gated;
   }
-  return side;
+  return best;
 }
 
 // ─── Compilation ──────────────────────────────────────────────────────
@@ -127,12 +159,20 @@ export function polylineSide(points, x, y) {
 // A controller may borrow another's geometry ("sync"). Walk the chain with a
 // visited set so a cycle falls back to the controller's own geometry instead of
 // hanging.
+//
+// An image is never either end of that chain. It places itself with a rectangle
+// rather than with points, so the two kinds have no geometry in common: a line
+// syncing to an image would resolve to kind "image" and then vanish, because the
+// line carries no picture to sample; an image syncing to a line would stop being
+// a picture at all. `validateFields` drops such a reference on load, and this is
+// the same rule enforced where it is used.
 export function resolveSyncedGeometry(controller, byId) {
+  if (controller.kind === "image") return controller;
   let node = controller;
   const seen = new Set([controller.id]);
   while (node.syncWith) {
     const next = byId.get(node.syncWith);
-    if (!next || seen.has(next.id)) break;
+    if (!next || next.kind === "image" || seen.has(next.id)) break;
     seen.add(next.id);
     node = next;
   }
@@ -180,9 +220,13 @@ export function compileControllers(controllers, ctx = {}) {
   return compiled;
 }
 
-// True when at least one compiled controller drives `channel`.
-export function compiledHasChannel(compiled, channel) {
-  return compiled.some(entry => entry.channel === channel);
+// True when at least one compiled controller drives `channel` toward something
+// other than `base`. A controller whose target IS the neutral value changes
+// nothing, and must not read as active: downstream that would swap the
+// statistics onto the counted-OAR path, which reports a slightly different
+// figure for the same geometry — the reading would move without a hole moving.
+export function compiledDrivesChannel(compiled, channel, base = channelBase(channel)) {
+  return compiled.some(entry => entry.channel === channel && entry.target !== base);
 }
 
 // ─── Evaluation ───────────────────────────────────────────────────────
@@ -204,13 +248,17 @@ export function evaluateCompiled(compiled, channel, x, y, base = channelBase(cha
     if (entry.image) {
       const cover = imageWeightAt(entry.image.map, entry.image.placement, entry.image.transfer, x, y);
       if (cover === null) continue;
-      weight = entry.strength;
-      // Brightness drives how far this pixel reaches toward the target.
-      target = lerp(base, entry.target, cover);
+      // Brightness IS the weight, so a dark pixel means "no influence" the same
+      // way a distant point does. Blending it as full weight toward the base
+      // instead would let a black image quietly hold down every other
+      // controller over the same ground — measured, an all-black image halved a
+      // point controller's effect. On its own the two forms agree exactly
+      // (base·(1−sc) + sc·t is the same either way); they differ only in
+      // company, and only one of them composes.
+      weight = entry.strength * cover;
+      target = entry.target;
     } else {
-      if (entry.oneSided && polylineSide(entry.points, x, y) === -entry.oneSided) continue;
-      const d = polylineDistance(entry.points, x, y);
-      weight = falloffWeight(entry.falloff, d / entry.radius) * entry.strength;
+      weight = polylineWeight(entry.points, x, y, entry.radius, entry.falloff, entry.oneSided) * entry.strength;
       target = entry.target;
     }
     if (weight <= 0) continue;

@@ -19,7 +19,7 @@ import { calcTheoreticalOAR } from "../geometry/oar.js";
 import { generateHoles } from "../layouts/grid.js";
 import { getRadialShapeExtents, getRadialShapeOuterRadius } from "../layouts/radial-engine.js";
 import { evaluateVariationField, variationScaleAt } from "../fields/variation-engine.js";
-import { compileControllers, compiledHasChannel, evaluateCompiled } from "../fields/controllers.js";
+import { compileControllers, compiledDrivesChannel, evaluateCompiled } from "../fields/controllers.js";
 
 export function deriveGeometry(doc) {
   const { hole, layout, sheet, boundary, taper } = doc;
@@ -175,13 +175,20 @@ export function compileDocumentField(fields, ctx = {}) {
   return compileControllers(fields.controllers, ctx);
 }
 
-// Which channels a compiled field actually changes for THIS document. A shape
-// controller over Circles and an angle controller over Circles both compile
-// fine and then do nothing, and the difference matters twice over: an angle a
-// shape cannot show would still widen the rotated bounding box
-// `estimateVisibleHoleArea` samples over, and a channel that changes nothing
-// must not push the statistics onto the counted-OAR path, which would move the
-// reported figure without moving a hole.
+// Which channels a compiled field actually changes for THIS document. Two ways a
+// controller can be inert: the shape cannot show what it drives (an angle over
+// Circles, a morph over anything but the superellipse), or its target IS the
+// channel's neutral value. Both matter twice over — an angle a shape cannot
+// draw would still widen the rotated bounding box `estimateVisibleHoleArea`
+// samples over, and either would push the statistics onto the counted-OAR path,
+// which reports a slightly different figure for identical geometry. A 1.0× size
+// controller moving the headline OAR from 35.4 to 35.6 is the readout lying
+// about a change that did not happen.
+//
+// What this deliberately does NOT catch is a controller whose reach falls
+// entirely off the sheet, or a 60° rotation of a hexagon: both need geometry
+// this function does not have. They are conservative in the same direction — the
+// counted figure is the honest one, just more expensive.
 //
 // The spacing channel is absent on purpose: it is the one channel that decides
 // where holes go, so it belongs to the layouts, and they start reading it in
@@ -190,9 +197,12 @@ export function compileDocumentField(fields, ctx = {}) {
 export function activeFieldChannels(doc, field = NO_FIELD) {
   const shape = doc.hole.shape;
   return {
-    size: compiledHasChannel(field, "size"),
-    angle: compiledHasChannel(field, "angle") && getShape(shape).rotates,
-    shape: shape === MORPH_SHAPE && compiledHasChannel(field, "shape"),
+    size: compiledDrivesChannel(field, "size"),
+    angle: compiledDrivesChannel(field, "angle") && getShape(shape).rotates,
+    // The shape channel blends against the document's own mix, so that — not
+    // CHANNEL_INFO's constant — is the neutral value a controller must differ
+    // from to be doing anything.
+    shape: shape === MORPH_SHAPE && compiledDrivesChannel(field, "shape", doc.hole.shapeMix ?? 0.5),
   };
 }
 

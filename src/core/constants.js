@@ -31,12 +31,19 @@ export const PERF_MODE_HOLE_LIMIT = 10000;
 // Size-variation layers a document may carry.
 export const MAX_VARIATION_LAYERS = 3;
 
-// Image assets a document may embed, and the largest data URL each may be
-// (~700 KB of base64). The decoder downsamples to IMAGE_MAP_SIZE before
-// encoding, so a real photo lands two orders of magnitude below the cap; the
-// limit is there to stop a hand-edited file from filling localStorage.
+// Image assets a document may embed, with a per-image and a whole-document cap
+// on the base64. The decoder downsamples to IMAGE_MAP_SIZE before encoding, so
+// even a full-frame noise photo — the worst case for PNG — lands around 80 K
+// chars; eight of those fit inside the total with room to spare.
+//
+// Both numbers exist to keep a document inside the browser's localStorage quota,
+// which measures around 5 MB and is shared with the recent list. An earlier
+// 1 M-char per-image cap failed at exactly that job: eight of them is 8 MB, so
+// validation would happily accept a document the autosave could then never
+// write, and it would retry the failure on every keystroke thereafter.
 export const MAX_ASSETS = 8;
-export const MAX_ASSET_DATA_URL_CHARS = 1_000_000;
+export const MAX_ASSET_DATA_URL_CHARS = 300_000;
+export const MAX_ASSET_TOTAL_CHARS = 1_200_000;
 
 // Value ranges the UI can produce. Loading a file or share link clamps to these,
 // so an imported document can never describe a pattern the sliders could not.

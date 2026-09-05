@@ -2,7 +2,8 @@
 // and what dragging one does. Pure sheet-millimetre maths, like fields/gizmo.js
 // (the variation gizmo) — the canvas component only supplies the cursor.
 import { clamp } from "../core/math.js";
-import { flattenCubic, KIND_POINT_COUNT, MAX_POLYLINE_POINTS } from "./controllers.js";
+import { DOC_LIMITS } from "../core/constants.js";
+import { flattenCubic, KIND_POINT_COUNT } from "./controllers.js";
 import { placementCorners } from "./image-map.js";
 
 // Grid the geometry snaps to while Shift is held, and the step the reach radius
@@ -10,23 +11,39 @@ import { placementCorners } from "./image-map.js";
 // variation gizmo uses, but on a metric grid rather than on panel fractions.
 export const SNAP_GRID_MM = 1;
 export const RADIUS_STEP_MM = 0.5;
-export const RADIUS_MIN_MM = 0.5;
+
+// Every value a drag can write is bounded by the same range `validateDocument`
+// clamps an imported document to. Without this a drag at a zoomed-out view wrote
+// a 2505 mm rectangle that came back 2000 mm after a reload, silently and with
+// no undo step left pointing at the original — the editor could not read back
+// its own output. The variation gizmo has always clamped to its DOC_LIMITS
+// ranges for the same reason.
+const [COORD_MIN, COORD_MAX] = DOC_LIMITS["controller.coord"];
+const [RADIUS_MIN, RADIUS_MAX] = DOC_LIMITS["controller.radius"];
+const [IMAGE_SIZE_MIN, IMAGE_SIZE_MAX] = DOC_LIMITS["controller.image.size"];
+export const RADIUS_MIN_MM = RADIUS_MIN;
 
 const snap = (value, step) => Math.round(value / step) * step;
+const coord = value => clamp(value, COORD_MIN, COORD_MAX);
 
 // The polyline the controller actually measures against (a curve is flattened).
-export function controllerPolyline(controller) {
-  const points = controller.geometry?.points || [];
-  return controller.kind === "curve" && points.length >= 4 ? flattenCubic(points, 24) : points;
+// A controller that follows another one ("sync") is measured against the source's
+// geometry, so that is what the canvas has to draw and hit-test as well. Passing
+// the source through every entry point below keeps the picture, the handles and
+// the field the same thing — otherwise the app draws a reach band where there is
+// no field and offers handles that drive nothing.
+export function controllerPolyline(controller, source = controller) {
+  const points = source.geometry?.points || [];
+  return source.kind === "curve" && points.length >= 4 ? flattenCubic(points, 24) : points;
 }
 
 // Midpoint of the geometry, and the direction the reach handle leaves it in:
 // straight out for a point, perpendicular to the path for everything else.
-export function reachAnchor(controller) {
-  const points = controller.geometry?.points || [];
+export function reachAnchor(controller, source = controller) {
+  const points = source.geometry?.points || [];
   if (!points.length) return null;
   if (points.length === 1) return { x: points[0].x, y: points[0].y, dx: 1, dy: 0 };
-  const path = controllerPolyline(controller);
+  const path = controllerPolyline(controller, source);
   const mid = Math.floor((path.length - 1) / 2);
   const a = path[mid],
     b = path[Math.min(path.length - 1, mid + 1)];
@@ -35,7 +52,9 @@ export function reachAnchor(controller) {
 }
 
 // Every draggable handle, in draw order (later entries win a tie in hit tests).
-export function controllerHandles(controller) {
+// A synced controller keeps only its reach handle: the points belong to the
+// controller it follows, and are dragged there.
+export function controllerHandles(controller, source = controller) {
   if (controller.kind === "image") {
     const placement = controller.image?.placement;
     if (!placement) return [];
@@ -55,16 +74,19 @@ export function controllerHandles(controller) {
       },
     ];
   }
-  const points = controller.geometry?.points || [];
-  const handles = points.map((p, i) => ({
-    id: `p${i}`,
-    x: p.x,
-    y: p.y,
-    role: i === 0 || i === points.length - 1 ? "end" : "mid",
-  }));
-  const anchor = reachAnchor(controller);
+  const synced = source !== controller;
+  const points = source.geometry?.points || [];
+  const handles = synced
+    ? []
+    : points.map((p, i) => ({
+        id: `p${i}`,
+        x: p.x,
+        y: p.y,
+        role: i === 0 || i === points.length - 1 ? "end" : "mid",
+      }));
+  const anchor = reachAnchor(controller, source);
   if (anchor) {
-    const radius = Math.max(RADIUS_MIN_MM, controller.radius || 1);
+    const radius = clamp(controller.radius || 1, RADIUS_MIN, RADIUS_MAX);
     handles.push({ id: "radius", x: anchor.x + anchor.dx * radius, y: anchor.y + anchor.dy * radius, role: "radius" });
   }
   return handles;
@@ -72,10 +94,10 @@ export function controllerHandles(controller) {
 
 // The handle under a sheet-space point, within `hitRadiusPx` screen pixels.
 // `scale` is sheet mm → screen px, so the tolerance stays constant on screen.
-export function hitTestController(controller, x, y, scale, hitRadiusPx = 14) {
+export function hitTestController(controller, x, y, scale, hitRadiusPx = 14, source = controller) {
   let hit = null,
     best = hitRadiusPx;
-  for (const handle of controllerHandles(controller)) {
+  for (const handle of controllerHandles(controller, source)) {
     const d = Math.hypot(handle.x - x, handle.y - y) * scale;
     if (d <= best) {
       best = d;
@@ -87,7 +109,7 @@ export function hitTestController(controller, x, y, scale, hitRadiusPx = 14) {
 
 // Distance from a point to the controller's body, for click-to-select. Image
 // controllers use their placement rectangle; everything else its path.
-export function controllerBodyDistance(controller, x, y) {
+export function controllerBodyDistance(controller, x, y, source = controller) {
   if (controller.kind === "image") {
     const placement = controller.image?.placement;
     if (!placement) return Infinity;
@@ -103,7 +125,7 @@ export function controllerBodyDistance(controller, x, y) {
     if (dx <= 0 && dy <= 0) return 0;
     return Math.hypot(Math.max(0, dx), Math.max(0, dy));
   }
-  const path = controllerPolyline(controller);
+  const path = controllerPolyline(controller, source);
   if (!path.length) return Infinity;
   if (path.length === 1) return Math.hypot(x - path[0].x, y - path[0].y);
   let best = Infinity;
@@ -127,10 +149,10 @@ export function controllerBodyDistance(controller, x, y) {
 // position lands on the millimetre grid, a reach on its own step, a rotation on
 // 15°. Snapping the cursor first and the value after would snap twice and land
 // on neither (a cursor 7.4 mm out would read 7.0 mm, not the 7.5 mm step).
-export function moveControllerHandle(controller, handleId, x, y, shift = false) {
+export function moveControllerHandle(controller, handleId, x, y, shift = false, source = controller) {
   const snapsPosition = handleId !== "radius" && handleId !== "img-rot";
-  const px = shift && snapsPosition ? snap(x, SNAP_GRID_MM) : x;
-  const py = shift && snapsPosition ? snap(y, SNAP_GRID_MM) : y;
+  const px = coord(shift && snapsPosition ? snap(x, SNAP_GRID_MM) : x);
+  const py = coord(shift && snapsPosition ? snap(y, SNAP_GRID_MM) : y);
 
   if (controller.kind === "image") {
     const placement = controller.image?.placement;
@@ -144,15 +166,21 @@ export function moveControllerHandle(controller, handleId, x, y, shift = false) 
     }
     if (handleId === "img-size") {
       // The grabbed corner in the rectangle's own frame: its distance from the
-      // centre is half the new size, so the opposite corner stays put visually.
+      // centre is half the new size, so the rectangle resizes about its CENTRE
+      // and the opposite corner mirrors the one being dragged.
       const angle = ((placement.rotation || 0) * Math.PI) / 180;
       const cos = Math.cos(-angle),
         sin = Math.sin(-angle);
       const lx = (px - cx) * cos - (py - cy) * sin;
       const ly = (px - cx) * sin + (py - cy) * cos;
-      const w = Math.max(1, Math.abs(lx) * 2);
-      const h = Math.max(1, Math.abs(ly) * 2);
-      return { image: { ...controller.image, placement: { ...placement, w, h, x: cx - w / 2, y: cy - h / 2 } } };
+      const w = clamp(Math.abs(lx) * 2, IMAGE_SIZE_MIN, IMAGE_SIZE_MAX);
+      const h = clamp(Math.abs(ly) * 2, IMAGE_SIZE_MIN, IMAGE_SIZE_MAX);
+      return {
+        image: {
+          ...controller.image,
+          placement: { ...placement, w, h, x: coord(cx - w / 2), y: coord(cy - h / 2) },
+        },
+      };
     }
     if (handleId === "img-rot") {
       const deg = (Math.atan2(py - cy, px - cx) * 180) / Math.PI + 90;
@@ -164,10 +192,10 @@ export function moveControllerHandle(controller, handleId, x, y, shift = false) 
   }
 
   if (handleId === "radius") {
-    const anchor = reachAnchor(controller);
+    const anchor = reachAnchor(controller, source);
     if (!anchor) return null;
     const raw = Math.hypot(px - anchor.x, py - anchor.y);
-    return { radius: Math.max(RADIUS_MIN_MM, shift ? snap(raw, RADIUS_STEP_MM) : raw) };
+    return { radius: clamp(shift ? snap(raw, RADIUS_STEP_MM) : raw, RADIUS_MIN, RADIUS_MAX) };
   }
 
   const match = /^p(\d+)$/.exec(handleId);
@@ -183,7 +211,8 @@ export function moveControllerHandle(controller, handleId, x, y, shift = false) 
 // the midpoint of the longest span so the shape barely moves.
 export function addPolylinePoint(controller) {
   const points = controller.geometry?.points || [];
-  if (controller.kind !== "polyline" || points.length >= MAX_POLYLINE_POINTS) return null;
+  const { min, max } = KIND_POINT_COUNT.polyline;
+  if (controller.kind !== "polyline" || points.length < min || points.length >= max) return null;
   let at = 0,
     longest = -1;
   for (let i = 0; i < points.length - 1; i++) {

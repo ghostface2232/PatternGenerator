@@ -477,7 +477,7 @@ test("a dropped file never navigates the tab away, and a document file opens", a
     return ev.defaultPrevented;
   });
   expect(prevented).toBe(true);
-  expect(dismissed).toBe(`Not a Perf Pattern document: drop a .perf.json file to open it.`);
+  expect(dismissed).toBe(`Drop a .perf.json document to open it, or an image to drive a field.`);
   await expect(stat(page, "doc-name")).toHaveText("Untitled");
 
   await page.evaluate(() => {

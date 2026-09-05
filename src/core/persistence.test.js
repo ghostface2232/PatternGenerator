@@ -268,7 +268,6 @@ test("controllers survive a file round trip unchanged", () => {
     "hole.shape": "Superellipse",
     "hole.shapeMix": 0.8,
     "fields.enabled": true,
-    "fields.selectedId": "c1",
     "fields.controllers": [
       ctrl(),
       ctrl({
@@ -302,7 +301,7 @@ test("a v1 document upgrades to v2 with the field block inert", () => {
   delete v1.hole.shapeMix;
   const upgraded = migrateDocument(v1);
   assert.equal(upgraded.schemaVersion, 2);
-  assert.deepEqual(upgraded.fields, { enabled: false, selectedId: null, controllers: [] });
+  assert.deepEqual(upgraded.fields, { enabled: false, controllers: [] });
   assert.deepEqual(upgraded.assets, {});
   assert.equal(upgraded.hole.shapeMix, createDocument().hole.shapeMix);
   // Same pattern as before the upgrade, to the hole.
@@ -313,7 +312,7 @@ test("validation drops the controllers it cannot repair and repairs the rest", (
   const doc = validateDocument({
     fields: {
       enabled: "yes",
-      selectedId: "ghost",
+      selectedId: "ghost", // an older document's selection: dropped, not carried
       controllers: [
         ctrl({ channel: "colour" }), // no such channel
         ctrl({ kind: "blob" }), // no such kind
@@ -336,7 +335,7 @@ test("validation drops the controllers it cannot repair and repairs the rest", (
   assert.equal(kept.oneSided, 0);
   assert.equal(kept.syncWith, null, "a reference to a controller that did not survive must be dropped");
   assert.equal(doc.fields.enabled, false); // "yes" is not a boolean
-  assert.equal(doc.fields.selectedId, null); // and the selection pointed at nothing
+  assert.equal("selectedId" in doc.fields, false); // selection is UI state, not document state
   // The repaired document still drives the pipeline.
   assert.ok(computePattern(doc).activeHoles.length > 0);
 });

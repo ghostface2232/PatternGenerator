@@ -22,7 +22,7 @@ export function FieldsPanel() {
   const { doc, theme, ui, actions, selectedController: selected } = useEditor();
   const { dark } = theme;
   const { fields, assets } = doc;
-  const { fieldEditMode, activeChannel } = ui;
+  const { fieldEditMode, activeChannel, selectedControllerId } = ui;
   const fileInput = useRef(null);
   const [imageError, setImageError] = useState("");
 
@@ -33,6 +33,9 @@ export function FieldsPanel() {
   // with a free parameter, so say so rather than letting it look broken.
   const shapeInert = activeChannel === "shape" && doc.hole.shape !== MORPH_SHAPE;
 
+  // Selected state has to reach assistive tech, not just the eye: every chip
+  // below is a button whose only "on" cue is its colour.
+  const chipProps = active => ({ "aria-pressed": active });
   const chip = (active, extra = {}) => ({
     border: `1px solid ${active ? theme.accent : theme.border}`,
     borderRadius: 4,
@@ -76,6 +79,16 @@ export function FieldsPanel() {
   };
 
   const update = (patch, live = false) => actions.updateController(selected.id, patch, live);
+  // An image places itself with a rectangle rather than points, so it can be
+  // neither end of a sync. Numbered per channel, because two size points would
+  // otherwise both read "Size · point" with no way to tell them apart.
+  const syncOptions =
+    selected && selected.kind !== "image"
+      ? fields.controllers
+          .map((c, i) => ({ c, index: fields.controllers.filter(o => o.channel === c.channel).indexOf(c) + 1, i }))
+          .filter(({ c }) => c.id !== selected.id && c.kind !== "image")
+          .map(({ c, index }) => ({ value: c.id, label: `${CHANNEL_INFO[c.channel].label} ${index} · ${c.kind}` }))
+      : [];
 
   return (
     <Section
@@ -92,6 +105,8 @@ export function FieldsPanel() {
 
       <button
         onClick={actions.toggleFieldEditMode}
+        aria-label="Edit field controllers on the canvas"
+        aria-pressed={fieldEditMode}
         style={{
           width: "100%",
           height: 31,
@@ -129,7 +144,8 @@ export function FieldsPanel() {
               <button
                 key={channel}
                 onClick={() => actions.selectChannel(channel)}
-                aria-label={`${CHANNEL_INFO[channel].label} channel`}
+                aria-label={`${CHANNEL_INFO[channel].label} field channel`}
+                {...chipProps(activeChannel === channel)}
                 style={chip(activeChannel === channel)}
               >
                 {CHANNEL_INFO[channel].label}
@@ -193,14 +209,15 @@ export function FieldsPanel() {
             <>
               <div style={groupLabel}>{info.label} controllers</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
-                {channelControllers.map(controller => {
+                {channelControllers.map((controller, index) => {
                   const Icon = KIND_ICON[controller.kind] || Circle;
-                  const active = controller.id === fields.selectedId;
+                  const active = controller.id === selectedControllerId;
                   return (
                     <div key={controller.id} style={{ display: "flex", gap: 4 }}>
                       <button
                         onClick={() => actions.selectController(controller.id)}
-                        aria-label={`Select ${controller.id}`}
+                        aria-label={`Select ${info.label.toLowerCase()} ${controller.kind} controller ${index + 1}`}
+                        {...chipProps(active)}
                         style={chip(active, {
                           flex: 1,
                           height: 28,
@@ -222,11 +239,11 @@ export function FieldsPanel() {
                         value={controller.enabled}
                         onChange={next => actions.updateController(controller.id, { enabled: next })}
                         dark={dark}
-                        label={`${controller.id} enabled`}
+                        label={`${info.label} ${controller.kind} controller ${index + 1} enabled`}
                       />
                       <button
                         onClick={() => actions.removeController(controller.id)}
-                        aria-label={`Remove ${controller.id}`}
+                        aria-label={`Remove ${info.label.toLowerCase()} ${controller.kind} controller ${index + 1}`}
                         title="Remove this controller"
                         style={iconBtn({ color: theme.warn })}
                       >
@@ -271,6 +288,7 @@ export function FieldsPanel() {
                         key={falloff}
                         onClick={() => update({ falloff })}
                         aria-label={`${falloff} falloff`}
+                        {...chipProps(selected.falloff === falloff)}
                         style={chip(selected.falloff === falloff)}
                       >
                         {falloff}
@@ -303,6 +321,7 @@ export function FieldsPanel() {
                         key={label}
                         onClick={() => update({ oneSided: value })}
                         aria-label={`Reaches ${label}`}
+                        {...chipProps(selected.oneSided === value)}
                         style={chip(selected.oneSided === value)}
                       >
                         {label}
@@ -314,26 +333,29 @@ export function FieldsPanel() {
 
               {selected.kind === "polyline" && (
                 <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-                  <button
-                    onClick={() => {
-                      const patch = addPolylinePoint(selected);
-                      if (patch) update(patch);
-                    }}
-                    disabled={selected.geometry.points.length >= MAX_POLYLINE_POINTS}
-                    style={chip(false, { flex: 1, height: 26 })}
-                  >
-                    + vertex ({selected.geometry.points.length})
-                  </button>
-                  <button
-                    onClick={() => {
-                      const patch = removePolylinePoint(selected);
-                      if (patch) update(patch);
-                    }}
-                    disabled={selected.geometry.points.length <= 2}
-                    style={chip(false, { flex: 1, height: 26 })}
-                  >
-                    − vertex
-                  </button>
+                  {[
+                    ["Add a vertex", addPolylinePoint, selected.geometry.points.length >= MAX_POLYLINE_POINTS, `+ vertex (${selected.geometry.points.length})`, `At most ${MAX_POLYLINE_POINTS} vertices`], // prettier-ignore
+                    ["Remove a vertex", removePolylinePoint, selected.geometry.points.length <= 2, "− vertex", "A polyline needs two vertices"], // prettier-ignore
+                  ].map(([name, edit, atLimit, text, why]) => (
+                    <button
+                      key={name}
+                      onClick={() => {
+                        const patch = edit(selected);
+                        if (patch) update(patch);
+                      }}
+                      disabled={atLimit}
+                      aria-label={name}
+                      title={atLimit ? why : name}
+                      style={chip(false, {
+                        flex: 1,
+                        height: 26,
+                        opacity: atLimit ? 0.4 : 1,
+                        cursor: atLimit ? "default" : "pointer",
+                      })}
+                    >
+                      {text}
+                    </button>
+                  ))}
                 </div>
               )}
 
@@ -352,7 +374,11 @@ export function FieldsPanel() {
                     }}
                   />
                   <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-                    <button onClick={() => fileInput.current?.click()} style={chip(false, { flex: 1, height: 28 })}>
+                    <button
+                      onClick={() => fileInput.current?.click()}
+                      aria-label={selected.image?.assetId ? "Replace the controller image" : "Load a controller image"}
+                      style={chip(false, { flex: 1, height: 28 })}
+                    >
                       <Upload size={11} style={{ marginRight: 4, verticalAlign: -1 }} />
                       {selected.image?.assetId ? "Replace image" : "Load image"}
                     </button>
@@ -378,8 +404,8 @@ export function FieldsPanel() {
                     {/* prettier-ignore */}
                     {imageError ||
                       (selected.image?.assetId && assets[selected.image.assetId]
-                        ? `${assets[selected.image.assetId].name} · ${assets[selected.image.assetId].width}×${assets[selected.image.assetId].height}`
-                        : "Brightness drives the channel. Saved with the file, left out of share links.")}
+                        ? `${assets[selected.image.assetId].name} · ${assets[selected.image.assetId].width}×${assets[selected.image.assetId].height} — brightness drives the channel. Saved with the file, left out of share links.`
+                        : "No picture yet, so this controller does nothing. Load one, or drop an image anywhere on the page.")}
                   </div>
                   <div
                     style={{
@@ -435,7 +461,7 @@ export function FieldsPanel() {
                 </>
               )}
 
-              {fields.controllers.length > 1 && selected.kind !== "image" && (
+              {syncOptions.length > 0 && (
                 <div style={{ marginBottom: 10 }}>
                   <div style={{ fontSize: 10, color: theme.textSecondary, marginBottom: 5 }}>
                     Follow the geometry of
@@ -446,13 +472,13 @@ export function FieldsPanel() {
                     onChange={id => update({ syncWith: id || null })}
                     dark={dark}
                     ariaLabel="Follow the geometry of"
-                    options={[
-                      { value: "", label: "Its own geometry" },
-                      ...fields.controllers
-                        .filter(c => c.id !== selected.id && c.kind !== "image")
-                        .map(c => ({ value: c.id, label: `${CHANNEL_INFO[c.channel].label} · ${c.kind}` })),
-                    ]}
+                    options={[{ value: "", label: "Its own geometry" }, ...syncOptions]}
                   />
+                  {selected.syncWith && (
+                    <div style={{ fontSize: 9, color: theme.textSecondary, marginTop: 5, lineHeight: 1.6 }}>
+                      Its shape is edited on the controller it follows; only its reach is its own.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -461,6 +487,7 @@ export function FieldsPanel() {
           {fields.controllers.length > 0 && (
             <button
               onClick={actions.clearControllers}
+              aria-label="Remove every field controller"
               style={{
                 width: "100%",
                 height: 26,

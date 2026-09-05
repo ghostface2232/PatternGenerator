@@ -8,6 +8,7 @@ import {
   superMixFromN,
   superNFromMix,
   superReach,
+  superSupport,
 } from "./superellipse.js";
 import { calcHoleArea, calcShapeGap, checkShapeOverlap, isPointInsideHole } from "./shapes.js";
 
@@ -114,4 +115,82 @@ test("the traced outline closes and stays inside its box", () => {
   // The extremes are actually reached, so the drawn hole fills its nominal size.
   near(Math.max(...verts.map(v => v[0])), 3);
   near(Math.max(...verts.map(v => v[1])), 2);
+});
+
+test("the support function bounds the shape, and the radial function does not", () => {
+  // h(θ) is the distance to the tangent line with normal θ; ρ(θ) is the distance
+  // to the outline along θ. For a convex body ρ ≤ h, equal only where the normal
+  // lines up with θ. Checked against a direct maximisation over the outline.
+  for (const n of [1, 1.5, 2, 4, 8]) {
+    for (let i = 0; i < 32; i++) {
+      const theta = (i / 32) * Math.PI * 2;
+      const verts = superellipseVerts(6, 4, n, 4096);
+      const brute = Math.max(...verts.map(([x, y]) => x * Math.cos(theta) + y * Math.sin(theta)));
+      near(superSupport(3, 2, n, theta), brute, 2e-5);
+      assert.ok(superReach(3, 2, n, theta) <= superSupport(3, 2, n, theta) + 1e-12);
+    }
+  }
+  // The two coincide only for the circle — where every normal points along its
+  // own radius. That is why the difference stayed hidden: the ellipse at the
+  // middle of the slider is a circle whenever the hole is as wide as it is tall.
+  for (let i = 0; i < 16; i++) {
+    const theta = (i / 16) * Math.PI * 2;
+    near(superReach(3, 3, 2, theta), superSupport(3, 3, 2, theta), 1e-9);
+    assert.ok(superSupport(3, 2, 2, theta) >= superReach(3, 2, 2, theta) - 1e-12);
+  }
+  // At the ends of the family it is the rhombus's own support function, and it
+  // climbs toward the rectangle's.
+  near(superSupport(3, 2, 1, Math.PI / 4), 3 * Math.cos(Math.PI / 4), 1e-9);
+  assert.ok(superSupport(3, 2, 8, Math.PI / 4) < (3 + 2) * Math.cos(Math.PI / 4));
+  assert.ok(superSupport(3, 2, 8, Math.PI / 4) > 0.75 * (3 + 2) * Math.cos(Math.PI / 4));
+});
+
+test("the reported clearance is never larger than the real one", () => {
+  // The bug this replaces: `gap` measured each hole's reach along the centre
+  // line instead of its support, so it reported a ligament up to 13% WIDER than
+  // the metal actually is — on the default 60° lattice with the shape slider at
+  // the square end, no controller needed. Over-reporting a ligament is the one
+  // direction this statistic must never fail in.
+  const hole = (x, y, n, angle = 0, w = 5, h = 5) => ({ x, y, w, h, holeRadius: 0, superN: n, angle });
+  // Brute force: the true clearance between two convex outlines.
+  const clearance = (a, b) => {
+    const outline = o =>
+      superellipseVerts(o.w, o.h, o.superN, 720).map(([x, y]) => [
+        o.x + x * Math.cos(o.angle) - y * Math.sin(o.angle),
+        o.y + x * Math.sin(o.angle) + y * Math.cos(o.angle),
+      ]);
+    const A = outline(a),
+      B = outline(b);
+    let best = Infinity;
+    for (const [px, py] of A) for (const [qx, qy] of B) best = Math.min(best, Math.hypot(px - qx, py - qy));
+    return best;
+  };
+
+  const cases = [
+    // The default staggered-60° lattice at the square end of the slider: the
+    // nearest neighbour sits on a diagonal, which is where reach and support
+    // diverge most.
+    [hole(0, 0, 8), hole(3.5, 6.06, 8)],
+    [hole(0, 0, 1, Math.PI / 4), hole(3.5, 6.06, 1, Math.PI / 4)],
+    [hole(0, 0, 4, -0.35), hole(7, 0, 4, 0.35)],
+    [hole(0, 0, 8, 0.35), hole(7, 0, 8, 0.35)],
+    [hole(0, 0, 2), hole(8, 0, 2)],
+    [hole(0, 0, 8, 0, 10, 3), hole(9, 4, 8, 1.1, 10, 3)],
+  ];
+  for (const [a, b] of cases) {
+    const reported = calcShapeGap(a, b, "Superellipse");
+    const truth = clearance(a, b);
+    const label = `n=${a.superN} at (${b.x}, ${b.y})`;
+    // Never looser than the metal is: this is the direction the statistic must
+    // not fail in, and every direction the search tries gives a valid lower
+    // bound, so stopping early costs precision rather than soundness.
+    assert.ok(reported <= truth + 1e-3, `${label}: reported ${reported} exceeds the true ${truth}`);
+    // And close enough that the two-decimal readout is honest. The old
+    // reach-based gap was 0.14 mm OVER on the first of these.
+    assert.ok(reported > truth - 0.05, `${label}: reported ${reported} too far under the true ${truth}`);
+  }
+
+  // Crossing slots: genuinely overlapping, and the reach-based gap called them
+  // 2.12 mm apart. Overlap must not be missed.
+  assert.equal(checkShapeOverlap(hole(0, 0, 8, 0, 8, 2), hole(3.5, 3.5, 8, Math.PI / 2, 8, 2), "Superellipse"), true);
 });

@@ -31,7 +31,7 @@ import { generateHoles } from "../layouts/grid.js";
 import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
 import { EDITABLE_CHANNELS, MAX_CONTROLLERS, createController } from "../fields/controllers.js";
-import { splitImageMaps, useImageMaps } from "./useImageMaps.js";
+import { readImageFile, splitImageMaps, useImageMaps } from "./useImageMaps.js";
 import { generateSVGParts } from "../export/svg.js";
 import { renderPNGBlob } from "../export/png.js";
 import { downloadBlob, downloadText } from "../export/download.js";
@@ -107,6 +107,11 @@ export default function App() {
   const [fieldEditMode, setFieldEditMode] = useState(false);
   const [activeChannel, setActiveChannel] = useState(EDITABLE_CHANNELS[0]);
   const [fieldTool, setFieldTool] = useState(null); // armed kind for click-to-add on the canvas
+  // Which controller the inspector is showing. UI state, like every other
+  // selection and mode here: in the document it would be one undo step per
+  // click, and clicking between controllers would evict real edits from a
+  // hundred-step history.
+  const [selectedId, setSelectedId] = useState(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [savedDoc, setSavedDoc] = useState(() => (startedClean ? doc : null)); // last written to localStorage
@@ -128,7 +133,14 @@ export default function App() {
   // Decoding an image is asynchronous and lives outside the document, so the
   // maps arrive after the first render and simply recompile the field then.
   const decodedImages = useImageMaps(doc.assets);
-  const { maps: imageMaps, images: imageElements } = useMemo(() => splitImageMaps(decodedImages), [decodedImages]);
+  // Filtered against the document that is loaded NOW. Asset ids are per-document
+  // counters, so "asset-1" is the norm everywhere; without this, the moment
+  // between loading a new document and its picture finishing decoding would
+  // render it with the previous document's bitmap under the same id.
+  const { maps: imageMaps, images: imageElements } = useMemo(
+    () => splitImageMaps(decodedImages, doc.assets),
+    [decodedImages, doc.assets]
+  );
   const field = useMemo(() => compileDocumentField(fields, { imageMaps }), [fields, imageMaps]);
   const holeDoc = useMemo(() => ({ ...patternDoc, variation, fields }), [patternDoc, variation, fields]);
   const holes = useMemo(
@@ -142,7 +154,16 @@ export default function App() {
     () => computeStats({ doc: holeDoc, g: geometry, params, holes, activeHoles, removedSet, overlaps, field }),
     [holeDoc, geometry, params, holes, activeHoles, removedSet, overlaps, field]
   );
-  const selectedController = useMemo(() => fields.controllers.find(c => c.id === fields.selectedId) || null, [fields]);
+  // A selection can outlive what it points at (undo, delete, loading a document),
+  // so it is resolved rather than trusted — and falls back to the first
+  // controller on the channel being edited, so the inspector is never blank
+  // while that channel has something in it. `selectedId` is therefore a hint;
+  // `selectedController` is the answer, and the canvas highlights the same one.
+  const selectedController = useMemo(() => {
+    const list = fields.controllers;
+    return list.find(c => c.id === selectedId) || list.find(c => c.channel === activeChannel) || null;
+  }, [fields, selectedId, activeChannel]);
+  const selectedControllerId = selectedController?.id ?? null;
   // Where a new controller is placed, and the frame the panel reports in.
   const perfArea = useMemo(
     () => ({ x: params.marginLeft, y: params.marginTop, w: geometry.perfW, h: geometry.perfH }),
@@ -207,6 +228,9 @@ export default function App() {
     };
   }, [flushPending]);
   const saveStatus = !storage() || saveError ? "idle" : savedDoc === doc ? "saved" : "saving";
+  // A boolean rather than `doc` itself, so the project menu and the keyboard
+  // listener that depend on it are not rebuilt on every edit of the pattern.
+  const documentHasAssets = hasAssets(doc);
 
   // ─── Variation history adapter ────────────────────────────────────
   // The variation panel and canvas gizmo edit the variation block through this
@@ -343,6 +367,8 @@ export default function App() {
       setVariationEditMode(next);
       if (next) {
         setHoleRemovalMode(false);
+        setFieldEditMode(false);
+        setFieldTool(null);
         if (!history.ref.current.enabled) history.commit(current => ({ ...current, enabled: true }));
       }
     };
@@ -371,6 +397,7 @@ export default function App() {
         };
       });
       setVariationEditMode(true);
+      setFieldEditMode(false);
     };
     const addVariationLayer = () => {
       if (history.ref.current.layers.length >= MAX_VARIATION_LAYERS) return;
@@ -393,21 +420,37 @@ export default function App() {
         layers: current.layers.map(layer => randomizeVariationLayer(layer)),
       }));
       setVariationEditMode(true);
+      setFieldEditMode(false);
     };
     // ─── Field controllers ─────────────────────────────────────────
     // Every edit goes through api.update so it lands on the one global undo
     // stack, exactly like the variation block. Continuous edits (sliders, canvas
-    // drags) coalesce under a key naming the controller, so a drag is one step
-    // and dragging two controllers in a row is two.
-    const mapControllers = (d, fn) => ({ ...d, fields: { ...d.fields, controllers: d.fields.controllers.map(fn) } });
+    // drags) coalesce under a key naming the controller AND the fields being
+    // written, so a drag is one step, two drags of different controllers are
+    // two, and — as everywhere else in the app, where the auto key is the edited
+    // path — changing a controller's target and then its strength is two rather
+    // than one.
+    const mapControllers = (d, fn) => {
+      const controllers = d.fields.controllers.map(fn);
+      // An edit that changes nothing returns the same document, so H.record
+      // drops it: clicking the falloff chip that is already active must not
+      // spend an undo step.
+      return controllers.every((c, i) => c === d.fields.controllers[i])
+        ? d
+        : { ...d, fields: { ...d.fields, controllers } };
+    };
     const setFieldsEnabled = enabled => {
       api.set("fields.enabled", enabled);
-      if (!enabled) setFieldEditMode(false);
+      if (!enabled) {
+        setFieldEditMode(false);
+        setFieldTool(null);
+      }
     };
-    const toggleFieldEditMode = () => {
-      const next = !fieldEditMode;
-      setFieldEditMode(next);
-      if (next) {
+    // The three canvas modes are mutually exclusive: each one claims the pointer,
+    // and two at once means a click does something the badge does not describe.
+    const enterFieldEditMode = on => {
+      setFieldEditMode(on);
+      if (on) {
         setHoleRemovalMode(false);
         setVariationEditMode(false);
         if (!api.ref.current.fields.enabled) api.set("fields.enabled", true);
@@ -415,40 +458,41 @@ export default function App() {
         setFieldTool(null);
       }
     };
+    const toggleFieldEditMode = () => enterFieldEditMode(!fieldEditMode);
     const selectChannel = channel => {
       setActiveChannel(channel);
       // Keep the inspector on something that belongs to the channel just picked.
       const current = api.ref.current.fields;
-      const selected = current.controllers.find(c => c.id === current.selectedId);
-      if (selected && selected.channel !== channel) {
-        const first = current.controllers.find(c => c.channel === channel);
-        api.set("fields.selectedId", first ? first.id : null);
-      }
+      const selected = current.controllers.find(c => c.id === selectedId);
+      // Let the fallback above pick the new channel's first controller.
+      if (selected && selected.channel !== channel) setSelectedId(null);
     };
-    const selectController = id => api.set("fields.selectedId", id);
+    const selectController = setSelectedId;
     // `geometry` overrides the default placement when the controller is being
     // drawn on the canvas rather than dropped from the panel.
     const addController = (kind, geometry = null) => {
       const current = api.ref.current.fields;
-      if (current.controllers.length >= MAX_CONTROLLERS) return null;
+      if (current.controllers.length >= MAX_CONTROLLERS) {
+        // Nothing more can be placed, so stop promising that a click will place
+        // something. The rail's buttons disable themselves; the armed tool and
+        // its HUD badge would otherwise stay up, inviting clicks that do nothing.
+        setFieldTool(null);
+        return null;
+      }
       const controller = createController({ channel: activeChannel, kind, area: perfArea, existing: current.controllers }); // prettier-ignore
       if (geometry) controller.geometry = geometry;
       api.update(d => ({
         ...d,
-        fields: {
-          ...d.fields,
-          enabled: true,
-          selectedId: controller.id,
-          controllers: [...d.fields.controllers, controller],
-        },
+        fields: { ...d.fields, enabled: true, controllers: [...d.fields.controllers, controller] },
       }));
-      setFieldEditMode(true);
+      setSelectedId(controller.id);
+      enterFieldEditMode(true);
       return controller.id;
     };
     const updateController = (id, patch, live = false) =>
       api.update(
         d => mapControllers(d, c => (c.id === id ? { ...c, ...patch } : c)),
-        live ? { merge: `fields.${id}` } : {}
+        live ? { merge: `fields.${id}.${Object.keys(patch).sort().join(",")}` } : {}
       );
     const removeController = id =>
       api.update(d => {
@@ -456,11 +500,17 @@ export default function App() {
         // A controller synced to the one being removed would otherwise keep a
         // reference that resolves to nothing on every hole.
         const cleaned = controllers.map(c => (c.syncWith === id ? { ...c, syncWith: null } : c));
-        const selectedId = d.fields.selectedId === id ? (cleaned[0]?.id ?? null) : d.fields.selectedId;
-        return pruneAssets({ ...d, fields: { ...d.fields, selectedId, controllers: cleaned } });
+        // Hand the selection to a controller on the channel being edited, so the
+        // inspector does not vanish while that channel's list still has entries.
+        const next = cleaned.find(c => c.channel === activeChannel) ?? cleaned[0] ?? null;
+        if (id === selectedId) setSelectedId(next?.id ?? null);
+        return pruneAssets({ ...d, fields: { ...d.fields, controllers: cleaned } });
       });
-    const clearControllers = () =>
-      api.update(d => pruneAssets({ ...d, fields: { ...d.fields, selectedId: null, controllers: [] } }));
+    const clearControllers = () => {
+      setSelectedId(null);
+      setFieldTool(null);
+      api.update(d => pruneAssets({ ...d, fields: { ...d.fields, controllers: [] } }));
+    };
     // Attaching a picture rewrites the asset store and the controller together,
     // so one undo takes both back and no orphan is ever left behind.
     const setControllerImage = (id, asset) =>
@@ -473,10 +523,30 @@ export default function App() {
       });
     const clearControllerImage = id =>
       api.update(d => pruneAssets(mapControllers(d, c => (c.id === id ? { ...c, image: { ...c.image, assetId: null } } : c)))); // prettier-ignore
+    // An image file dropped on the page: into the selected image controller if
+    // there is one, otherwise into a new one. Dropping a picture is the natural
+    // way to reach for this feature, and answering it with "not a Perf Pattern
+    // document" was the wrong reply.
+    const dropImage = async file => {
+      const asset = await readImageFile(file);
+      const current = api.ref.current.fields;
+      const selected = current.controllers.find(c => c.id === selectedControllerId);
+      if (selected?.kind === "image") {
+        setControllerImage(selected.id, asset);
+        enterFieldEditMode(true);
+        return;
+      }
+      const id = addController("image");
+      if (!id) throw new Error(`this document already has ${MAX_CONTROLLERS} controllers`);
+      setControllerImage(id, asset);
+    };
 
     const setHoleRemoval = on => {
       setHoleRemovalMode(on);
-      if (on) setVariationEditMode(false);
+      if (on) {
+        setVariationEditMode(false);
+        enterFieldEditMode(false);
+      }
     };
     const resetView = () => {
       setZoom(1);
@@ -506,6 +576,7 @@ export default function App() {
       removeSelectedVariationLayer,
       randomizeVariation,
       setFieldsEnabled,
+      dropImage,
       toggleFieldEditMode,
       selectChannel,
       selectController,
@@ -518,7 +589,7 @@ export default function App() {
       setHoleRemoval,
       resetView,
     };
-  }, [doc, api, history, variationEditMode, fieldEditMode, activeChannel, perfArea]);
+  }, [doc, api, history, variationEditMode, fieldEditMode, activeChannel, perfArea, selectedId, selectedControllerId]);
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
@@ -558,6 +629,7 @@ export default function App() {
       setHoleRemovalMode(false);
       setFieldEditMode(false);
       setFieldTool(null);
+      setSelectedId(null);
       setVariationHud(null);
     },
     [api, flushPending]
@@ -592,7 +664,7 @@ export default function App() {
       // A link carries the controllers but not their pictures — those go only in
       // the .perf.json file. The panel says so rather than letting the recipient
       // wonder why their halftone is flat.
-      shareDropsImages: hasAssets(doc),
+      shareDropsImages: documentHasAssets,
       shareLink: async () => {
         const url = `${window.location.origin}${window.location.pathname}${encodeShareHash(api.ref.current)}`;
         try {
@@ -604,7 +676,7 @@ export default function App() {
         }
       },
     }),
-    [saveStatus, recent, loadDocument, openFile, api, doc]
+    [saveStatus, recent, loadDocument, openFile, api, documentHasAssets]
   );
 
   // Keyboard shortcuts: undo / redo / save. Text fields keep their own undo.
@@ -634,7 +706,8 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [api, project]);
 
-  // Drop a document file anywhere on the page to open it.
+  // Drop a document file anywhere on the page to open it — or an image, which
+  // goes to an image controller instead of being turned away.
   useEffect(() => {
     const onDragOver = e => {
       if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
@@ -644,9 +717,17 @@ export default function App() {
       // Always swallow a file drop: letting it through navigates the tab away from the app.
       e.preventDefault();
       const files = [...(e.dataTransfer.files || [])];
-      const file = files.find(f => /\.json$/i.test(f.name));
-      if (file) openFile(file);
-      else if (files.length) window.alert(`Not a Perf Pattern document: drop a ${FILE_EXTENSION} file to open it.`);
+      const document = files.find(f => /\.json$/i.test(f.name));
+      if (document) {
+        openFile(document);
+        return;
+      }
+      const image = files.find(f => /^image\//i.test(f.type || "") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name));
+      if (image) {
+        actions.dropImage(image).catch(err => window.alert(`Could not use ${image.name}: ${err.message}`));
+        return;
+      }
+      if (files.length) window.alert(`Drop a ${FILE_EXTENSION} document to open it, or an image to drive a field.`);
     };
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("drop", onDrop);
@@ -654,7 +735,7 @@ export default function App() {
       window.removeEventListener("dragover", onDragOver);
       window.removeEventListener("drop", onDrop);
     };
-  }, [openFile]);
+  }, [openFile, actions]);
 
   const ui = {
     dark,
@@ -671,6 +752,7 @@ export default function App() {
     activeChannel,
     fieldTool,
     setFieldTool,
+    selectedControllerId,
     pan,
     setPan,
     zoom,

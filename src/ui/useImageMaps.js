@@ -133,10 +133,17 @@ export function useImageMaps(assets) {
 
 // Split the decode result into the two shapes its consumers want: the pipeline
 // samples `maps`, the canvas draws `images`.
-export function splitImageMaps(decoded) {
+//
+// `assets` narrows the result to what the document loaded RIGHT NOW refers to.
+// Decoding is asynchronous and asset ids are per-document counters, so between
+// opening one document and the next one's picture finishing, an id like
+// "asset-1" would otherwise still resolve to the outgoing document's bitmap and
+// the new pattern would render against the wrong photograph for a frame or two.
+export function splitImageMaps(decoded, assets = null) {
   const maps = {};
   const images = {};
   for (const [id, value] of Object.entries(decoded)) {
+    if (assets && !(id in assets)) continue;
     maps[id] = value.map;
     images[id] = value.image;
   }

@@ -5,7 +5,7 @@ import {
   MAX_POLYLINE_POINTS,
   channelBase,
   compileControllers,
-  compiledHasChannel,
+  compiledDrivesChannel,
   createController,
   defaultGeometry,
   evaluateChannel,
@@ -14,8 +14,9 @@ import {
   flattenCubic,
   newControllerId,
   polylineDistance,
-  polylineSide,
+  polylineWeight,
   resolveSyncedGeometry,
+  segmentProbe,
 } from "./controllers.js";
 import { createImageMap } from "./image-map.js";
 
@@ -104,16 +105,107 @@ test("a cubic with collinear controls flattens onto its own chord", () => {
   assert.ok(arc[6].y > 10, "the middle of the curve must bulge toward the control points");
 });
 
-test("polylineSide reads the side of the nearest segment, not of the chord", () => {
+test("a segment reports how far off it a point is, and how squarely", () => {
+  // side is the sine of the angle between the segment and the offset, so it is
+  // ±1 straight off the flank and passes through 0 out along the segment's own
+  // direction — which is what stops it flipping there.
+  const probe = (x, y) => segmentProbe(0, 0, 10, 0, x, y);
+  near(probe(5, 4).distance, 4);
+  near(probe(5, 4).side, 1); // y down, so "below" is positive
+  near(probe(5, -4).side, -1);
+  near(probe(14, 0).distance, 4);
+  near(probe(14, 0).side, 0); // straight out past the end: neither side
+  near(probe(14, 4).side, Math.sin(Math.PI / 4), 1e-9);
+  near(probe(0, 0).side, 0); // on the segment itself
+  near(segmentProbe(3, 3, 3, 3, 3, 8).distance, 5); // a degenerate segment is a point
+});
+
+test("a one-sided path does not tear where two of its legs meet", () => {
+  // The bug this replaced: taking the bare sign of the NEAREST segment made the
+  // two legs disagree across the locus where they are equidistant, and the tie
+  // went to whichever vertex came first in the list. On this polyline that put a
+  // full-strength step in the field 12 mm away from any geometry.
+  const bend = [
+    { x: 0, y: 0 },
+    { x: 40, y: 0 },
+    { x: 0, y: 20 },
+  ];
+  const at = (x, y) => polylineWeight(bend, x, y, 30, "linear", 1);
+
+  // Rings entirely in open space, straddling the old seam — both legs end at
+  // x ≤ 40, so nothing sampled here touches the geometry itself.
+  //
+  // Continuity is checked by refinement rather than by an absolute threshold: a
+  // steep slope near a vertex genuinely does step between coarse samples, but
+  // its steps shrink in proportion when the sampling is refined, and a jump does
+  // not. Sampling four times as densely has to cut the largest step by at least
+  // three.
+  const ringJump = (cx, cy, r, steps) => {
+    let jump = 0,
+      previous = at(cx + r, cy);
+    for (let i = 1; i <= steps; i++) {
+      const t = (i / steps) * Math.PI * 2;
+      const value = at(cx + Math.cos(t) * r, cy + Math.sin(t) * r);
+      jump = Math.max(jump, Math.abs(value - previous));
+      previous = value;
+    }
+    return jump;
+  };
+  for (const [cx, cy, r] of [
+    [52, 0, 6],
+    [50, 0, 8],
+    [46, -2, 4],
+  ]) {
+    const coarse = ringJump(cx, cy, r, 720);
+    const fine = ringJump(cx, cy, r, 2880);
+    assert.ok(fine * 3 < coarse, `a jump, not a slope, around (${cx}, ${cy}) at radius ${r}: ${coarse} → ${fine}`);
+  }
+  // Straight through the old flip point at (52, 0), which is 12 mm from either
+  // leg: the field passes through it smoothly rather than stepping across it.
+  const lineJump = step => {
+    let jump = 0,
+      previous = at(52, -12);
+    for (let y = -12 + step; y <= 12; y += step) {
+      jump = Math.max(jump, Math.abs(at(52, y) - previous));
+      previous = at(52, y);
+    }
+    return jump;
+  };
+  assert.ok(lineJump(0.005) * 3 < lineJump(0.02), `the field steps across (52, 0): ${lineJump(0.02)}`);
+  assert.ok(lineJump(0.005) < 0.002);
+
+  // Crossing the geometry ITSELF is where a one-sided controller is meant to
+  // step, and still does: on the flank of the first leg it goes from full to
+  // nothing. Measured with a reach short enough that the second leg, 9 mm away,
+  // cannot reach across and fill the gap in.
+  const flank = y => polylineWeight(bend, 20, y, 5, "linear", 1);
+  assert.ok(flank(0.05) > 0.98, `expected full weight just inside, got ${flank(0.05)}`);
+  assert.equal(flank(-0.05), 0);
+
+  // And reversing the vertex order negates the side everywhere, which the old
+  // nearest-segment sign did not do for a quarter of the plane.
+  const reversed = [...bend].reverse();
+  for (let x = -20; x <= 60; x += 5) {
+    for (let y = -20; y <= 40; y += 5) {
+      near(polylineWeight(bend, x, y, 30, "linear", 1), polylineWeight(reversed, x, y, 30, "linear", -1), 1e-9);
+    }
+  }
+});
+
+test("with no side gate, the path weight is just the falloff of the nearest distance", () => {
   const bend = [
     { x: 0, y: 0 },
     { x: 10, y: 0 },
     { x: 10, y: 10 },
   ];
-  assert.equal(polylineSide(bend, 5, 4), 1); // below the first leg (y down)
-  assert.equal(polylineSide(bend, 5, -4), -1);
-  assert.equal(polylineSide(bend, 14, 5), -1); // right of the second leg
-  assert.equal(polylineSide([{ x: 0, y: 0 }], 1, 1), 0); // a point has no sides
+  for (const [x, y] of [
+    [5, 4],
+    [14, 5],
+    [-6, -8],
+    [10, 10],
+  ]) {
+    near(polylineWeight(bend, x, y, 20, "linear", 0), falloffWeight("linear", polylineDistance(bend, x, y) / 20));
+  }
 });
 
 test("a lone controller reaches its target at the geometry and the base at the rim", () => {
@@ -197,8 +289,18 @@ test("disabled, zero-strength and empty controllers compile away", () => {
   assert.equal(compileControllers([ctrl({ geometry: { points: [] } })]).length, 0);
   assert.equal(compileControllers([]).length, 1 - 1);
   assert.equal(compileControllers(null).length, 0);
-  assert.equal(compiledHasChannel(compileControllers([ctrl()]), "size"), true);
-  assert.equal(compiledHasChannel(compileControllers([ctrl()]), "angle"), false);
+  assert.equal(compiledDrivesChannel(compileControllers([ctrl()]), "size"), true);
+  assert.equal(compiledDrivesChannel(compileControllers([ctrl()]), "angle"), false);
+  // A controller aimed at the channel's own neutral value changes nothing, and
+  // must not read as driving it — downstream that decides whether the statistics
+  // move onto the counted-OAR path, which reports a different figure for the
+  // same geometry.
+  assert.equal(compiledDrivesChannel(compileControllers([ctrl({ target: 1 })]), "size"), false);
+  // The base is the caller's, because the shape channel's neutral value is the
+  // document's own mix rather than a constant.
+  const shape = compileControllers([ctrl({ channel: "shape", target: 0.7 })]);
+  assert.equal(compiledDrivesChannel(shape, "shape", 0.5), true);
+  assert.equal(compiledDrivesChannel(shape, "shape", 0.7), false);
 });
 
 test("syncWith borrows another controller's geometry, and a cycle falls back", () => {
@@ -253,6 +355,15 @@ test("an image controller maps brightness to the channel inside its rectangle", 
   // No decoded map (a share link, or a decode still in flight) → inert, not black.
   assert.equal(compileControllers([controller], {}).length, 0);
   near(evaluateChannel([controller], "size", 0, 50, {}), 1);
+
+  // Brightness is the WEIGHT, not a target pulled toward the base. On its own
+  // the two forms agree exactly — but only this one composes: a dark pixel has
+  // to mean "no influence", the way a distant point does, or an all-black image
+  // would quietly hold down every other controller over the same ground.
+  const point = ctrl({ id: "p", target: 3, radius: 200, falloff: "hard", geometry: { points: [{ x: 0, y: 50 }] } });
+  near(evaluateChannel([point], "size", 0, 50), 3);
+  const black = createImageMap(1, 1, Float32Array.from([0]));
+  near(evaluateChannel([point, controller], "size", 0, 50, { imageMaps: { img: black } }), 3);
 });
 
 test("new controllers land inside the area they are given, with usable defaults", () => {

@@ -9,6 +9,7 @@ import {
   DOC_LIMITS,
   HOLE_SHAPES,
   MAX_ASSET_DATA_URL_CHARS,
+  MAX_ASSET_TOTAL_CHARS,
   MAX_ASSETS,
   MAX_VARIATION_LAYERS,
   PATTERN_TYPES,
@@ -203,16 +204,17 @@ function validateFields(raw, fallback) {
   const source = Array.isArray(f.controllers) ? f.controllers.slice(0, MAX_CONTROLLERS) : [];
   const takenIds = new Set();
   const controllers = source.map((entry, i) => validateController(entry, i, takenIds)).filter(Boolean);
-  const ids = new Set(controllers.map(c => c.id));
+  const byId = new Map(controllers.map(c => [c.id, c]));
   for (const controller of controllers) {
-    if (controller.syncWith && !ids.has(controller.syncWith)) controller.syncWith = null;
+    if (!controller.syncWith) continue;
+    const target = byId.get(controller.syncWith);
+    // A reference to a controller that did not survive validation would leave
+    // the geometry resolution walking to a dead end on every hole; a reference
+    // across the image boundary is worse, because an image and a path have no
+    // geometry in common and the follower would resolve to a kind it cannot be.
+    if (!target || target.kind === "image" || controller.kind === "image") controller.syncWith = null;
   }
-  const selected = controllers.find(c => c.id === f.selectedId);
-  return {
-    enabled: bool(f.enabled, fallback.enabled),
-    selectedId: selected ? selected.id : null,
-    controllers,
-  };
+  return { enabled: bool(f.enabled, fallback.enabled), controllers };
 }
 
 // Only assets an image controller still points at are kept: an orphan is dead
@@ -221,12 +223,18 @@ function validateAssets(raw, controllers) {
   const referenced = new Set(controllers.filter(c => c.kind === "image" && c.image?.assetId).map(c => c.image.assetId));
   const assets = {};
   let count = 0;
+  let total = 0;
   for (const [key, value] of Object.entries(obj(raw))) {
     if (count >= MAX_ASSETS || !referenced.has(key)) continue;
     const asset = obj(value);
     const dataURL = typeof asset.dataURL === "string" ? asset.dataURL : "";
     if (!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(dataURL)) continue;
     if (dataURL.length > MAX_ASSET_DATA_URL_CHARS) continue;
+    // The per-image cap alone does not bound the document: the total is what has
+    // to fit in localStorage, so images past the budget are dropped rather than
+    // producing a document the autosave can never write.
+    if (total + dataURL.length > MAX_ASSET_TOTAL_CHARS) continue;
+    total += dataURL.length;
     assets[key] = {
       name: text(asset.name, "image"),
       dataURL,

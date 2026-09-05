@@ -11,6 +11,7 @@ import {
   gizmoUsesPosition,
   hitTestGizmo,
 } from "../../fields/gizmo.js";
+import { resolveSyncedGeometry } from "../../fields/controllers.js";
 import { controllerBodyDistance, hitTestController, moveControllerHandle } from "../../fields/controller-gizmo.js";
 import { drawScene } from "../../render/canvas-renderer.js";
 import { canvasToSheet, zoomAbout } from "../../render/view.js";
@@ -46,7 +47,7 @@ export function CanvasView() {
     actions,
   } = useEditor();
   const { dark, showHud, holeRemovalMode, variationEditMode, pan, setPan, zoom, setZoom, setVariationHud } = ui;
-  const { fieldEditMode, activeChannel, fieldTool, setFieldTool } = ui;
+  const { fieldEditMode, activeChannel, fieldTool, setFieldTool, selectedControllerId } = ui;
   const { variation, fields } = doc;
   const { holeColor, bgColor } = doc.appearance;
   const { marginLeft, marginTop } = params;
@@ -98,6 +99,7 @@ export function CanvasView() {
       variationEditMode,
       selectedVariationLayer,
       fields: drawPreview ? { ...fields, controllers: [...fields.controllers, drawPreview] } : fields,
+      selectedControllerId,
       field,
       fieldEditMode,
       activeChannel,
@@ -124,6 +126,7 @@ export function CanvasView() {
       selectedVariationLayer,
       fields,
       drawPreview,
+      selectedControllerId,
       field,
       fieldEditMode,
       activeChannel,
@@ -206,6 +209,12 @@ export function CanvasView() {
   // active channel is grabbable — the others are drawn faintly for reference, so
   // a stray click on one must not start dragging it.
   const fieldsLive = useCallback(() => api.ref.current.fields, [api]);
+  // A synced controller is measured against the controller it follows, so that
+  // is what the canvas draws and what its handles have to address.
+  const sourceOf = useCallback(
+    (controller, list) => resolveSyncedGeometry(controller, new Map(list.map(c => [c.id, c]))),
+    []
+  );
 
   const handlePointerDown = useCallback(
     e => {
@@ -219,12 +228,15 @@ export function CanvasView() {
           // The selected controller wins a tie, so its handles stay reachable
           // even where another controller's overlap them.
           const candidates = fields.controllers.filter(c => c.channel === activeChannel);
-          const ordered = candidates.slice().sort((a, b) => (a.id === fields.selectedId ? -1 : 0) - (b.id === fields.selectedId ? -1 : 0)); // prettier-ignore
+          const ordered = candidates.slice().sort((a, b) => (a.id === selectedControllerId ? -1 : 0) - (b.id === selectedControllerId ? -1 : 0)); // prettier-ignore
           for (const controller of ordered) {
-            const handle = hitTestController(controller, sheet.x, sheet.y, view.baseScale);
+            const source = sourceOf(controller, fields.controllers);
+            const handle = hitTestController(controller, sheet.x, sheet.y, view.baseScale, 14, source);
             if (handle) {
               controllerDrag.current = { id: controller.id, handle };
-              if (controller.id !== fields.selectedId) actions.selectController(controller.id);
+              // Selecting is UI state, so grabbing an unselected controller's
+              // handle costs no undo step of its own.
+              if (controller.id !== selectedControllerId) actions.selectController(controller.id);
               e.currentTarget.setPointerCapture(e.pointerId);
               return;
             }
@@ -279,6 +291,8 @@ export function CanvasView() {
       activeChannel,
       fieldTool,
       actions,
+      selectedControllerId,
+      sourceOf,
     ]
   );
 
@@ -319,9 +333,17 @@ export function CanvasView() {
         const sheet = clientToSheet(e.clientX, e.clientY);
         if (!sheet) return;
         const { id, handle } = controllerDrag.current;
-        const controller = fieldsLive().controllers.find(c => c.id === id);
+        const live = fieldsLive().controllers;
+        const controller = live.find(c => c.id === id);
         if (!controller) return;
-        const patch = moveControllerHandle(controller, handle, sheet.x, sheet.y, e.shiftKey);
+        const patch = moveControllerHandle(
+          controller,
+          handle,
+          sheet.x,
+          sheet.y,
+          e.shiftKey,
+          sourceOf(controller, live)
+        );
         if (patch) actions.updateController(id, patch, true);
         return;
       }
@@ -357,7 +379,7 @@ export function CanvasView() {
         y: panOrigin.current.y + (e.clientY - panStart.current.y),
       });
     },
-    [isPanning, history, clientToSheet, selectedLayerLive, geom, showShapeHud, setPan, actions, fieldsLive, draftFromDrag] // prettier-ignore
+    [isPanning, history, clientToSheet, selectedLayerLive, geom, showShapeHud, setPan, actions, fieldsLive, draftFromDrag, sourceOf] // prettier-ignore
   );
 
   const handlePointerUp = useCallback(
@@ -410,14 +432,14 @@ export function CanvasView() {
             closestDist = Infinity;
           for (const controller of fields.controllers) {
             if (controller.channel !== activeChannel) continue;
-            const d = controllerBodyDistance(controller, sheet.x, sheet.y);
+            const d = controllerBodyDistance(controller, sheet.x, sheet.y, sourceOf(controller, fields.controllers));
             if (d < closestDist) {
               closestDist = d;
               closest = controller;
             }
           }
           // Same tolerance as a handle hit: within ~14 screen pixels of the body.
-          if (closest && closestDist * (view?.baseScale || 1) < 14 && closest.id !== fields.selectedId) {
+          if (closest && closestDist * (view?.baseScale || 1) < 14 && closest.id !== selectedControllerId) {
             actions.selectController(closest.id);
             pointerDownPos.current = null;
             return;
@@ -461,6 +483,8 @@ export function CanvasView() {
       showHud,
       fieldTool,
       activeChannel,
+      selectedControllerId,
+      sourceOf,
     ]
   );
 
@@ -474,7 +498,10 @@ export function CanvasView() {
     return () => window.removeEventListener("keydown", onKey);
   }, [fieldTool, setFieldTool]);
 
-  const fieldActive = fieldEditMode && fields.enabled;
+  // Every field handler below also requires showHud, so the cursor has to as
+  // well — otherwise hiding the overlay leaves a crosshair over a canvas where
+  // clicks only pan, with no rail, no controllers drawn and no badge.
+  const fieldActive = fieldEditMode && fields.enabled && showHud;
   const cursor =
     (variation.enabled && variationEditMode) || fieldActive
       ? "crosshair"
@@ -538,9 +565,9 @@ export function CanvasView() {
               <Badge color={dark ? "#2563eb" : "#1d4ed8"}>EDIT VARIATION · SPACE TO PAN</Badge>
             )}
             {fieldActive && (
-              <Badge color={dark ? "#7c3aed" : "#6d28d9"}>
+              <Badge color={dark ? "#4f46e5" : "#4338ca"}>
                 {fieldTool
-                  ? `CLICK TO PLACE ${fieldTool.toUpperCase()} · ESC TO STOP`
+                  ? `${fieldTool === "point" ? "CLICK" : "DRAG"} TO PLACE ${fieldTool.toUpperCase()} · ESC TO STOP`
                   : `${activeChannel.toUpperCase()} FIELD · SPACE TO PAN`}
               </Badge>
             )}

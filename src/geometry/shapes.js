@@ -27,7 +27,7 @@ import {
 } from "./polygon.js";
 import { hexEdgeReach, hexVertices } from "./hexagon.js";
 import { isInsideRoundedRect } from "./rounded-rect.js";
-import { superArea, superContains, superellipseVerts, superReach } from "./superellipse.js";
+import { superArea, superContains, superellipseGap, superellipseVerts } from "./superellipse.js";
 
 const f3 = n => n.toFixed(3);
 
@@ -327,18 +327,22 @@ const Superellipse = {
     return superContains(x, y, w / 2, h / 2, superN(n));
   },
   gap(h1, h2) {
-    // Same trick as the hexagon: for convex shapes (n >= 1 always is), the reach
-    // toward the other hole is a far better bound than the circumradius, which
-    // would read a tight lattice of squircles as overlapping.
-    const dx = h2.x - h1.x,
-      dy = h2.y - h1.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < 1e-9) return -(Math.max(h1.w, h1.h) / 2 + Math.max(h2.w, h2.h) / 2);
-    const dir = Math.atan2(dy, dx);
-    return (
-      dist -
-      superReach(h1.w / 2, h1.h / 2, superN(h1.superN), dir - (h1.angle || 0)) -
-      superReach(h2.w / 2, h2.h / 2, superN(h2.superN), dir + Math.PI - (h2.angle || 0))
+    // Support functions maximised over direction, not the reach along the centre
+    // line — see superellipseGap. The reach reads a clearance LARGER than the
+    // metal actually is (0.14 mm, 13% of the bridge, on nothing more exotic than
+    // the default 60° lattice with the shape slider at the square end), and this
+    // is the one statistic that must never fail in that direction.
+    return superellipseGap(
+      h2.x - h1.x,
+      h2.y - h1.y,
+      h1.w / 2,
+      h1.h / 2,
+      superN(h1.superN),
+      h1.angle || 0,
+      h2.w / 2,
+      h2.h / 2,
+      superN(h2.superN),
+      h2.angle || 0
     );
   },
   rotates: true,
