@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { PATTERN_TYPES } from "../core/constants.js";
 import { createDocument, patchIn } from "../core/document.js";
-import { buildParams, compileSpacing, computePattern, deriveGeometry } from "../core/pipeline.js";
+import { buildParams, compilePlacement, compileSpacing, computePattern, deriveGeometry } from "../core/pipeline.js";
 import { validateDocument } from "../core/persistence.js";
 import { generateSVGString } from "../export/svg.js";
 import { LAYOUTS, generateHoles, layoutReadsSpacing, tilingFlags } from "./index.js";
@@ -11,9 +11,12 @@ import { MAX_SCATTER_HOLES } from "./scatter.js";
 import { generateSpiralHoles } from "./spiral.js";
 import { generateFibonacciHoles } from "./fibonacci.js";
 import { compileControllers } from "../fields/controllers.js";
+import { DOC_LIMITS, MAX_PATHS, MAX_PATH_POINTS } from "../core/constants.js";
+import { patternSignature } from "../core/pipeline.js";
+import { addPathVertex, hitTestPath, movePathVertex, newPath, removePathVertex } from "./path-gizmo.js";
 
 const doc = (patch = {}) => patchIn(createDocument(), patch);
-const place = d => generateHoles(buildParams(d, deriveGeometry(d)), compileSpacing(d.fields));
+const place = d => generateHoles(buildParams(d, deriveGeometry(d)), compilePlacement(d));
 const positions = d => JSON.stringify(place(d));
 // A spacing controller at the middle of the default 200×200 sheet.
 const spacingController = (patch = {}) => ({
@@ -34,14 +37,15 @@ const spacingController = (patch = {}) => ({
 const withSpacing = (patch, controller = {}) =>
   doc({ ...patch, "fields.enabled": true, "fields.controllers": [spacingController(controller)] });
 
-test("the registry and the document's vocabulary describe the same nine modes", () => {
+test("the registry and the document's vocabulary describe the same ten modes", () => {
   // The document may hold any name from PATTERN_TYPES and the registry decides
   // what each one means, so a mode in one and not the other is either a type the
   // dropdown offers and nothing can generate, or a generator nothing can reach.
   assert.deepEqual(Object.keys(LAYOUTS), PATTERN_TYPES);
-  assert.equal(PATTERN_TYPES.length, 9);
+  assert.equal(PATTERN_TYPES.length, 10);
   for (const type of PATTERN_TYPES) {
-    assert.ok(["grid", "radial", "crosshatch", "free"].includes(LAYOUTS[type].family), type);
+    assert.ok(["grid", "radial", "crosshatch", "free", "path"].includes(LAYOUTS[type].family), type);
+    assert.ok(["grid", "radial", "free"].includes(LAYOUTS[type].spacingModel), type);
   }
   // And validation accepts every one of them rather than falling back.
   for (const type of PATTERN_TYPES) {
@@ -53,8 +57,14 @@ test("every mode fills the sheet, stays inside the boundary and exports", () => 
   for (const type of PATTERN_TYPES) {
     const d = doc({ "layout.type": type });
     const { activeHoles, stats, params } = computePattern(d);
-    assert.ok(activeHoles.length > 100, `${type}: only ${activeHoles.length} holes`);
-    assert.ok(stats.displayOAR > 5 && stats.displayOAR < 100, `${type}: OAR ${stats.displayOAR}`);
+    // Path strings its holes along one curve rather than filling an area, so it
+    // is the one mode whose default document is counted in dozens.
+    const floor = type === "Path" ? 20 : 100;
+    assert.ok(activeHoles.length > floor, `${type}: only ${activeHoles.length} holes`);
+    // One curve's worth of holes covers a couple of percent of the sheet, where
+    // an area fill covers tens.
+    assert.ok(stats.displayOAR > (type === "Path" ? 1 : 5), `${type}: OAR ${stats.displayOAR}`);
+    assert.ok(stats.displayOAR < 100, `${type}: OAR ${stats.displayOAR}`);
     assert.ok(
       activeHoles.every(h => Number.isFinite(h.x) && Number.isFinite(h.y)),
       type
@@ -193,17 +203,28 @@ test("closing the gap adds holes in every mode", () => {
 });
 
 test("the boundary corner radius clips every mode", () => {
+  // Radius 100 on a 200×200 sheet is a circle: nothing may survive outside it,
+  // and every mode that fills the area must lose the corners it used to fill.
+  // Path is the exception on the second half only — its default curve keeps well
+  // inside the circle, so there is nothing there to clip — which is why the
+  // containment check runs over a path that deliberately reaches the corners.
   for (const type of PATTERN_TYPES) {
     const square = computePattern(doc({ "layout.type": type })).activeHoles.length;
-    const rounded = computePattern(doc({ "layout.type": type, "boundary.cornerRadius": 100 })).activeHoles.length;
-    assert.ok(rounded < square, `${type}: a full-radius boundary must drop the corners`);
-    // Radius 100 on a 200×200 sheet is a circle, so what is left is inside it.
-    const holes = computePattern(doc({ "layout.type": type, "boundary.cornerRadius": 100 })).activeHoles;
+    const rounded = computePattern(doc({ "layout.type": type, "boundary.cornerRadius": 100 }));
+    if (type !== "Path") {
+      assert.ok(rounded.activeHoles.length < square, `${type}: a full-radius boundary must drop the corners`);
+    }
     assert.ok(
-      holes.every(h => Math.hypot(h.x - 100, h.y - 100) <= 100 + 1e-6),
+      rounded.activeHoles.every(h => Math.hypot(h.x - 100, h.y - 100) <= 100 + 1e-6),
       `${type}: a hole survived outside the circle`
     );
   }
+  const corners = {
+    "layout.type": "Path",
+    "layout.path.paths": [{ points: [{ x: 2, y: 2 }, { x: 198, y: 198 }], closed: false }], // prettier-ignore
+    "layout.path.smooth": false,
+  };
+  assert.ok(computePattern(doc({ ...corners, "boundary.cornerRadius": 100 })).activeHoles.length < computePattern(doc(corners)).activeHoles.length); // prettier-ignore
 });
 
 // ─── The spacing channel ──────────────────────────────────────────────
@@ -536,4 +557,164 @@ test("no two modes place the same holes", () => {
     assert.ok(!seen.has(key), `${type} places exactly what ${seen.get(key)} places`);
     seen.set(key, type);
   }
+});
+
+// ─── Path ─────────────────────────────────────────────────────────────
+
+const pathDoc = (patch = {}, points = null) =>
+  doc({
+    "layout.type": "Path",
+    ...(points ? { "layout.path.paths": [{ points, closed: false }] } : {}),
+    ...patch,
+  });
+
+test("a straight path spaces its holes exactly the step apart", () => {
+  // Within a segment the arc IS the chord, so this is the one case where the
+  // spacing the panel reports and the distance between two centres are the same
+  // number — and the test that says the walk carries its remainder across
+  // vertices rather than restarting at each one.
+  const line = pathDoc({ "layout.path.smooth": false }, [
+    { x: 20, y: 100 },
+    { x: 100, y: 100 },
+    { x: 180, y: 100 },
+  ]);
+  const holes = place(line);
+  const { geometry } = computePattern(line);
+  assert.ok(holes.length > 15, `${holes.length} holes`);
+  for (let i = 1; i < holes.length; i++) {
+    const step = Math.hypot(holes[i].x - holes[i - 1].x, holes[i].y - holes[i - 1].y);
+    assert.ok(
+      Math.abs(step - geometry.freeSpacingX) < 1e-9,
+      `pair ${i} is ${step} apart, not ${geometry.freeSpacingX}`
+    );
+  }
+  // And the vertex in the middle is not a seam: the holes run straight through
+  // it at the same spacing, which is what carrying the remainder buys.
+  assert.ok(holes.some(h => h.x > 95 && h.x < 105));
+});
+
+test("a closed path comes back to where it started", () => {
+  const square = [
+    { x: 50, y: 50 },
+    { x: 150, y: 50 },
+    { x: 150, y: 150 },
+    { x: 50, y: 150 },
+  ];
+  const open = place(pathDoc({ "layout.path.smooth": false }, square));
+  const closed = place(doc({ "layout.type": "Path", "layout.path.smooth": false, "layout.path.paths": [{ points: square, closed: true }] })); // prettier-ignore
+  // The fourth side is the difference, and it is a quarter of the perimeter.
+  assert.ok(closed.length > open.length, `${closed.length} against ${open.length}`);
+  assert.ok(
+    closed.some(h => h.x < 55 && h.y > 100),
+    "the closing side should carry holes"
+  );
+});
+
+test("holes turn along the path only when asked to", () => {
+  const diagonal = [
+    { x: 40, y: 40 },
+    { x: 160, y: 160 },
+  ];
+  const rect = { "hole.shape": "Rectangle", "hole.w": 8, "hole.h": 3, "layout.path.smooth": false };
+  const turned = place(pathDoc(rect, diagonal));
+  assert.ok(
+    turned.every(h => Math.abs(h.angle - Math.PI / 4) < 1e-9),
+    "every hole should lie along the diagonal"
+  );
+  const flat = place(pathDoc({ ...rect, "layout.path.alignToTangent": false }, diagonal));
+  assert.ok(flat.every(h => !h.angle));
+});
+
+test("the default curve is what Add Path hands over", () => {
+  // Pressing Add Path must not move the pattern: the layout's fallback curve and
+  // the first curve the panel creates are the same one.
+  const implicit = place(doc({ "layout.type": "Path" }));
+  const area = { x: 0, y: 0, w: 200, h: 200 };
+  const explicit = place(doc({ "layout.type": "Path", "layout.path.paths": [newPath(area)] }));
+  assert.deepEqual(explicit, implicit);
+  assert.ok(implicit.length > 20);
+});
+
+test("a spacing controller thins a path, and only where it reaches", () => {
+  const line = [
+    { x: 10, y: 100 },
+    { x: 190, y: 100 },
+  ];
+  const base = place(pathDoc({ "layout.path.smooth": false }, line));
+  const thinned = place(
+    doc({
+      "layout.type": "Path",
+      "layout.path.smooth": false,
+      "layout.path.paths": [{ points: line, closed: false }],
+      "fields.enabled": true,
+      "fields.controllers": [spacingController({ target: 3, radius: 45 })],
+    })
+  );
+  assert.ok(thinned.length < base.length);
+  // The left end is outside the controller's reach, so the first few holes are
+  // where they always were — a global multiplier would have moved them.
+  assert.ok(Math.abs(thinned[1].x - base[1].x) < 1e-9, "the far end should be untouched");
+});
+
+test("editing a path clears the removed holes, and only in Path mode", () => {
+  const moved = { x: 60, y: 60 };
+  const base = pathDoc({ "layout.path.smooth": false }, [{ x: 40, y: 40 }, { x: 160, y: 160 }]); // prettier-ignore
+  const edited = patchIn(base, { "layout.path.paths": [{ points: [{ x: 40, y: 40 }, moved], closed: false }] });
+  assert.notEqual(positions(edited), positions(base));
+  assert.notEqual(patternSignature(edited), patternSignature(base));
+  // The same edit under a mode that does not read the curves must leave the
+  // removals alone — the block is signed only by the mode that walks it.
+  const grid = patchIn(base, { "layout.type": "Straight" });
+  assert.equal(
+    patternSignature(patchIn(grid, { "layout.path.paths": [{ points: [{ x: 40, y: 40 }, moved], closed: false }] })),
+    patternSignature(grid)
+  );
+});
+
+test("the path gizmo moves, adds and drops vertices within the document's range", () => {
+  const paths = [{ points: [{ x: 10, y: 10 }, { x: 90, y: 10 }, { x: 90, y: 90 }], closed: false }]; // prettier-ignore
+  // A drag at a zoomed-out view can ask for a coordinate no document may hold;
+  // clamping here is what lets the editor read back its own output.
+  const far = movePathVertex(paths, 0, 1, 1e6, -1e6);
+  const [lo, hi] = DOC_LIMITS["layout.path.coord"];
+  assert.deepEqual(far[0].points[1], { x: hi, y: lo });
+  assert.deepEqual(far[0].points[0], paths[0].points[0], "the other vertices are untouched");
+
+  // A new vertex splits the longest span, which here is the first.
+  const grown = addPathVertex(paths[0]);
+  assert.equal(grown.points.length, 4);
+  assert.deepEqual(grown.points[1], { x: 50, y: 10 });
+  assert.equal(removePathVertex(grown).points.length, 3);
+  assert.equal(removePathVertex({ points: paths[0].points.slice(0, 2) }), null, "two vertices is the floor");
+
+  // Hit testing is in screen pixels, so the handles stay grabbable at any zoom.
+  assert.deepEqual(hitTestPath(paths, 91, 11, 1, 14), { pathIndex: 0, pointIndex: 1 });
+  assert.equal(hitTestPath(paths, 50, 50, 1, 14), null);
+  assert.equal(hitTestPath(paths, 91, 11, 100, 14), null, "zoomed in, the same click is 1.4 mm off and misses");
+});
+
+test("a path refuses a step it cannot draw rather than covering part of a curve", () => {
+  // Four full-length zigzags at the finest step the sliders and the field allow.
+  // The cap is a backstop, not a budget: one ordinary curve cannot come near it.
+  const zigzag = Array.from({ length: MAX_PATH_POINTS }, (_, i) => ({
+    x: i % 2 ? 990 : 10,
+    y: 10 + (i * 980) / MAX_PATH_POINTS,
+  }));
+  const fine = doc({
+    "layout.type": "Path",
+    "layout.path.smooth": false,
+    "layout.path.paths": Array.from({ length: MAX_PATHS }, () => ({ points: zigzag, closed: false })),
+    "hole.diameter": 0.5,
+    "layout.edgeGapX": 0,
+    "sheet.w": 1000,
+    "sheet.h": 1000,
+    "fields.enabled": true,
+    "fields.controllers": [spacingController({ target: 0.2, radius: 2000, falloff: "hard" })],
+  });
+  assert.equal(place(fine).length, 0);
+  // One of those curves at the same step still draws, and draws all of it.
+  const single = patchIn(fine, { "layout.path.paths": [{ points: zigzag.slice(0, 8), closed: false }] });
+  const holes = place(single);
+  assert.ok(holes.length > 10000, `${holes.length} holes`);
+  assert.ok(Math.min(...holes.map(h => h.y)) < 60 && Math.max(...holes.map(h => h.y)) > 140);
 });

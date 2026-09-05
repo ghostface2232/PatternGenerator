@@ -13,6 +13,7 @@ import {
 } from "../../fields/gizmo.js";
 import { resolveSyncedGeometry } from "../../fields/controllers.js";
 import { controllerBodyDistance, hitTestController, moveControllerHandle } from "../../fields/controller-gizmo.js";
+import { hitTestPath, movePathVertex, pathBodyDistance } from "../../layouts/path-gizmo.js";
 import { drawScene } from "../../render/canvas-renderer.js";
 import { canvasToSheet, zoomAbout } from "../../render/view.js";
 import { useEditor } from "../EditorContext.jsx";
@@ -48,6 +49,8 @@ export function CanvasView() {
   } = useEditor();
   const { dark, showHud, holeRemovalMode, variationEditMode, pan, setPan, zoom, setZoom, setVariationHud } = ui;
   const { fieldEditMode, activeChannel, fieldTool, setFieldTool, selectedControllerId } = ui;
+  const { pathEditMode, selectedPath } = ui;
+  const pathBlock = doc.layout.path;
   const { variation, fields } = doc;
   const { holeColor, bgColor } = doc.appearance;
   const { marginLeft, marginTop } = params;
@@ -62,6 +65,7 @@ export function CanvasView() {
   const pointerDownPos = useRef(null);
   const variationDrag = useRef(null);
   const controllerDrag = useRef(null); // { id, handle } while a handle is held
+  const pathDrag = useRef(null); // { pathIndex, pointIndex } while a path vertex is held
   const drawDrag = useRef(null); // { kind, from } while a line/curve is being drawn
   const [drawPreview, setDrawPreview] = useState(null);
   const spacePressed = useRef(false);
@@ -108,6 +112,9 @@ export function CanvasView() {
       holeColor,
       bgColor,
       geometry,
+      pathBlock,
+      pathEditMode,
+      selectedPath,
     }),
     [
       dark,
@@ -135,6 +142,9 @@ export function CanvasView() {
       holeColor,
       bgColor,
       geometry,
+      pathBlock,
+      pathEditMode,
+      selectedPath,
     ]
   );
 
@@ -222,6 +232,17 @@ export function CanvasView() {
       pointerDownPos.current = { x: e.clientX, y: e.clientY };
       const view = viewRef.current;
 
+      if (pathEditMode && showHud && !spacePressed.current && view) {
+        const sheet = clientToSheet(e.clientX, e.clientY);
+        const hit = sheet && hitTestPath(pathBlock.paths, sheet.x, sheet.y, view.baseScale);
+        if (hit) {
+          pathDrag.current = hit;
+          if (hit.pathIndex !== selectedPath) actions.selectPath(hit.pathIndex);
+          e.currentTarget.setPointerCapture(e.pointerId);
+          return;
+        }
+      }
+
       if (fieldEditMode && fields.enabled && showHud && !spacePressed.current && view) {
         const sheet = clientToSheet(e.clientX, e.clientY);
         if (sheet) {
@@ -293,6 +314,9 @@ export function CanvasView() {
       actions,
       selectedControllerId,
       sourceOf,
+      pathEditMode,
+      pathBlock,
+      selectedPath,
     ]
   );
 
@@ -347,6 +371,15 @@ export function CanvasView() {
         if (patch) actions.updateController(id, patch, true);
         return;
       }
+      if (pathDrag.current) {
+        const sheet = clientToSheet(e.clientX, e.clientY);
+        if (!sheet) return;
+        const { pathIndex, pointIndex } = pathDrag.current;
+        const paths = api.ref.current.layout.path.paths;
+        if (!paths[pathIndex]?.points[pointIndex]) return;
+        actions.setPaths(movePathVertex(paths, pathIndex, pointIndex, sheet.x, sheet.y), true);
+        return;
+      }
       if (drawDrag.current) {
         const sheet = clientToSheet(e.clientX, e.clientY);
         if (!sheet) return;
@@ -379,13 +412,19 @@ export function CanvasView() {
         y: panOrigin.current.y + (e.clientY - panStart.current.y),
       });
     },
-    [isPanning, history, clientToSheet, selectedLayerLive, geom, showShapeHud, setPan, actions, fieldsLive, draftFromDrag, sourceOf] // prettier-ignore
+    [isPanning, history, clientToSheet, selectedLayerLive, geom, showShapeHud, setPan, actions, api, fieldsLive, draftFromDrag, sourceOf] // prettier-ignore
   );
 
   const handlePointerUp = useCallback(
     e => {
       if (controllerDrag.current) {
         controllerDrag.current = null;
+        api.closeGroup(); // the whole drag is one undo step
+        pointerDownPos.current = null;
+        return;
+      }
+      if (pathDrag.current) {
+        pathDrag.current = null;
         api.closeGroup(); // the whole drag is one undo step
         pointerDownPos.current = null;
         return;
@@ -447,6 +486,29 @@ export function CanvasView() {
         }
       }
 
+      // A click on another curve while editing paths selects it, the same way a
+      // click on another controller selects that.
+      if (pathEditMode && showHud && wasClick && !spacePressed.current && pathBlock.paths.length > 1) {
+        const sheet = clientToSheet(e.clientX, e.clientY);
+        const view = viewRef.current;
+        if (sheet) {
+          let closest = -1,
+            closestDist = Infinity;
+          pathBlock.paths.forEach((path, index) => {
+            const d = pathBodyDistance(path, sheet.x, sheet.y, pathBlock.smooth !== false);
+            if (d < closestDist) {
+              closestDist = d;
+              closest = index;
+            }
+          });
+          if (closest >= 0 && closestDist * (view?.baseScale || 1) < 14 && closest !== selectedPath) {
+            actions.selectPath(closest);
+            pointerDownPos.current = null;
+            return;
+          }
+        }
+      }
+
       // A click (not a drag) in removal mode toggles the nearest hole.
       if (holeRemovalMode && wasClick) {
         {
@@ -485,6 +547,9 @@ export function CanvasView() {
       activeChannel,
       selectedControllerId,
       sourceOf,
+      pathEditMode,
+      pathBlock,
+      selectedPath,
     ]
   );
 
@@ -502,8 +567,9 @@ export function CanvasView() {
   // well — otherwise hiding the overlay leaves a crosshair over a canvas where
   // clicks only pan, with no rail, no controllers drawn and no badge.
   const fieldActive = fieldEditMode && fields.enabled && showHud;
+  const pathActive = pathEditMode && showHud;
   const cursor =
-    (variation.enabled && variationEditMode) || fieldActive
+    (variation.enabled && variationEditMode) || fieldActive || pathActive
       ? "crosshair"
       : isPanning
         ? "grabbing"
@@ -563,6 +629,12 @@ export function CanvasView() {
             )}
             {variation.enabled && variationEditMode && (
               <Badge color={dark ? "#2563eb" : "#1d4ed8"}>EDIT VARIATION · SPACE TO PAN</Badge>
+            )}
+            {pathActive && (
+              <Badge color={dark ? "#ea580c" : "#c2410c"}>
+                EDIT PATH{pathBlock.paths.length > 1 ? ` ${selectedPath + 1}/${pathBlock.paths.length}` : ""} · SPACE TO
+                PAN
+              </Badge>
             )}
             {fieldActive && (
               <Badge color={dark ? "#4f46e5" : "#4338ca"}>

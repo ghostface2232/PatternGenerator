@@ -302,14 +302,16 @@ test("a v1 document upgrades to the current schema with every later block inert"
   delete v1.hole.shapeMix;
   delete v1.layout.crosshatch;
   delete v1.layout.scatter;
+  delete v1.layout.path;
   const upgraded = migrateDocument(v1);
-  assert.equal(upgraded.schemaVersion, 3);
+  assert.equal(upgraded.schemaVersion, 4);
   assert.deepEqual(upgraded.fields, { enabled: false, controllers: [] });
   assert.deepEqual(upgraded.assets, {});
   assert.equal(upgraded.hole.shapeMix, fresh.hole.shapeMix);
   // Phase 3's layout blocks are read only by modes a v1 document cannot name.
   assert.deepEqual(upgraded.layout.crosshatch, fresh.layout.crosshatch);
   assert.deepEqual(upgraded.layout.scatter, fresh.layout.scatter);
+  assert.deepEqual(upgraded.layout.path, fresh.layout.path);
   // Same pattern as before the upgrade, to the hole.
   assert.equal(computePattern(upgraded).activeHoles.length, 739);
 });

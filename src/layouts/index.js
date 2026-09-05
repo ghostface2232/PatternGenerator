@@ -1,18 +1,21 @@
 // The layout registry and the one entry point into hole placement.
 //
-// `generateHoles(params, spacing)` is the whole contract: a flat record of
-// primitives describing the sheet, the hole and the mode, plus an optional
-// compiled spacing field. Everything below it takes explicit arguments — no mode
-// reaches back into `params` — so the list in core/pipeline.js
-// (PLACEMENT_PARAMS) can be exactly the destructuring below, and that equality
-// is what makes the removed-hole rule sound: an edit that could move a hole must
-// change the pattern signature, and a signature over these values plus the
-// spacing field covers every input placement has.
+// `generateHoles(params, placement)` is the whole contract. Everything below it
+// takes explicit arguments — no mode reaches back into `params` — so the list in
+// core/pipeline.js (PLACEMENT_PARAMS) can be exactly the destructuring below,
+// and that equality is what makes the removed-hole rule sound: an edit that
+// could move a hole must change the pattern signature, and a signature over
+// these two arguments covers every input placement has.
 //
-// The spacing field is the Phase 3 addition, and the reason it is a second
-// argument rather than a param: it is a sampler, not a value, and it carries its
-// own signature (see `compileSpacing` in core/pipeline.js) so the pair stays
-// signable without smuggling a function through a record of primitives.
+// The two differ in kind, not importance:
+//
+//   params     a flat record of PRIMITIVES describing the sheet, the hole and
+//              the mode. Signed field by field, each with its type.
+//   placement  the placement inputs that are not primitives — the compiled
+//              spacing field (a sampler) and the Path layout's curves (a nested
+//              list). Built by `compilePlacement` in core/pipeline.js, which
+//              hands back one signature covering all of it, so nothing has to be
+//              smuggled through a record of primitives to be signed.
 import { isInsideRoundedRect } from "../geometry/rounded-rect.js";
 import { forEachLatticePoint } from "./lattice.js";
 import { diamondLatticeBasis, generateGridHoles } from "./grid.js";
@@ -21,30 +24,37 @@ import { generateCrosshatchHoles } from "./crosshatch.js";
 import { generateScatterHoles } from "./scatter.js";
 import { generateSpiralHoles } from "./spiral.js";
 import { generateFibonacciHoles } from "./fibonacci.js";
+import { generatePathHoles } from "./path.js";
 
 // One entry per mode the Type dropdown offers, in that order.
 //
-//   family       which panel of parameters the mode is described by
-//   spacing      does the mode read the spacing field channel
-//   theoretical  can its open-area ratio come from a unit cell, or must the
-//                statistics count the holes that are actually there
+//   family        which generator the mode dispatches to
+//   spacingModel  how its nominal hole-to-hole distance is measured: "grid" from
+//                 the hole's width and height plus the edge gaps, "free" from
+//                 the circumscribed diameter (the modes that place holes at
+//                 arbitrary angles to one another), "radial" from its own rings
+//   spacing       does the mode read the spacing field channel
+//   theoretical   can its open-area ratio come from a unit cell, or must the
+//                 statistics count the holes that are actually there
 //
 // core/constants.js keeps PATTERN_TYPES as the ordered list the document may
 // hold; layouts.test.js asserts the two agree, so neither can gain a mode the
 // other has not heard of.
 export const LAYOUTS = {
-  Straight: { family: "grid", spacing: true, theoretical: true },
-  "Staggered 60°": { family: "grid", spacing: true, theoretical: true },
-  "Staggered 45°": { family: "grid", spacing: true, theoretical: true },
-  Radial: { family: "radial", spacing: false, theoretical: false },
-  "Custom Angle": { family: "grid", spacing: true, theoretical: true },
-  "Cross-hatch": { family: "crosshatch", spacing: true, theoretical: true },
-  Scatter: { family: "free", spacing: true, theoretical: false },
-  Spiral: { family: "free", spacing: true, theoretical: false },
-  Fibonacci: { family: "free", spacing: true, theoretical: false },
+  Straight: { family: "grid", spacingModel: "grid", spacing: true, theoretical: true },
+  "Staggered 60°": { family: "grid", spacingModel: "grid", spacing: true, theoretical: true },
+  "Staggered 45°": { family: "grid", spacingModel: "grid", spacing: true, theoretical: true },
+  Radial: { family: "radial", spacingModel: "radial", spacing: false, theoretical: false },
+  "Custom Angle": { family: "grid", spacingModel: "grid", spacing: true, theoretical: true },
+  "Cross-hatch": { family: "crosshatch", spacingModel: "grid", spacing: true, theoretical: true },
+  Scatter: { family: "free", spacingModel: "free", spacing: true, theoretical: false },
+  Spiral: { family: "free", spacingModel: "free", spacing: true, theoretical: false },
+  Fibonacci: { family: "free", spacingModel: "free", spacing: true, theoretical: false },
+  Path: { family: "path", spacingModel: "free", spacing: true, theoretical: false },
 };
 
 export const layoutFamily = patternType => LAYOUTS[patternType]?.family ?? "grid";
+export const layoutSpacingModel = patternType => LAYOUTS[patternType]?.spacingModel ?? "grid";
 
 // Which of the three uniform-ligament tilings a shape/mode pair lands on. They
 // replace the generic grid with an exact tiling whose edge gap is the same
@@ -82,7 +92,7 @@ export function tilingFlags(holeShape, patternType) {
 export const layoutReadsSpacing = (holeShape, patternType) =>
   LAYOUTS[patternType]?.spacing === true && !tilingFlags(holeShape, patternType).uniformGapMode;
 
-export function generateHoles(params, spacing = null) {
+export function generateHoles(params, placement = null) {
   const {
     diameter,
     holeShape,
@@ -150,7 +160,9 @@ export function generateHoles(params, spacing = null) {
   }
 
   const flags = tilingFlags(holeShape, patternType);
-  const field = layoutReadsSpacing(holeShape, patternType) ? spacing : null;
+  // Already gated by `compilePlacement`, which is where the one decision about
+  // which modes read the channel lives — see layoutReadsSpacing.
+  const field = placement?.spacing ?? null;
   // Grid-family centres may overhang the perforation bounds by up to one hole
   // radius; the free-form modes fill the bounds exactly, because a scattered
   // hole hanging half off the panel edge reads as a mistake where a grid's does
@@ -198,6 +210,20 @@ export function generateHoles(params, spacing = null) {
   if (patternType === "Fibonacci") {
     return clipToBoundary(
       generateFibonacciHoles({ bounds, minSpacing: freeSpacingX, spacing: field, holeAngle: flatTheta })
+    );
+  }
+  if (patternType === "Path") {
+    const path = placement?.path;
+    return clipToBoundary(
+      generatePathHoles({
+        bounds,
+        paths: path?.paths,
+        smooth: path?.smooth !== false,
+        alignToTangent: path?.alignToTangent !== false,
+        step: freeSpacingX,
+        spacing: field,
+        holeAngle: flatTheta,
+      })
     );
   }
 

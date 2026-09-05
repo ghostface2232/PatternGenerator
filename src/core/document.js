@@ -3,7 +3,7 @@
 // Bump DOC_SCHEMA_VERSION and add a migration in persistence when the shape changes.
 import { DEFAULT_VARIATION } from "../fields/variation-engine.js";
 
-export const DOC_SCHEMA_VERSION = 3;
+export const DOC_SCHEMA_VERSION = 4;
 
 export const cloneVariation = variation => ({
   ...variation,
@@ -51,7 +51,13 @@ export function createDocument() {
       crosshatch: { angleA: 45, angleB: -45 },
       // Scatter: the seed the Poisson-disk sampler draws from. In the document
       // because the pattern has to be reproducible from the document alone.
+      // Voronoi draws its cell sites from the same one.
       scatter: { seed: 1 },
+      // Path: the curves holes are strung along. Empty means "no curve drawn
+      // yet", and the layout falls back to a default S across the perforation
+      // area so the mode shows something the moment it is picked; the panel's
+      // Add Path seeds an editable copy of that same curve.
+      path: { paths: [], smooth: true, alignToTangent: true },
       radial: {
         edgeGap: 5,
         circumGap: 5,

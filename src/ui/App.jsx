@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_VARIATION_LAYERS } from "../core/constants.js";
-import { cloneVariation, createDocument } from "../core/document.js";
+import { CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_PATHS, MAX_VARIATION_LAYERS } from "../core/constants.js";
+import { cloneVariation, createDocument, setIn } from "../core/document.js";
 import {
   buildParams,
   compileDocumentField,
-  compileSpacing,
+  compilePlacement,
   computeStats,
   decorateHoles,
   deriveGeometry,
@@ -29,6 +29,7 @@ import {
   touchRecent,
 } from "../core/persistence.js";
 import { generateHoles } from "../layouts/index.js";
+import { addPathVertex, newPath, removePathVertex } from "../layouts/path-gizmo.js";
 import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
 import { EDITABLE_CHANNELS, IMAGE_CHANNELS, MAX_CONTROLLERS, createController } from "../fields/controllers.js";
@@ -81,14 +82,14 @@ function loadInitialDocument() {
   return stored;
 }
 
-// The compiled spacing field, memoised by VALUE rather than by identity.
+// The compiled placement inputs, memoised by VALUE rather than by identity.
 //
-// `compileSpacing` returns a fresh object for every edit of the fields block,
-// but only a change to its SIGNATURE can move a hole — and regenerating the
-// pattern costs orders of magnitude more than compiling the field. Keyed on
-// `fields` alone, a document holding one spacing controller re-ran the whole
-// layout on every frame of an unrelated size-controller drag: measured at about
-// 200 ms a frame on an 11 k-hole scatter, for byte-identical centres.
+// `compilePlacement` returns a fresh object for every edit of the document, but
+// only a change to its SIGNATURE can move a hole — and regenerating the pattern
+// costs orders of magnitude more than compiling the field. Keyed on identity
+// alone, a document holding one spacing controller re-ran the whole layout on
+// every frame of an unrelated size-controller drag: measured at about 200 ms a
+// frame on an 11 k-hole scatter, for byte-identical centres.
 //
 // Held in state and adjusted during render — React's own pattern for "I have a
 // new value but it means the same thing as the old one". The adjusting render
@@ -97,8 +98,8 @@ function loadInitialDocument() {
 // same object both times, so it still generates once. A ref would read more
 // simply and is what the lint rules forbid, correctly: this value IS needed for
 // rendering.
-function useSpacingField(fields) {
-  const compiled = useMemo(() => compileSpacing(fields), [fields]);
+function usePlacementField(doc) {
+  const compiled = useMemo(() => compilePlacement(doc), [doc]);
   const [held, setHeld] = useState(compiled);
   if ((held?.signature ?? null) !== (compiled?.signature ?? null)) {
     setHeld(compiled);
@@ -132,6 +133,7 @@ export default function App() {
   const [variationAdvanced, setVariationAdvanced] = useState(false);
   const [variationHud, setVariationHud] = useState(null);
   const [fieldEditMode, setFieldEditMode] = useState(false);
+  const [pathEditMode, setPathEditMode] = useState(false);
   const [activeChannel, setActiveChannel] = useState(EDITABLE_CHANNELS[0]);
   const [fieldTool, setFieldTool] = useState(null); // armed kind for click-to-add on the canvas
   // Which controller the inspector is showing. UI state, like every other
@@ -139,6 +141,9 @@ export default function App() {
   // click, and clicking between controllers would evict real edits from a
   // hundred-step history.
   const [selectedId, setSelectedId] = useState(null);
+  // Which Path curve the panel shows and the canvas highlights. UI state for the
+  // same reason a controller selection is: it changes on every click.
+  const [selectedPath, setSelectedPath] = useState(0);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [savedDoc, setSavedDoc] = useState(() => (startedClean ? doc : null)); // last written to localStorage
@@ -156,13 +161,12 @@ export default function App() {
   const patternDoc = useMemo(() => ({ hole, layout, sheet, boundary, taper }), [hole, layout, sheet, boundary, taper]);
   const geometry = useMemo(() => deriveGeometry(patternDoc), [patternDoc]);
   const params = useMemo(() => buildParams(patternDoc, geometry), [patternDoc, geometry]);
-  // The spacing channel is the only part of the field system that moves a hole,
-  // so it is compiled apart from the rest and only it reaches the generator.
-  // Held by signature (see useSpacingField) so that editing a size, angle or
-  // shape controller leaves the generated centres alone instead of regenerating
-  // the whole pattern for an identical result.
-  const spacing = useSpacingField(fields);
-  const baseHoles = useMemo(() => generateHoles(params, spacing), [params, spacing]);
+  // The placement inputs that are not primitives: the spacing channel and the
+  // Path curves. Held by signature (see usePlacementField) so that editing a
+  // size, angle or shape controller leaves the generated centres alone instead
+  // of regenerating the whole pattern for an identical result.
+  const placement = usePlacementField(doc);
+  const baseHoles = useMemo(() => generateHoles(params, placement), [params, placement]);
   // Decoding an image is asynchronous and lives outside the document, so the
   // maps arrive after the first render and simply recompile the field then.
   const decodedImages = useImageMaps(doc.assets);
@@ -409,6 +413,7 @@ export default function App() {
       setVariationEditMode(next);
       if (next) {
         setHoleRemovalMode(false);
+        setPathEditMode(false);
         setFieldEditMode(false);
         setFieldTool(null);
         if (!history.ref.current.enabled) history.commit(current => ({ ...current, enabled: true }));
@@ -495,6 +500,7 @@ export default function App() {
       if (on) {
         setHoleRemovalMode(false);
         setVariationEditMode(false);
+        setPathEditMode(false);
         if (!api.ref.current.fields.enabled) api.set("fields.enabled", true);
       } else {
         setFieldTool(null);
@@ -594,9 +600,52 @@ export default function App() {
       setHoleRemovalMode(on);
       if (on) {
         setVariationEditMode(false);
+        setPathEditMode(false);
         enterFieldEditMode(false);
       }
     };
+
+    // ─── Path curves ───────────────────────────────────────────────
+    // The curves live in the document, so every edit here is an undo step and a
+    // vertex drag coalesces into one, exactly like a controller handle.
+    const livePaths = () => api.ref.current.layout.path.paths;
+    const togglePathEditMode = () => {
+      const next = !pathEditMode;
+      setPathEditMode(next);
+      if (next) {
+        setVariationEditMode(false);
+        setHoleRemovalMode(false);
+        enterFieldEditMode(false);
+        // Editing needs something to edit: the layout draws a default curve
+        // when the list is empty, and this makes that same curve real rather
+        // than leaving the canvas showing a line with no handles on it.
+        if (livePaths().length === 0) api.set("layout.path.paths", [newPath(perfArea)]);
+      }
+    };
+    const addPath = () => {
+      const paths = livePaths();
+      if (paths.length >= MAX_PATHS) return;
+      api.set("layout.path.paths", [...paths, newPath(perfArea, paths)]);
+      setSelectedPath(paths.length);
+      setPathEditMode(true);
+    };
+    const removePath = index =>
+      api.update(d => {
+        const paths = d.layout.path.paths.filter((_, i) => i !== index);
+        setSelectedPath(current => Math.max(0, Math.min(current, paths.length - 1)));
+        return setIn(d, "layout.path.paths", paths);
+      });
+    const setPaths = (paths, live = false) =>
+      api.set("layout.path.paths", paths, live ? { merge: "layout.path.paths" } : {});
+    const editPathVertices = (index, edit) => {
+      const paths = livePaths();
+      const next = edit(paths[index]);
+      if (next) setPaths(paths.map((path, i) => (i === index ? next : path)));
+    };
+    const addVertex = index => editPathVertices(index, addPathVertex);
+    const removeVertex = index => editPathVertices(index, removePathVertex);
+    const togglePathClosed = index =>
+      setPaths(livePaths().map((path, i) => (i === index ? { ...path, closed: !path.closed } : path)));
     const resetView = () => {
       setZoom(1);
       setPan({ x: 0, y: 0 });
@@ -637,9 +686,17 @@ export default function App() {
       setControllerImage,
       clearControllerImage,
       setHoleRemoval,
+      togglePathEditMode,
+      addPath,
+      removePath,
+      setPaths,
+      addVertex,
+      removeVertex,
+      togglePathClosed,
+      selectPath: setSelectedPath,
       resetView,
     };
-  }, [doc, api, history, variationEditMode, fieldEditMode, activeChannel, perfArea, selectedId, selectedControllerId]);
+  }, [doc, api, history, variationEditMode, fieldEditMode, pathEditMode, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
@@ -678,8 +735,10 @@ export default function App() {
       setVariationEditMode(false);
       setHoleRemovalMode(false);
       setFieldEditMode(false);
+      setPathEditMode(false);
       setFieldTool(null);
       setSelectedId(null);
+      setSelectedPath(0);
       setVariationHud(null);
     },
     [api, flushPending]
@@ -799,6 +858,8 @@ export default function App() {
     variationHud,
     setVariationHud,
     fieldEditMode,
+    pathEditMode,
+    selectedPath,
     activeChannel,
     fieldTool,
     setFieldTool,

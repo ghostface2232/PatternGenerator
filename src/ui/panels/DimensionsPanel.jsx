@@ -1,12 +1,12 @@
-import { MoveVertical, Shuffle } from "lucide-react";
-import { DIAMOND_ORIENTATIONS, RADIAL_LAYOUTS, RADIAL_MODES } from "../../core/constants.js";
+import { MoveVertical, Shuffle, SquarePen, X } from "lucide-react";
+import { DIAMOND_ORIENTATIONS, MAX_PATHS, MAX_PATH_POINTS, RADIAL_LAYOUTS, RADIAL_MODES } from "../../core/constants.js"; // prettier-ignore
 import { useEditor } from "../EditorContext.jsx";
 import { Dropdown, LinkButton, PitchInfo, SegRow, SliderRow, Toggle } from "../controls/index.js";
 import { MONO } from "../theme.js";
 import { Section, hintStyle, noteStyle, subLabelStyle } from "./Section.jsx";
 
 export function DimensionsPanel() {
-  const { doc, api, theme, geometry: g, stats, actions } = useEditor();
+  const { doc, api, theme, ui, geometry: g, stats, actions } = useEditor();
   const { dark } = theme;
   const { hole, layout, sheet, boundary } = doc;
   const { radial, crosshatch } = layout;
@@ -19,7 +19,7 @@ export function DimensionsPanel() {
   // can draw, rather than filling part of the sheet and leaving the rest blank.
   // Refusing is only the better answer if it says so: an empty canvas with no
   // explanation is worse than either.
-  const tooFine = (g.isCrosshatch || g.isFreeform) && stats.holeCount === 0 && !g.crossDegenerate;
+  const tooFine = (g.isCrosshatch || g.usesFreeSpacing) && stats.holeCount === 0 && !g.crossDegenerate;
 
   return (
     <Section title="Dimensions" theme={theme}>
@@ -205,6 +205,134 @@ export function DimensionsPanel() {
         </>
       )}
 
+      {/* Path: the curves the holes are strung along. Vertices are dragged on the
+          canvas; everything about which curve, and how many points it has, is
+          here — the same division as the polyline field controller. */}
+      {g.isPath && (
+        <>
+          <button
+            onClick={actions.togglePathEditMode}
+            aria-label="Edit path curves on the canvas"
+            aria-pressed={ui.pathEditMode}
+            style={{
+              width: "100%",
+              height: 31,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 5,
+              border: `1px solid ${ui.pathEditMode ? theme.accent : theme.border}`,
+              borderRadius: 4,
+              background: ui.pathEditMode ? theme.accentBg : theme.controlBg,
+              color: ui.pathEditMode ? theme.accent : theme.textPrimary,
+              fontSize: 10,
+              cursor: "pointer",
+              fontFamily: MONO,
+              marginBottom: 10,
+            }}
+          >
+            <SquarePen size={11} /> {ui.pathEditMode ? "Editing Canvas" : "Edit on Canvas"}
+          </button>
+          {layout.path.paths.length === 0 ? (
+            <div style={hintStyle(theme)}>
+              No curve drawn yet, so the holes follow a default S across the panel. Add a path to take hold of it.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
+              {layout.path.paths.map((path, index) => (
+                <div key={index} style={{ display: "flex", gap: 4 }}>
+                  <button
+                    onClick={() => actions.selectPath(index)}
+                    aria-label={`Select path ${index + 1}`}
+                    aria-pressed={index === ui.selectedPath}
+                    style={{
+                      flex: 1,
+                      height: 26,
+                      border: `1px solid ${index === ui.selectedPath ? theme.accent : theme.border}`,
+                      borderRadius: 4,
+                      background: index === ui.selectedPath ? theme.accentBg : "transparent",
+                      color: index === ui.selectedPath ? theme.accent : theme.textSecondary,
+                      fontSize: 9,
+                      cursor: "pointer",
+                      fontFamily: MONO,
+                    }}
+                  >
+                    Path {index + 1} · {path.points.length} pts{path.closed ? " · loop" : ""}
+                  </button>
+                  <button
+                    onClick={() => actions.removePath(index)}
+                    aria-label={`Remove path ${index + 1}`}
+                    title="Remove this path"
+                    style={{
+                      width: 26,
+                      height: 26,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: 4,
+                      background: theme.controlBg,
+                      color: theme.warn,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            {[
+              ["Add a path", () => actions.addPath(), layout.path.paths.length >= MAX_PATHS, "+ path", `At most ${MAX_PATHS} paths`], // prettier-ignore
+              ["Add a path vertex", () => actions.addVertex(ui.selectedPath), (layout.path.paths[ui.selectedPath]?.points.length ?? 0) >= MAX_PATH_POINTS, "+ vertex", `At most ${MAX_PATH_POINTS} vertices`], // prettier-ignore
+              ["Remove a path vertex", () => actions.removeVertex(ui.selectedPath), (layout.path.paths[ui.selectedPath]?.points.length ?? 0) <= 2, "− vertex", "A path needs two vertices"], // prettier-ignore
+            ].map(([name, run, disabled, text, why]) => (
+              <button
+                key={name}
+                onClick={run}
+                disabled={disabled}
+                aria-label={name}
+                title={disabled ? why : name}
+                style={{
+                  flex: 1,
+                  height: 26,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 4,
+                  background: "transparent",
+                  color: theme.textSecondary,
+                  fontSize: 9,
+                  opacity: disabled ? 0.4 : 1,
+                  cursor: disabled ? "default" : "pointer",
+                  fontFamily: MONO,
+                }}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+          {[
+            ["Smooth curve", layout.path.smooth, v => api.set("layout.path.smooth", v)],
+            ["Turn holes along the path", layout.path.alignToTangent, v => api.set("layout.path.alignToTangent", v)],
+            ["Close this path into a loop", layout.path.paths[ui.selectedPath]?.closed ?? false, () => actions.togglePathClosed(ui.selectedPath), layout.path.paths.length === 0], // prettier-ignore
+          ].map(([label, value, onChange, disabled]) => (
+            <label
+              key={label}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 8,
+                opacity: disabled ? 0.4 : 1,
+              }}
+            >
+              <span style={{ fontSize: 11, color: theme.textSecondary }}>{label}</span>
+              <Toggle value={value} onChange={onChange} dark={dark} label={label} />
+            </label>
+          ))}
+        </>
+      )}
+
       {/* Scatter is the one layout that draws random numbers, so its seed is part
           of the document: the same seed places the same holes everywhere. */}
       {layout.type === "Scatter" && (
@@ -343,7 +471,7 @@ export function DimensionsPanel() {
             Center hole
           </label>
         </>
-      ) : g.isFreeform ? (
+      ) : g.usesFreeSpacing ? (
         <>
           {/* Scatter, Spiral and Fibonacci place holes at arbitrary angles to
               one another, so the gap is measured from the circumscribed
@@ -360,7 +488,7 @@ export function DimensionsPanel() {
             </div>
           )}
           <SliderRow
-            label={layout.type === "Spiral" ? "Along Gap" : "Edge Gap"}
+            label={layout.type === "Spiral" ? "Along Gap" : layout.type === "Path" ? "Along Gap" : "Edge Gap"}
             value={layout.edgeGapX}
             min={0}
             max={50}
@@ -370,7 +498,7 @@ export function DimensionsPanel() {
             dark={dark}
           />
           <PitchInfo
-            label={layout.type === "Spiral" ? "step along the arm" : "min centre spacing"}
+            label={layout.type === "Spiral" || layout.type === "Path" ? "step along the curve" : "min centre spacing"}
             value={g.freeSpacingX}
             dark={dark}
           />
@@ -394,7 +522,9 @@ export function DimensionsPanel() {
               ? "Poisson disk · no two holes closer than the spacing above"
               : layout.type === "Spiral"
                 ? "Archimedean spiral · equal steps along the arm"
-                : "Golden angle · Fermat spiral"}
+                : layout.type === "Path"
+                  ? "Equal steps along each curve · drag the vertices on the canvas"
+                  : "Golden angle · Fermat spiral"}
           </div>
         </>
       ) : g.isCrosshatch ? (

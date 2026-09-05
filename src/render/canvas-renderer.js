@@ -8,6 +8,7 @@ import { computeGizmo } from "../fields/gizmo.js";
 import { channelBase, evaluateCompiled, resolveSyncedGeometry } from "../fields/controllers.js";
 import { controllerHandles, controllerPolyline } from "../fields/controller-gizmo.js";
 import { placementCorners } from "../fields/image-map.js";
+import { flattenPath } from "../layouts/path.js";
 import { computeView } from "./view.js";
 
 export function drawScene(canvas, scene) {
@@ -36,6 +37,9 @@ export function drawScene(canvas, scene) {
     holeColor,
     bgColor,
     geometry,
+    pathBlock,
+    pathEditMode,
+    selectedPath,
   } = scene;
   const { sheetW, sheetH, marginLeft, marginTop, marginRight, marginBottom, cornerRadius, patternType, radialMode } =
     params;
@@ -249,6 +253,9 @@ export function drawScene(canvas, scene) {
   if (variation.enabled && variationEditMode && selectedVariationLayer && showHud) {
     drawGizmo(ctx, selectedVariationLayer, { marginLeft, marginTop, perfW, perfH }, sheetW, sheetH, baseScale, dark);
   }
+  if (pathEditMode && showHud) {
+    drawPaths(ctx, { pathBlock, selectedPath, baseScale, dark });
+  }
   if (showFieldOverlay) {
     // Over the holes, not under them: at 35% open area a third of the sheet is
     // hole, and an overlay that answers "where does this reach, and which way"
@@ -432,6 +439,53 @@ function drawControllers(
 // it widens keeps a small reach legible and a huge one out of the way; the
 // controller's own path stays fully opaque either way.
 const bandAlpha = radius => 0.1 * Math.max(0.22, Math.min(1, 40 / Math.max(1, radius || 1)));
+
+// The Path layout's curves and their draggable vertices. Drawn only while the
+// mode is being edited: the holes already show where the curve runs, and an
+// outline over them the rest of the time is one more thing between the eye and
+// the pattern.
+function drawPaths(ctx, { pathBlock, selectedPath, baseScale, dark }) {
+  const paths = pathBlock?.paths || [];
+  if (!paths.length) return;
+  const px = 1 / baseScale;
+  const accent = dark ? "#f97316" : "#c2410c";
+  const faint = dark ? "rgba(249,115,22,0.35)" : "rgba(194,65,12,0.3)";
+  paths.forEach((path, index) => {
+    const active = index === selectedPath;
+    const poly = flattenPath(path.points, { closed: path.closed, smooth: pathBlock.smooth !== false });
+    if (poly.length >= 2) {
+      ctx.beginPath();
+      ctx.moveTo(poly[0].x, poly[0].y);
+      for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+      ctx.strokeStyle = active ? accent : faint;
+      ctx.lineWidth = (active ? 1.6 : 1.1) * px;
+      ctx.setLineDash([4 * px, 3 * px]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // The chord through the vertices, so a smoothed curve still shows what the
+    // handles actually control.
+    if (pathBlock.smooth !== false && path.points.length > 1) {
+      ctx.beginPath();
+      ctx.moveTo(path.points[0].x, path.points[0].y);
+      for (let i = 1; i < path.points.length; i++) ctx.lineTo(path.points[i].x, path.points[i].y);
+      if (path.closed) ctx.closePath();
+      ctx.strokeStyle = active ? faint : dark ? "rgba(249,115,22,0.15)" : "rgba(194,65,12,0.12)";
+      ctx.lineWidth = 0.7 * px;
+      ctx.stroke();
+    }
+    if (!active) return;
+    for (const point of path.points) {
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 4.5 * px, 0, Math.PI * 2);
+      ctx.fillStyle = accent;
+      ctx.fill();
+      ctx.strokeStyle = dark ? "#0f0f11" : "#ffffff";
+      ctx.lineWidth = 1.2 * px;
+      ctx.stroke();
+    }
+  });
+}
 
 const CHANNEL_COLOR = {
   size: { dark: "#60a5fa", light: "#2563eb" },

@@ -18,6 +18,7 @@ export const PATTERN_TYPES = [
   "Scatter",
   "Spiral",
   "Fibonacci",
+  "Path",
 ];
 export const HOLE_SHAPES = ["Circle", "Rectangle", "Pill", "Hexagon", "Diamond", "Triangle", "Superellipse"];
 export const CUSTOM_SIZE_SHAPES = ["Rectangle", "Pill", "Diamond", "Triangle", "Superellipse"];
@@ -48,6 +49,12 @@ export const PERF_MODE_HOLE_LIMIT = 10000;
 
 // Size-variation layers a document may carry.
 export const MAX_VARIATION_LAYERS = 3;
+
+// Curves the Path layout may carry, and vertices per curve. Both are what the
+// canvas can sensibly show handles for at once, not a limit anything downstream
+// needs: the generator walks whatever it is given.
+export const MAX_PATHS = 4;
+export const MAX_PATH_POINTS = 48;
 
 // Image assets a document may embed, with a per-image and a whole-document cap
 // on the base64. The decoder downsamples to IMAGE_MAP_SIZE before encoding, so
@@ -86,6 +93,10 @@ export const DOC_LIMITS = {
   // reload and every export, or `removedHoles` addresses a list that no longer
   // exists.
   "layout.scatter.seed": [0, 99999],
+  // Path vertices live in sheet millimetres and may be dragged off the sheet, so
+  // like a controller's they are bounded by the largest sheet rather than by the
+  // current one.
+  "layout.path.coord": [-2000, 2000],
   "taper.thickness": [0, 10],
   "taper.angle": [0, 15],
   "variation.minScale": [0.01, 2],

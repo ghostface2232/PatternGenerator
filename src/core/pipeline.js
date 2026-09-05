@@ -16,7 +16,7 @@ import { superNFromMix } from "../geometry/superellipse.js";
 import { estimateVisibleHoleArea, perfBoundsArea, perfBoundsFromParams } from "../geometry/boundary.js";
 import { calcMinLigament, findOverlaps } from "../geometry/ligament.js";
 import { calcCellOAR } from "../geometry/oar.js";
-import { LAYOUTS, generateHoles, layoutFamily, layoutReadsSpacing, tilingFlags } from "../layouts/index.js";
+import { LAYOUTS, generateHoles, layoutFamily, layoutReadsSpacing, layoutSpacingModel, tilingFlags } from "../layouts/index.js"; // prettier-ignore
 import { gridLattice } from "../layouts/grid.js";
 import { MIN_CROSS_SIN } from "../layouts/crosshatch.js";
 import { getRadialShapeExtents, getRadialShapeOuterRadius } from "../layouts/radial-engine.js";
@@ -47,8 +47,12 @@ export function deriveGeometry(doc) {
     patternType
   );
   const family = layoutFamily(patternType);
-  const isFreeform = family === "free";
+  // "free" is how the modes that place holes at arbitrary angles to one another
+  // measure their spacing: from the circumscribed diameter, since neither the
+  // width nor the height bounds how much room one of them needs.
+  const usesFreeSpacing = layoutSpacingModel(patternType) === "free";
   const isCrosshatch = family === "crosshatch";
+  const isPath = family === "path";
   const honeyPitchX = isHexHoneycomb ? (effW * Math.sqrt(3)) / 2 + layout.edgeGapX : pitchX;
   const honeyPitchY = isHexHoneycomb ? (honeyPitchX * Math.sqrt(3)) / 2 : pitchY;
   const triIn = triInradius(effW, effH);
@@ -124,7 +128,7 @@ export function deriveGeometry(doc) {
   // than it needs.
   const nominalSpacing = isRadial
     ? Math.max(ringSpacing, circumSpacing)
-    : isFreeform
+    : usesFreeSpacing
       ? Math.max(freeSpacingX, freeSpacingY)
       : Math.max(pitchX, pitchY);
 
@@ -142,8 +146,9 @@ export function deriveGeometry(doc) {
     isDiamondLattice,
     uniformGapMode,
     family,
-    isFreeform,
+    usesFreeSpacing,
     isCrosshatch,
+    isPath,
     hasUnitCell: LAYOUTS[patternType]?.theoretical === true,
     crossAngleA,
     crossAngleB,
@@ -283,6 +288,30 @@ export function compileSpacing(fields) {
     signature: JSON.stringify(compiled),
     min: clamp(min, lo, hi),
     max: clamp(max, lo, hi),
+  };
+}
+
+// Everything `generateHoles` needs that is not a primitive, compiled once and
+// signed once. Today that is the spacing field and the Path layout's curves;
+// both move holes, neither fits in a record of primitives, and both have to be
+// covered by the same signature the removed-hole rule reads.
+//
+// `null` when this document has neither, which is the common case and the one
+// that has to cost nothing: the layouts then run the arithmetic they always ran,
+// to the last bit, and every pinned baseline still holds.
+//
+// The decision about which modes read the spacing channel lives here rather than
+// in the generator, so the sampler and the signature cannot disagree about it —
+// a field the signature covered but the layout ignored used to clear the user's
+// hole removals for nothing.
+export function compilePlacement(doc) {
+  const spacing = layoutReadsSpacing(doc.hole.shape, doc.layout.type) ? compileSpacing(doc.fields) : null;
+  const path = doc.layout.type === "Path" ? doc.layout.path : null;
+  if (!spacing && !path) return null;
+  return {
+    spacing,
+    path,
+    signature: JSON.stringify([spacing?.signature ?? "", path ?? null]),
   };
 }
 
@@ -516,15 +545,15 @@ export function computeStats({ doc, g, params, holes, activeHoles, removedSet, o
 export function computePattern(doc, ctx = {}) {
   const g = deriveGeometry(doc);
   const params = buildParams(doc, g);
-  const spacing = compileSpacing(doc.fields);
-  const baseHoles = generateHoles(params, spacing);
+  const placement = compilePlacement(doc);
+  const baseHoles = generateHoles(params, placement);
   const field = compileDocumentField(doc.fields, ctx);
   const holes = decorateHoles(baseHoles, doc, g, field);
   const removedSet = new Set(doc.removedHoles);
   const activeHoles = filterActive(holes, removedSet);
   const overlaps = findOverlaps(activeHoles, doc.hole.shape);
   const stats = computeStats({ doc, g, params, holes, activeHoles, removedSet, overlaps, field });
-  return { geometry: g, params, baseHoles, holes, activeHoles, removedSet, overlaps, stats, field, spacing };
+  return { geometry: g, params, baseHoles, holes, activeHoles, removedSet, overlaps, stats, field, placement };
 }
 
 // The params generateHoles actually reads — keep in step with its destructuring.
@@ -592,21 +621,14 @@ export const PLACEMENT_PARAMS = [
 // are absent by construction: they never reach buildParams.
 export function patternSignature(doc) {
   const params = buildParams(doc, deriveGeometry(doc));
-  // The spacing field is the second half of generateHoles' input, so it is the
-  // second half of the signature. It comes from compileSpacing, which is the
-  // same call that produces the sampler the layouts read — one function, so the
-  // signature cannot describe a field the layouts do not see, or miss one they do.
-  //
-  // Gated on the same `layoutReadsSpacing` that generateHoles gates on, and for
-  // the same reason read backwards: in the four modes where the rail and the
-  // panel say the channel does nothing, signing it anyway meant that dragging
-  // that controller's radius wiped the user's hole removals for a field nothing
-  // reads. The gate is sound because both of its inputs — the hole shape and the
-  // layout type — are themselves signed above, so a document cannot change which
-  // side of it it falls on without the signature moving.
-  const spacing = layoutReadsSpacing(doc.hole.shape, doc.layout.type)
-    ? (compileSpacing(doc.fields)?.signature ?? "")
-    : "";
+  // The second half of generateHoles' input is the second half of the signature,
+  // and it comes from the same `compilePlacement` call that builds what the
+  // layouts read — one function, so the signature cannot describe a field the
+  // layouts do not see, or miss one they do. That includes which modes read the
+  // spacing channel at all: in the four that ignore it, signing it anyway meant
+  // dragging that controller's radius wiped the user's hole removals for a field
+  // nothing reads.
+  const placement = compilePlacement(doc)?.signature ?? "";
   // Pairs of [type, text] inside JSON. The type keeps null, undefined and NaN
   // apart — JSON alone writes all three as null in array position, and the three
   // behave very differently in the arithmetic in generateHoles. JSON's quoting
@@ -621,5 +643,5 @@ export function patternSignature(doc) {
   // by leaf, under two shapes. deriveGeometry throws first on half of the same
   // input but only half — customAngle and cornerRadius, among others, it never
   // touches — which is why validation and not the pipeline is what makes it safe.
-  return JSON.stringify([PLACEMENT_PARAMS.map(key => [typeof params[key], String(params[key])]), spacing]);
+  return JSON.stringify([PLACEMENT_PARAMS.map(key => [typeof params[key], String(params[key])]), placement]);
 }

@@ -4,7 +4,7 @@ import { createDocument, getIn, patchIn, setIn } from "./document.js";
 import {
   PLACEMENT_PARAMS,
   buildParams,
-  compileSpacing,
+  compilePlacement,
   computePattern,
   deriveGeometry,
   patternSignature,
@@ -526,12 +526,12 @@ test("PLACEMENT_PARAMS is exactly what generateHoles reads", () => {
   );
   assert.equal(source.match(/\barguments\b/), null, "generateHoles must not reach its input through arguments");
 
-  // The spacing field is generateHoles' second input and deliberately not a
-  // param: it is a sampler, and PLACEMENT_PARAMS is primitives. patternSignature
-  // signs it separately, from the same compileSpacing call the layouts read, and
-  // the tests below exercise that half.
-  assert.match(source, /^function generateHoles\(params, spacing = null\) \{/);
-  const destructuring = source.match(/^function generateHoles\(params, spacing = null\) \{\s*const \{([\s\S]*?)\} = params;/); // prettier-ignore
+  // generateHoles' second input is deliberately not a param: it holds a sampler
+  // and a nested list, and PLACEMENT_PARAMS is primitives. patternSignature
+  // signs it separately, from the same compilePlacement call the layouts read,
+  // and the tests below exercise that half.
+  assert.match(source, /^function generateHoles\(params, placement = null\) \{/);
+  const destructuring = source.match(/^function generateHoles\(params, placement = null\) \{\s*const \{([\s\S]*?)\} = params;/); // prettier-ignore
   assert.ok(destructuring, "could not find generateHoles' destructuring");
   const names = destructuring[1]
     .split(",")
@@ -597,6 +597,7 @@ test("no module let, var or ambient global in generateHoles' import closure", ()
     "src/layouts/grid.js",
     "src/layouts/index.js",
     "src/layouts/lattice.js",
+    "src/layouts/path.js",
     "src/layouts/radial-engine.js",
     "src/layouts/scatter.js",
     "src/layouts/spiral.js",
@@ -734,7 +735,7 @@ test("every spacing edit that moves a hole changes the signature", () => {
   // generateHoles takes (params, spacing), so a signature over params alone would
   // hold removals across a controller drag that moved every hole under them —
   // and there would be no undo step pointing back at the arrangement they meant.
-  const positions = d => JSON.stringify(generateHoles(buildParams(d, deriveGeometry(d)), compileSpacing(d.fields)));
+  const positions = d => JSON.stringify(generateHoles(buildParams(d, deriveGeometry(d)), compilePlacement(d)));
   const bases = [
     { "layout.type": "Straight" },
     { "layout.type": "Staggered 60°" },

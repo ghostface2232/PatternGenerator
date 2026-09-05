@@ -41,13 +41,15 @@ test.beforeEach(async ({ page }) => {
   await expect(stat(page, "stat-holes")).toBeVisible();
 });
 
-for (const type of ["Cross-hatch", "Scatter", "Spiral", "Fibonacci"]) {
+for (const type of ["Cross-hatch", "Scatter", "Spiral", "Fibonacci", "Path"]) {
   test(`${type} draws a pattern and exports it`, async ({ page }) => {
     await choose(page, "Type", type);
     const count = await holes(page);
-    expect(count).toBeGreaterThan(100);
+    expect(count).toBeGreaterThan(type === "Path" ? 20 : 100);
     const oar = parseFloat(await stat(page, "stat-oar").textContent());
-    expect(oar).toBeGreaterThan(5);
+    // One curve's worth of holes covers a couple of percent of the sheet, where
+    // an area fill covers tens.
+    expect(oar).toBeGreaterThan(type === "Path" ? 1 : 5);
     expect(oar).toBeLessThan(100);
 
     const downloadPromise = page.waitForEvent("download");
@@ -281,4 +283,53 @@ test("an image dropped while Spacing is selected lands on a channel it can drive
     "aria-pressed",
     "true"
   );
+});
+
+test("Path hands over its default curve without moving the pattern", async ({ page }) => {
+  await choose(page, "Type", "Path");
+  const implicit = await holes(page);
+  await expect(page.getByText(/No curve drawn yet/)).toBeVisible();
+
+  // Add Path makes the curve the layout was already drawing editable, so the
+  // pattern must not jump when it does.
+  await page.getByRole("button", { name: "Add a path", exact: true }).click();
+  expect(await holes(page)).toBe(implicit);
+  await expect(page.getByRole("button", { name: "Select path 1", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit path curves on the canvas", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+
+  // A vertex more, a vertex fewer, and the curve is a different curve.
+  await page.getByRole("button", { name: "Add a path vertex", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Select path 1", exact: true })).toContainText("5 pts");
+  await page.getByRole("button", { name: "Remove a path vertex", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Select path 1", exact: true })).toContainText("4 pts");
+
+  // Closing the curve joins its ends, which is a different curve — the smoothing
+  // wraps at the seam instead of reflecting past it — so the pattern changes.
+  await page.getByRole("switch", { name: "Close this path into a loop", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Select path 1", exact: true })).toContainText("loop");
+  expect(await holes(page)).not.toBe(implicit);
+});
+
+test("the path edit mode takes the canvas from the other three", async ({ page }) => {
+  // Two canvas modes at once means a click does something the badge does not
+  // describe, which is why each entry point clears the others.
+  await choose(page, "Type", "Path");
+  const removal = page.getByRole("switch", { name: "Click to Remove", exact: true });
+  await removal.scrollIntoViewIfNeeded();
+  await removal.click();
+  await expect(removal).toHaveAttribute("aria-checked", "true");
+
+  const edit = page.getByRole("button", { name: "Edit path curves on the canvas", exact: true });
+  await edit.scrollIntoViewIfNeeded();
+  await edit.click();
+  await expect(edit).toHaveAttribute("aria-pressed", "true");
+  await expect(removal).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByText(/EDIT PATH/)).toBeVisible();
+
+  await enableFields(page);
+  await page.getByRole("button", { name: "Edit field controllers on the canvas", exact: true }).click();
+  await expect(edit).toHaveAttribute("aria-pressed", "false");
 });
