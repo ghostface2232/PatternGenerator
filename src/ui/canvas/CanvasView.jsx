@@ -15,6 +15,7 @@ import { isPointInsideHole } from "../../geometry/shapes.js";
 import { resolveSyncedGeometry } from "../../fields/controllers.js";
 import { controllerBodyDistance, hitTestController, moveControllerHandle } from "../../fields/controller-gizmo.js";
 import { hitTestPath, movePathVertex, pathBodyDistance } from "../../layouts/path-gizmo.js";
+import { cutoutBodyDistance, hitTestBoundary, moveBoundaryHandle } from "../../geometry/boundary-gizmo.js";
 import { drawScene } from "../../render/canvas-renderer.js";
 import { canvasToSheet, zoomAbout } from "../../render/view.js";
 import { useEditor } from "../EditorContext.jsx";
@@ -50,8 +51,9 @@ export function CanvasView() {
   } = useEditor();
   const { dark, showHud, holeRemovalMode, variationEditMode, pan, setPan, zoom, setZoom, setVariationHud } = ui;
   const { fieldEditMode, activeChannel, fieldTool, setFieldTool, selectedControllerId } = ui;
-  const { pathEditMode, selectedPath } = ui;
+  const { pathEditMode, selectedPath, boundaryEditMode, selectedCutoutId } = ui;
   const pathBlock = doc.layout.path;
+  const boundary = doc.boundary;
   const { variation, fields } = doc;
   const { holeColor, bgColor } = doc.appearance;
   const { perfX: marginLeft, perfY: marginTop, perfW, perfH, taperActive } = geometry;
@@ -66,6 +68,7 @@ export function CanvasView() {
   const variationDrag = useRef(null);
   const controllerDrag = useRef(null); // { id, handle } while a handle is held
   const pathDrag = useRef(null); // { pathIndex, pointIndex } while a path vertex is held
+  const boundaryDrag = useRef(null); // a boundary handle while it is held
   const drawDrag = useRef(null); // { kind, from } while a line/curve is being drawn
   const [drawPreview, setDrawPreview] = useState(null);
   const spacePressed = useRef(false);
@@ -116,6 +119,9 @@ export function CanvasView() {
       pathEditMode,
       selectedPath,
       trim: doc.boundary.trim,
+      boundary,
+      boundaryEditMode,
+      selectedCutoutId,
     }),
     [
       dark,
@@ -146,6 +152,9 @@ export function CanvasView() {
       pathEditMode,
       selectedPath,
       doc.boundary.trim,
+      boundary,
+      boundaryEditMode,
+      selectedCutoutId,
     ]
   );
 
@@ -233,6 +242,17 @@ export function CanvasView() {
       pointerDownPos.current = { x: e.clientX, y: e.clientY };
       const view = viewRef.current;
 
+      if (boundaryEditMode && showHud && !spacePressed.current && view) {
+        const sheet = clientToSheet(e.clientX, e.clientY);
+        const hit = sheet && hitTestBoundary(boundary, sheet.x, sheet.y, view.baseScale);
+        if (hit) {
+          boundaryDrag.current = hit;
+          if (hit.cutout !== undefined && hit.cutout !== selectedCutoutId) actions.selectCutout(hit.cutout);
+          e.currentTarget.setPointerCapture(e.pointerId);
+          return;
+        }
+      }
+
       if (pathEditMode && showHud && !spacePressed.current && view) {
         const sheet = clientToSheet(e.clientX, e.clientY);
         const hit = sheet && hitTestPath(pathBlock.paths, sheet.x, sheet.y, view.baseScale);
@@ -318,6 +338,9 @@ export function CanvasView() {
       pathEditMode,
       pathBlock,
       selectedPath,
+      boundaryEditMode,
+      boundary,
+      selectedCutoutId,
     ]
   );
 
@@ -370,6 +393,13 @@ export function CanvasView() {
           sourceOf(controller, live)
         );
         if (patch) actions.updateController(id, patch, true);
+        return;
+      }
+      if (boundaryDrag.current) {
+        const sheet = clientToSheet(e.clientX, e.clientY);
+        if (!sheet) return;
+        const patch = moveBoundaryHandle(api.ref.current.boundary, boundaryDrag.current, sheet.x, sheet.y, e.shiftKey);
+        if (patch) actions.patchBoundary(patch, true);
         return;
       }
       if (pathDrag.current) {
@@ -430,6 +460,12 @@ export function CanvasView() {
         pointerDownPos.current = null;
         return;
       }
+      if (boundaryDrag.current) {
+        boundaryDrag.current = null;
+        api.closeGroup();
+        pointerDownPos.current = null;
+        return;
+      }
       if (drawDrag.current) {
         const { kind, from } = drawDrag.current;
         drawDrag.current = null;
@@ -481,6 +517,28 @@ export function CanvasView() {
           // Same tolerance as a handle hit: within ~14 screen pixels of the body.
           if (closest && closestDist * (view?.baseScale || 1) < 14 && closest.id !== selectedControllerId) {
             actions.selectController(closest.id);
+            pointerDownPos.current = null;
+            return;
+          }
+        }
+      }
+
+      // A click on a cutout while editing the boundary selects it.
+      if (boundaryEditMode && showHud && wasClick && !spacePressed.current && boundary.cutouts.length > 0) {
+        const sheet = clientToSheet(e.clientX, e.clientY);
+        const view = viewRef.current;
+        if (sheet) {
+          let closest = null,
+            closestDist = Infinity;
+          for (const cutout of boundary.cutouts) {
+            const d = cutoutBodyDistance(cutout, sheet.x, sheet.y);
+            if (d < closestDist) {
+              closestDist = d;
+              closest = cutout;
+            }
+          }
+          if (closest && closestDist * (view?.baseScale || 1) < 14 && closest.id !== selectedCutoutId) {
+            actions.selectCutout(closest.id);
             pointerDownPos.current = null;
             return;
           }
@@ -563,7 +621,25 @@ export function CanvasView() {
       pathEditMode,
       pathBlock,
       selectedPath,
+      boundaryEditMode,
+      boundary,
+      selectedCutoutId,
     ]
+  );
+
+  // A double-click while editing the boundary: on a vertex, takes it away; on
+  // an edge, puts one there. The same tolerance as a handle hit.
+  const handleDoubleClick = useCallback(
+    e => {
+      if (!boundaryEditMode || !showHud || spacePressed.current) return;
+      const view = viewRef.current;
+      const sheet = clientToSheet(e.clientX, e.clientY);
+      if (!view || !sheet) return;
+      const hit = hitTestBoundary(boundary, sheet.x, sheet.y, view.baseScale);
+      if (hit?.role === "vertex") actions.removeBoundaryVertexAt(hit);
+      else actions.addBoundaryVertexAt(sheet.x, sheet.y, 14 / view.baseScale);
+    },
+    [boundaryEditMode, showHud, boundary, clientToSheet, actions]
   );
 
   // Escape puts the drawing tool away without leaving edit mode.
@@ -581,8 +657,9 @@ export function CanvasView() {
   // clicks only pan, with no rail, no controllers drawn and no badge.
   const fieldActive = fieldEditMode && fields.enabled && showHud;
   const pathActive = pathEditMode && showHud;
+  const boundaryActive = boundaryEditMode && showHud;
   const cursor =
-    (variation.enabled && variationEditMode) || fieldActive || pathActive
+    (variation.enabled && variationEditMode) || fieldActive || pathActive || boundaryActive
       ? "crosshair"
       : isPanning
         ? "grabbing"
@@ -610,6 +687,7 @@ export function CanvasView() {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onDoubleClick={handleDoubleClick}
       />
       {showHud && (
         <div
@@ -647,6 +725,11 @@ export function CanvasView() {
               <Badge color={dark ? "#ea580c" : "#c2410c"}>
                 EDIT PATH{pathBlock.paths.length > 1 ? ` ${selectedPath + 1}/${pathBlock.paths.length}` : ""} · SPACE TO
                 PAN
+              </Badge>
+            )}
+            {boundaryActive && (
+              <Badge color={dark ? "#0f766e" : "#0d9488"}>
+                EDIT BOUNDARY · DOUBLE-CLICK AN EDGE TO ADD A VERTEX, A VERTEX TO DROP IT · SPACE TO PAN
               </Badge>
             )}
             {fieldActive && (

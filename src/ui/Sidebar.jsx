@@ -2,6 +2,7 @@ import { useEditor } from "./EditorContext.jsx";
 import { ProjectPanel } from "./panels/ProjectPanel.jsx";
 import { PatternPanel } from "./panels/PatternPanel.jsx";
 import { DimensionsPanel } from "./panels/DimensionsPanel.jsx";
+import { BoundaryPanel } from "./panels/BoundaryPanel.jsx";
 import { VariationPanel } from "./panels/VariationPanel.jsx";
 import { FieldsPanel } from "./panels/FieldsPanel.jsx";
 import { TaperPanel } from "./panels/TaperPanel.jsx";
@@ -43,6 +44,7 @@ export function Sidebar() {
         <ProjectPanel />
         <PatternPanel />
         <DimensionsPanel />
+        <BoundaryPanel />
         <VariationPanel />
         <FieldsPanel />
         <TaperPanel />

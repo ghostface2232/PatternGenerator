@@ -8,9 +8,8 @@ import { Section, groupLabelStyle, hintStyle, noteStyle, subLabelStyle } from ".
 export function DimensionsPanel() {
   const { doc, api, theme, ui, geometry: g, stats, actions } = useEditor();
   const { dark } = theme;
-  const { hole, layout, sheet, boundary } = doc;
+  const { hole, layout } = doc;
   const { radial, crosshatch } = layout;
-  const { margins } = boundary;
   const isRadial = layout.type === "Radial";
   const setP = actions.setWithPresetReset;
   const faint = { marginLeft: 6, fontSize: 9, color: theme.textMuted };
@@ -27,13 +26,14 @@ export function DimensionsPanel() {
   // misses the perforation rectangle proves the curve does; anything else falls
   // through to the answer that is right for every other mode.
   const pathBox = layout.path.paths.flatMap(path => path.points);
+  const { frame } = g.region;
   const offPanel =
     g.isPath &&
     pathBox.length > 0 &&
-    (Math.max(...pathBox.map(p => p.x)) < margins.left ||
-      Math.min(...pathBox.map(p => p.x)) > sheet.w - margins.right ||
-      Math.max(...pathBox.map(p => p.y)) < margins.top ||
-      Math.min(...pathBox.map(p => p.y)) > sheet.h - margins.bottom);
+    (Math.max(...pathBox.map(p => p.x)) < frame.xMin ||
+      Math.min(...pathBox.map(p => p.x)) > frame.xMax ||
+      Math.max(...pathBox.map(p => p.y)) < frame.yMin ||
+      Math.min(...pathBox.map(p => p.y)) > frame.yMax);
   const tooFine = empty && !offPanel;
   // Voronoi draws each hole as its own cell, so the controls that shape the
   // chosen hole — its orientation and its corner radius — have nothing to act
@@ -759,104 +759,6 @@ export function DimensionsPanel() {
           </div>
         </>
       )}
-
-      {/* Sheet & margins */}
-      <SliderRow
-        label="Panel Width"
-        value={sheet.w}
-        min={10}
-        max={1000}
-        step={1}
-        onChange={v => api.set("sheet.w", v)}
-        unit="mm"
-        dark={dark}
-      />
-      <SliderRow
-        label="Panel Height"
-        value={sheet.h}
-        min={10}
-        max={1000}
-        step={1}
-        onChange={v => api.set("sheet.h", v)}
-        unit="mm"
-        dark={dark}
-      />
-      <div style={{ marginTop: 4 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-          <span style={subLabelStyle(theme)}>Margin {boundary.marginLinked ? "(Uniform)" : "(Per-side)"}</span>
-          <LinkButton
-            linked={boundary.marginLinked}
-            onClick={actions.toggleMarginLinked}
-            title={boundary.marginLinked ? "Set per-side margins" : "Use uniform margin"}
-            dark={dark}
-          />
-        </div>
-        {boundary.marginLinked ? (
-          <SliderRow
-            label="Margin"
-            value={margins.top}
-            min={0}
-            max={50}
-            step={0.5}
-            onChange={actions.setMarginUniform}
-            unit="mm"
-            dark={dark}
-          />
-        ) : (
-          <>
-            <SliderRow
-              label="Margin Top"
-              value={margins.top}
-              min={0}
-              max={50}
-              step={0.5}
-              onChange={v => api.set("boundary.margins.top", v)}
-              unit="mm"
-              dark={dark}
-            />
-            <SliderRow
-              label="Margin Bottom"
-              value={margins.bottom}
-              min={0}
-              max={50}
-              step={0.5}
-              onChange={v => api.set("boundary.margins.bottom", v)}
-              unit="mm"
-              dark={dark}
-            />
-            <SliderRow
-              label="Margin Left"
-              value={margins.left}
-              min={0}
-              max={50}
-              step={0.5}
-              onChange={v => api.set("boundary.margins.left", v)}
-              unit="mm"
-              dark={dark}
-            />
-            <SliderRow
-              label="Margin Right"
-              value={margins.right}
-              min={0}
-              max={50}
-              step={0.5}
-              onChange={v => api.set("boundary.margins.right", v)}
-              unit="mm"
-              dark={dark}
-            />
-          </>
-        )}
-      </div>
-      <SliderRow
-        label="Corner Radius"
-        value={boundary.cornerRadius}
-        min={0}
-        max={Math.min(g.perfW / 2, g.perfH / 2)}
-        step={0.5}
-        onChange={v => api.set("boundary.cornerRadius", v)}
-        unit="mm"
-        dark={dark}
-      />
     </Section>
   );
 }

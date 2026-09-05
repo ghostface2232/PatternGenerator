@@ -514,7 +514,9 @@ test("a dropped file never navigates the tab away, and a document file opens", a
     return ev.defaultPrevented;
   });
   expect(prevented).toBe(true);
-  expect(dismissed).toBe(`Drop a .perf.json document to open it, or an image to drive a field.`);
+  expect(dismissed).toBe(
+    "Drop a .perf.json document to open it, an image to drive a field, or an SVG outline for the boundary."
+  );
   await expect(stat(page, "doc-name")).toHaveText("Untitled");
 
   await page.evaluate(() => {

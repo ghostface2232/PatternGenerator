@@ -9,6 +9,7 @@ import { channelBase, evaluateCompiled, resolveSyncedGeometry } from "../fields/
 import { controllerHandles, controllerPolyline } from "../fields/controller-gizmo.js";
 import { placementCorners } from "../fields/image-map.js";
 import { defaultPathPoints, flattenPath } from "../layouts/path.js";
+import { boundaryHandles } from "../geometry/boundary-gizmo.js";
 import { computeView } from "./view.js";
 
 export function drawScene(canvas, scene) {
@@ -41,6 +42,9 @@ export function drawScene(canvas, scene) {
     pathEditMode,
     selectedPath,
     trim,
+    boundary,
+    boundaryEditMode,
+    selectedCutoutId,
   } = scene;
   const { sheetW, sheetH } = params;
   const { perfW, perfH, region } = geometry;
@@ -289,6 +293,9 @@ export function drawScene(canvas, scene) {
       dark,
     });
   }
+  if (boundaryEditMode && showHud && boundary) {
+    drawBoundaryHandles(ctx, { boundary, region, selectedCutoutId, baseScale, dark });
+  }
   if (showFieldOverlay) {
     // Over the holes, not under them: at 35% open area a third of the sheet is
     // hole, and an overlay that answers "where does this reach, and which way"
@@ -529,6 +536,51 @@ function drawPaths(ctx, { pathBlock, selectedPath, editing, bounds, baseScale, d
       ctx.stroke();
     }
   });
+}
+
+// The boundary's handles: the outline's vertices and each cutout's centre and
+// rim, over the holes so they can be reached, in the teal the edit badge
+// wears. The selected cutout's outline is drawn solid so the inspector and
+// the canvas agree about which one is meant.
+function drawBoundaryHandles(ctx, { boundary, region, selectedCutoutId, baseScale, dark }) {
+  const px = 1 / baseScale;
+  const accent = dark ? "#2dd4bf" : "#0f766e";
+  const ink = dark ? "#0f0f11" : "#ffffff";
+  ctx.save();
+  // The outline itself, firmly: while editing it, it is the subject.
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 1 * px;
+  ctx.setLineDash([4 * px, 3 * px]);
+  ctx.beginPath();
+  region.trace(ctx);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  const selected = region.cutouts.find((c, i) => boundary.cutouts[i]?.id === selectedCutoutId);
+  if (selected) {
+    ctx.lineWidth = 1.4 * px;
+    ctx.beginPath();
+    ctx.moveTo(selected.ring[0][0], selected.ring[0][1]);
+    for (let i = 1; i < selected.ring.length; i++) ctx.lineTo(selected.ring[i][0], selected.ring[i][1]);
+    ctx.closePath();
+    ctx.stroke();
+  }
+  for (const handle of boundaryHandles(boundary)) {
+    const hollow = handle.role !== "move";
+    const r = (handle.role === "size" ? 4 : 4.6) * px;
+    ctx.beginPath();
+    if (handle.role === "vertex" && handle.cutout === undefined) {
+      // Outline vertices as squares, so they read apart from the round cutout handles.
+      ctx.rect(handle.x - r, handle.y - r, 2 * r, 2 * r);
+    } else {
+      ctx.arc(handle.x, handle.y, r, 0, Math.PI * 2);
+    }
+    ctx.fillStyle = hollow ? ink : accent;
+    ctx.fill();
+    ctx.strokeStyle = hollow ? accent : ink;
+    ctx.lineWidth = 1.4 * px;
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 const CHANNEL_COLOR = {
