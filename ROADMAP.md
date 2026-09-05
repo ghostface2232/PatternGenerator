@@ -256,19 +256,19 @@ evaluateChannel(controllers, channel, x, y, ctx) → number
 
 ## 6. Phase 3: 레이아웃 모드 9종
 
-상태 (2026-09-05): 공통 인터페이스, Spacing 채널, 공간 해시, 그리고 신규 모드 4종을 구현했습니다. 산출물은 src/layouts/index.js(레지스트리 겸 유일한 진입점), src/layouts/crosshatch.js, src/layouts/scatter.js, src/layouts/spiral.js, src/layouts/fibonacci.js, src/layouts/lattice.js, src/geometry/spatial-hash.js, src/core/rng.js이며 문서 스키마는 3으로 올렸습니다.
+상태 (2026-09-05): 완료. 공통 인터페이스, Spacing 채널, 공간 해시, 그리고 신규 모드 7종을 구현했습니다. 산출물은 src/layouts/index.js(레지스트리 겸 유일한 진입점), src/layouts/crosshatch.js, scatter.js, spiral.js, fibonacci.js, path.js(+path-gizmo.js), voronoi.js, flowlines.js, lattice.js, src/geometry/spatial-hash.js, stroke.js, src/core/rng.js이며 문서 스키마는 5로 올렸습니다.
 
-Type 드롭다운은 이제 9종입니다. Straight, Staggered 60°, Staggered 45°, Radial(Concentric·Sunflower·6k Rosette), Custom Angle, Cross-hatch, Scatter, Spiral, Fibonacci. 로드맵이 열거한 10종 가운데 grid, staggered, concentric, crosshatch, scatter, spiral, fibonacci를 덮었습니다.
+Type 드롭다운은 이제 12종입니다. Straight, Staggered 60°, Staggered 45°, Radial(Concentric·Sunflower·6k Rosette), Custom Angle, Cross-hatch, Scatter, Spiral, Fibonacci, Path, Voronoi, Flow Lines. 로드맵이 열거한 9종을 모두 덮었고, 격자 계열 3종과 Radial 3종이 그 위에 얹혀 있습니다.
 
 Spacing 채널은 EDITABLE_CHANNELS에 들어왔고, 격자 계열은 6.2절이 정한 대로 행 단위 누적 피치만 읽습니다. Cross-hatch는 두 직선 계열을 각각 이동시키므로 정렬을 깨지 않고 2차원 밀도 변조가 되며, 이것이 13절의 격자 왜곡 리스크에 대한 답입니다. Radial과 균일 리거먼트 타일링 3종은 이 채널을 읽지 않고, 그 사실을 패널과 툴 레일이 표시합니다.
 
-남긴 항목은 셋입니다.
+남겨 두었던 셋은 다음과 같이 마무리했습니다.
 
-- Path: 캔버스 위에서 경로를 그리는 편집기가 먼저 필요하고, 그것은 Phase 4의 경계 정점 편집과 같은 UI 작업입니다. 그 편집기가 생긴 다음에 붙이는 편이 낫습니다.
-- Voronoi: 홀마다 다른 다각형 외곽선을 요구하므로 SHAPES 레지스트리가 문서 전역의 hole.shape 하나가 아니라 홀별 형상을 다룰 수 있어야 합니다. findOverlaps, calcMinLigament, generateSVGParts가 모두 형상 인자를 하나만 받는 현재 구조를 바꾸는 일이라, 6.2절의 다른 모드들과 함께 넣기에는 변경 범위가 다릅니다. Phase 4의 polygon 형상 작업과 묶는 것이 맞습니다.
-- Flow Lines: 출력이 홀이 아니라 가변 폭 연속 선이므로 통계, 렌더, 내보내기 경로가 모두 별도입니다. 6.1절 인터페이스가 strokes를 따로 둔 이유이기도 합니다.
+- Path: 캔버스 위 곡선 편집기(layouts/path-gizmo.js)를 함께 넣었습니다. 정점 드래그, 곡선 추가·삭제, 스무딩, 접선 정렬, 닫힌 고리를 지원하며, 곡선 자체가 배치 입력이므로 compilePlacement가 서명합니다.
+- Voronoi: SHAPES에 Polygon 항목을 더해 홀별 외곽선을 다룰 수 있게 했습니다. 핵심은 effectiveHoleShape(doc) 하나로 "레이아웃이 형상을 강제한다"는 사실을 생성기·통계·캔버스·내보내기·패널이 공유하는 것입니다. d3-delaunay는 쓰지 않았습니다. 각 셀을 이웃 사이트의 이등분선 반평면으로 직접 잘라 만들고, 사이트에서 reach/2보다 먼 정점이 없을 때 종료하므로 근사가 아니라 정확합니다. 인접 셀이 각각 gap/2씩 물러나므로 리거먼트는 정확히 edge gap이며, 테스트가 1.000000·3.000000·8.000000 mm로 확인합니다.
+- Flow Lines: SHAPES에 Stroke 항목을 더했습니다. 중심선과 정점별 반폭을 홀이 직접 들고 있으며, 폭은 size 채널을 정점마다 읽으므로 한 슬롯이 자기 길이를 따라 좁아지고 넓어집니다. 리거먼트·오버랩 탐색은 홀이 아니라 세그먼트를 짝지어 돌고(ligament.js의 forEachSegmentPair), 면적은 경계 상자 샘플링 대신 중심선을 걸어 잽니다. 여기서도 리거먼트는 정확히 edge gap입니다.
 
-이미지 컨트롤러는 Spacing 채널을 구동할 수 없게 막았습니다. 밝기 맵은 DOM이 비동기로 디코딩하고 공유 링크에는 실리지 않으므로, 그것이 홀의 위치를 정하면 문서에 없는 상태가 배치를 좌우하게 되고 removedHoles 인덱스가 근거 없이 어긋납니다. 크기·각도·형상 채널은 그리는 방식만 바꾸므로 그림을 기다려도 됩니다.
+이미지 컨트롤러는 그 모드가 배치에 쓰는 채널을 구동할 수 없게 막았습니다. 무엇이 배치 채널인지는 layoutPlacementChannels 한 곳이 정하며, Spacing은 언제나, angle은 Flow Lines에서만 해당합니다. 밝기 맵은 DOM이 비동기로 디코딩하고 공유 링크에는 실리지 않으므로, 그것이 홀의 위치를 정하면 문서에 없는 상태가 배치를 좌우하게 되고 removedHoles 인덱스가 근거 없이 어긋납니다. 크기·각도·형상 채널은 그리는 방식만 바꾸므로 그림을 기다려도 됩니다.
 
 ### 6.1 공통 인터페이스
 
@@ -307,8 +307,8 @@ export const LAYOUTS = {
 
 ### 6.3 통계 호환
 
-- OAR: voronoi와 flowlines는 이론 OAR 경로를 비활성화하고 카운트 경로만 사용. 폴리곤 면적은 shoelace
-- 리거먼트: 격자 계열은 기존 로직 유지. scatter, voronoi, flowlines는 공간 해시 (셀 크기 = 최대 홀 크기 + 최소 간격) 기반 이웃 탐색으로 O(n) 계산
+- OAR: voronoi와 flowlines는 이론 OAR 경로를 비활성화하고 카운트 경로만 사용(LAYOUTS의 theoretical: false). 폴리곤 면적은 shoelace, 슬롯 면적은 자기 외곽선의 shoelace
+- 리거먼트: 격자 계열은 기존 로직 유지. scatter와 voronoi는 공간 해시 기반 이웃 탐색에 외접원 하한으로 가지치기를 더해 정확한 값을 그대로 유지하면서 비용을 낮췄고(1 m 패널 Voronoi 5.5초 → 1.3초), flowlines는 홀의 경계 상자가 패널 전체가 되므로 세그먼트를 짝지어 도는 별도 경로를 씁니다
 - 오버랩: 동일 공간 해시 사용
 
 ### 6.4 테스트
@@ -319,9 +319,9 @@ layouts/*.test.js에 모드마다 결정성 (같은 시드 → 같은 결과), �
 
 Spacing을 "9종 모두"로 적었던 애초의 기준은 잘못이었습니다. Radial의 세 하위 레이아웃과 균일 리거먼트 타일링 3종은 배치를 피치의 곱셈으로 표현하지 않고, 특히 타일링은 모든 변에 같은 리거먼트를 주는 것이 존재 이유이므로 그것을 늘이는 필드는 밀도 변조가 아니라 타일링의 파괴입니다. 대신 그 사실을 툴 레일과 패널이 명시하고, layoutReadsSpacing 하나가 UI·통계·배치의 판단 근거를 공유합니다.
 
-현재 상태: 9종 중 Radial을 제외한 8종이 Spacing을 읽습니다. 다만 격자 계열에서 홀 형상이 균일 리거먼트 타일링 3종(Hexagon+Staggered 60°, Diamond+Staggered 60°, Triangle+격자 전체)에 해당하면 그 조합만 읽지 않습니다. Path, Voronoi, Flow Lines는 위에 적은 이유로 남겨 두었으므로 이 Phase는 부분 완료입니다.
+현재 상태: 12종 중 Radial을 제외한 11종이 Spacing을 읽습니다. 다만 격자 계열에서 홀 형상이 균일 리거먼트 타일링 3종(Hexagon+Staggered 60°, Diamond+Staggered 60°, Triangle+격자 전체)에 해당하면 그 조합만 읽지 않습니다. Flow Lines는 여기에 더해 angle 채널까지 배치에 읽는 유일한 모드입니다.
 
-예상 규모: PR 8-10개 (모드당 1개, 인터페이스 1개, 공간 해시 1개). 이 중 6개 분량을 진행했습니다.
+예상 규모: PR 8-10개 (모드당 1개, 인터페이스 1개, 공간 해시 1개). 실제로는 커밋 4개로 마쳤습니다.
 
 ## 7. Phase 4: 임의 경계와 커스텀 홀 형상
 
