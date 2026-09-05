@@ -854,15 +854,23 @@ test("cross-hatch leaves the requested gap along both families and across the di
   // 20 × 2 mm slot with 3 mm gaps at 0°/30° put every hole on top of its
   // neighbour along the 0° lines and read a ligament of 0. Each family's
   // spacing now comes from the hole's clearance along the other family's
-  // direction, and the short diagonal — the closest neighbour once the crossing
-  // is sharper than 60° — is held to the smaller gap. So the smallest ligament
-  // is the smaller of the two gaps, exactly, for every shape and any crossing.
+  // direction, and every other lattice vector that could reach the hole — the
+  // short diagonal once the crossing is sharper than 60°, and stranger ones
+  // when the families are far from square — is held to the smaller gap. So the
+  // smallest ligament is the smaller of the two gaps, exactly, for every shape
+  // and any crossing.
   for (const [patch, expected] of [
     [{ "hole.shape": "Rectangle", "hole.w": 20, "hole.h": 2, "layout.edgeGapX": 3, "layout.edgeGapY": 3, "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 30 }, 3], // prettier-ignore
     [{ "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 30 }, 3],
     [{ "hole.shape": "Pill", "hole.w": 12, "hole.h": 4, "layout.edgeGapX": 2, "layout.edgeGapY": 4, "layout.crosshatch.angleA": 15, "layout.crosshatch.angleB": 70 }, 2], // prettier-ignore
     [{ "hole.shape": "Diamond", "hole.w": 8, "hole.h": 4, "hole.diamondOrient": "Flat up", "layout.crosshatch.angleA": 10, "layout.crosshatch.angleB": 50 }, 3], // prettier-ignore
     [{ "hole.shape": "Triangle", "hole.w": 6, "hole.h": 6, "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 30 }, 3], // prettier-ignore
+    // Unequal gaps at a sharp crossing skew the lattice until its closest
+    // vector is one no picture of the cell suggests (3v − 2u here): checking
+    // only the two diagonals left every one of these holes overlapping.
+    [{ "layout.gapLinked": false, "layout.edgeGapX": 1, "layout.edgeGapY": 4, "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 5 }, 1], // prettier-ignore
+    [{ "hole.shape": "Rectangle", "hole.w": 20, "hole.h": 2, "layout.gapLinked": false, "layout.edgeGapX": 1, "layout.edgeGapY": 4, "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 20 }, 1], // prettier-ignore
+    [{ "hole.shape": "Pill", "hole.w": 12, "hole.h": 4, "layout.gapLinked": false, "layout.edgeGapX": 1, "layout.edgeGapY": 4, "layout.crosshatch.angleA": 33, "layout.crosshatch.angleB": -70 }, 1], // prettier-ignore
   ]) {
     const result = computePattern(doc({ "layout.type": "Cross-hatch", ...patch }));
     assert.ok(result.activeHoles.length > 100, JSON.stringify(patch));

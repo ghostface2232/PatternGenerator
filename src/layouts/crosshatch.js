@@ -18,7 +18,7 @@
 // coarser pattern but a strip of holes in one corner of a blank sheet: the line
 // lists were cut at their cap and the hole loop returned mid-scan, both in
 // line-A order. A mode that cannot draw what it was asked for has to say so.
-import { shapeReach } from "./radial-engine.js";
+import { shapeExtent, shapeReach } from "./radial-engine.js";
 import { strongestAlong } from "./field-sampling.js";
 
 // Below this the two families are near enough to parallel that their lattice
@@ -58,12 +58,16 @@ const SPACING_SAMPLES = 32;
 // the vertical ones at the orthogonal default and whose spacing is therefore
 // the X pitch.
 //
-// The lattice has a third neighbour, across the cell's short diagonal, and
-// once the crossing is sharper than 60° that one is the closest: two circles
-// spaced exactly one gap apart along 30° lines sit half a diameter apart
-// across the diagonal. Both families are then widened together, by the least
-// factor that leaves the smaller of the two gaps across each diagonal, which
-// keeps the crossing's proportions and never touches a right-angled family.
+// The holes then form a lattice, and a lattice has more neighbours than the
+// two along its lines. Across the cell's short diagonal is the closest once
+// the crossing is sharper than 60° — two circles one gap apart along 30° lines
+// sit half a diameter apart across it — and once the two families are far from
+// square (unequal gaps, a sharp angle) the closest of all can be a vector no
+// picture of the cell suggests, 3v − 2u say. So every lattice vector that could
+// reach the hole is checked, and both families are widened together by the
+// least factor that keeps the smaller of the two gaps across all of them.
+// Uniform, so the crossing keeps its proportions; and never touching a
+// right-angled family, whose diagonals clear the hole on their own.
 export function crosshatchPitches({ shape, w, h, holeAngle = 0, angleA, angleB, gapX, gapY }) {
   const radA = (angleA * Math.PI) / 180,
     radB = (angleB * Math.PI) / 180;
@@ -73,22 +77,68 @@ export function crosshatchPitches({ shape, w, h, holeAngle = 0, angleA, angleB, 
   // The lattice vectors: u steps along a family-A line, v along a family-B one.
   const lenU = shapeReach(shape, w, h, holeAngle, radA, gY);
   const lenV = shapeReach(shape, w, h, holeAngle, radB, gX);
-  const ux = lenU * Math.cos(radA),
-    uy = lenU * Math.sin(radA);
-  const vx = lenV * Math.cos(radB),
-    vy = lenV * Math.sin(radB);
-  const gapD = Math.min(gX, gY);
-  let scale = 1;
-  for (const [dx, dy] of [
-    [ux - vx, uy - vy],
-    [ux + vx, uy + vy],
-  ]) {
-    const len = Math.hypot(dx, dy);
-    if (len < 1e-9) continue;
-    const need = shapeReach(shape, w, h, holeAngle, Math.atan2(dy, dx), gapD);
-    if (need > len * scale) scale = need / len;
-  }
+  const u = [lenU * Math.cos(radA), lenU * Math.sin(radA)];
+  const v = [lenV * Math.cos(radB), lenV * Math.sin(radB)];
+  // Nothing further than the hole's diagonal plus the larger gap can touch.
+  const radius = Math.hypot(w, h) + Math.max(gX, gY);
+  const parallel = (dx, dy, [px, py]) => Math.abs(dx * py - dy * px) < 1e-9 * Math.hypot(dx, dy) * Math.hypot(px, py);
+  const scale = latticeClearanceScale(u, v, radius, (dx, dy) => {
+    const direction = Math.atan2(dy, dx);
+    // A vector along one of the lines is held to that family's own gap; any
+    // other to the smaller of the two.
+    const along = parallel(dx, dy, u) ? gY : parallel(dx, dy, v) ? gX : Math.min(gX, gY);
+    return {
+      bound: shapeExtent(shape, w, h, holeAngle, direction) + along,
+      reach: () => shapeReach(shape, w, h, holeAngle, direction, along),
+    };
+  });
   return { pitchA: lenV * sin * scale, pitchB: lenU * sin * scale, sin };
+}
+
+// The least factor ≥ 1 to scale the lattice spanned by `u` and `v` by so that
+// every non-zero lattice vector clears the hole. `clearance(dx, dy)` describes
+// one vector's direction: `bound`, a distance beyond which nothing along it
+// can touch (the hole's extent plus the gap — cheap, and what nearly every
+// candidate is settled by), and `reach()`, the exact distance at which the gap
+// is met (bisected, so asked for only when the bound fails).
+//
+// Scaling does not turn a vector, so each candidate asks for its own factor
+// and the largest wins. Which candidates: every lattice vector shorter than
+// `radius`, the longest reach any direction can have, since a longer one
+// clears whatever its direction. To list those without walking the whole
+// plane the basis is Gauss-reduced first, after which
+// |m·a + n·b| ≥ (√3/2)·max(|m|, |n|)·|a|, so the coefficients are bounded by
+// the radius over the shortest vector. Only one of each ± pair is looked at;
+// the hole is symmetric under d ↦ −d, so its clearance is too.
+const REDUCTION_STEPS = 64;
+function latticeClearanceScale(u, v, radius, clearance) {
+  const len2 = ([x, y]) => x * x + y * y;
+  let a = u,
+    b = v;
+  if (Math.abs(u[0] * v[1] - u[1] * v[0]) < 1e-9 * Math.sqrt(len2(u) * len2(v)) || !(len2(u) > 0) || !(len2(v) > 0))
+    return 1; // Parallel families: nothing is drawn, and there is no lattice to check.
+  for (let i = 0; i < REDUCTION_STEPS; i++) {
+    if (len2(a) > len2(b)) [a, b] = [b, a];
+    const mu = Math.round((a[0] * b[0] + a[1] * b[1]) / len2(a));
+    if (mu === 0) break;
+    b = [b[0] - mu * a[0], b[1] - mu * a[1]];
+  }
+  const shortest = Math.sqrt(len2(a));
+  const range = Math.min(REDUCTION_STEPS, Math.ceil((2 * radius) / (Math.sqrt(3) * shortest)));
+  let scale = 1;
+  for (let n = 0; n <= range; n++) {
+    for (let m = n === 0 ? 1 : -range; m <= range; m++) {
+      const dx = m * a[0] + n * b[0],
+        dy = m * a[1] + n * b[1];
+      const length = Math.hypot(dx, dy);
+      if (length >= radius) continue;
+      const { bound, reach } = clearance(dx, dy);
+      if (length * scale >= bound) continue;
+      const need = reach();
+      if (need > length * scale) scale = need / length;
+    }
+  }
+  return scale;
 }
 
 // The offsets t of one family's lines, covering [tMin, tMax] and always
