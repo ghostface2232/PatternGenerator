@@ -1,5 +1,6 @@
 import { MoveVertical, Shuffle, SquarePen, Waypoints, X } from "lucide-react";
-import { DIAMOND_ORIENTATIONS, MAX_PATHS, MAX_PATH_POINTS, RADIAL_LAYOUTS, RADIAL_MODES } from "../../core/constants.js"; // prettier-ignore
+import { CUSTOM_SHAPE, DIAMOND_ORIENTATIONS, MAX_PATHS, MAX_PATH_POINTS, RADIAL_LAYOUTS, RADIAL_MODES } from "../../core/constants.js"; // prettier-ignore
+import { SHAPE_PRESETS } from "../../geometry/shape-presets.js";
 import { useEditor } from "../EditorContext.jsx";
 import { Dropdown, LinkButton, PitchInfo, SegRow, SliderRow, Toggle } from "../controls/index.js";
 import { MONO } from "../theme.js";
@@ -39,6 +40,12 @@ export function DimensionsPanel() {
   // chosen hole — its orientation and its corner radius — have nothing to act
   // on. The size sliders stay: they still set how big a cell is.
   const imposedShape = g.holeShape !== hole.shape;
+  // The preset shapes each carry one parameter and, some of them, a count;
+  // both are read across the preset's own range, so the sliders show the
+  // document's 0…1 and the preset's own label.
+  const preset = !imposedShape ? SHAPE_PRESETS[hole.shape] : null;
+  const isCustom = hole.shape === CUSTOM_SHAPE && !imposedShape;
+  const lockAspect = isCustom && hole.custom.lockAspect;
   // Cross-hatch derives each family's line spacing from the hole's shape along
   // the other family's direction, so a hole that is not round can put the two
   // families at different pitches even with the gaps linked; both are shown
@@ -107,7 +114,20 @@ export function DimensionsPanel() {
               />
             </label>
           )}
-          {hole.shape === "Triangle" && hole.triEquilateral ? (
+          {isCustom && (
+            <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <span style={{ fontSize: 11, color: theme.textSecondary }}>
+                Keep proportions (H = W × {hole.custom.aspect.toFixed(2)})
+              </span>
+              <Toggle
+                value={hole.custom.lockAspect}
+                onChange={v => api.set("hole.custom.lockAspect", v)}
+                dark={dark}
+                label="Keep proportions"
+              />
+            </label>
+          )}
+          {(hole.shape === "Triangle" && hole.triEquilateral) || lockAspect ? (
             <div
               style={{
                 display: "flex",
@@ -144,6 +164,28 @@ export function DimensionsPanel() {
               step={0.1}
               onChange={v => api.set("hole.cornerRadius", v)}
               unit="mm"
+              dark={dark}
+            />
+          )}
+          {preset && (
+            <SliderRow
+              label={preset.ratio.label}
+              value={hole.ratio}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={v => api.set("hole.ratio", v)}
+              dark={dark}
+            />
+          )}
+          {preset?.count && (
+            <SliderRow
+              label={preset.count.label}
+              value={Math.min(preset.count.max, Math.max(preset.count.min, hole.count))}
+              min={preset.count.min}
+              max={preset.count.max}
+              step={1}
+              onChange={v => api.set("hole.count", Math.round(v))}
               dark={dark}
             />
           )}

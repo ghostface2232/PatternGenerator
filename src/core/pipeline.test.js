@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDocument, getIn, patchIn, setIn } from "./document.js";
+import { PATTERN_TYPES, PRESET_HOLE_SHAPES } from "./constants.js";
 import {
   PLACEMENT_PARAMS,
   buildParams,
@@ -19,6 +20,7 @@ import { generateSVGString } from "../export/svg.js";
 // without a browser.
 const doc = (patch = {}) => patchIn(createDocument(), patch);
 const fixed = (n, d = 1) => Number(n.toFixed(d));
+const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`);
 
 test("default document: 739 holes, 35.4% OAR, 3.00 mm ligament", () => {
   const { stats, activeHoles } = computePattern(createDocument());
@@ -1086,4 +1088,72 @@ test("the variation field and the controllers frame themselves on the region's b
   const { holes } = computePattern(quarter);
   assert.ok(holes.every(h => h.x <= 100 + 3 && h.y <= 100 + 3));
   assert.ok(new Set(holes.map(h => h.scale.toFixed(3))).size > 5, "the field varies across the quarter");
+});
+
+// ─── Phase 4: preset and custom hole shapes ───────────────────────────
+
+test("a preset hole shape fills the sheet, exports as paths and reports an honest open area", () => {
+  for (const name of PRESET_HOLE_SHAPES) {
+    const d = doc({ "hole.shape": name, "hole.w": 6, "hole.h": 6, "layout.type": "Straight" });
+    const { holes, activeHoles, stats, params, region } = computePattern(d);
+    assert.ok(activeHoles.length > 100, `${name}: ${activeHoles.length} holes`);
+    assert.ok(
+      holes.every(h => h.rings),
+      `${name}: every hole carries the outline`
+    );
+    assert.equal(holes[0].rings, holes[1].rings, `${name}: one outline, shared`);
+    // Theoretical and counted agree: the unit-cell figure divides by the same
+    // area the holes are drawn with.
+    assert.equal(stats.useCountedOAR, false, name);
+    assert.ok(Math.abs(stats.theoreticalOAR - stats.countedOAR) < 1, `${name}: ${stats.theoreticalOAR} vs ${stats.countedOAR}`); // prettier-ignore
+    assert.ok(stats.displayOAR > 5 && stats.displayOAR < 90, `${name}: ${stats.displayOAR}`);
+    // 6 mm outlines 3 mm apart never touch: the gap is at least the ligament.
+    assert.equal(stats.hasOverlap, false, name);
+    assert.ok(stats.minLigament >= 3 - 1e-9, `${name}: ligament ${stats.minLigament}`);
+    const svg = generateSVGString(activeHoles, params, region);
+    assert.equal(svg.match(/<path d="M /g).length, activeHoles.length, name);
+  }
+});
+
+test("the preset parameters and the custom outline reshape a hole without moving it", () => {
+  const base = doc({ "hole.shape": "Star", removedHoles: [3, 4] });
+  for (const patch of [{ "hole.ratio": 0.9 }, { "hole.custom.lockAspect": false }]) {
+    assert.equal(patternSignature(patchIn(base, patch)), patternSignature(base), JSON.stringify(patch));
+  }
+  // A star's point count changes its circumscribed radius, which the free-form
+  // modes space by, so it IS signed — conservatively, since in a grid the
+  // holes stay where they were.
+  const positions = d => JSON.stringify(generateHoles(buildParams(d, deriveGeometry(d))));
+  assert.equal(positions(patchIn(base, { "hole.count": 8 })), positions(base));
+  assert.notEqual(positions(patchIn(base, { "hole.count": 8, "layout.type": "Scatter" })), positions(patchIn(base, { "layout.type": "Scatter" }))); // prettier-ignore
+  // And the area follows the parameter, the hole count does not.
+  const thin = computePattern(doc({ "hole.shape": "Star", "hole.ratio": 0 }));
+  const fat = computePattern(doc({ "hole.shape": "Star", "hole.ratio": 1 }));
+  assert.equal(thin.holes.length, fat.holes.length);
+  assert.ok(fat.stats.displayOAR > thin.stats.displayOAR);
+  // Custom with nothing loaded draws a square of the hole's size.
+  const square = computePattern(doc({ "hole.shape": "Custom", "hole.w": 4, "hole.h": 4 }));
+  near(square.holes[0].area, 16);
+  // A custom outline with its aspect locked sizes its height from its width.
+  const tall = doc({
+    "hole.shape": "Custom",
+    "hole.w": 4,
+    "hole.h": 4,
+    "hole.custom": { kind: "svg", name: "bar", rings: [[[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]]], aspect: 2, lockAspect: true, layers: [] }, // prettier-ignore
+  });
+  const g = deriveGeometry(tall);
+  assert.equal(g.effW, 4);
+  assert.equal(g.effH, 8);
+  near(computePattern(tall).holes[0].area, 32);
+  const free = deriveGeometry(patchIn(tall, { "hole.custom.lockAspect": false }));
+  assert.equal(free.effH, 4);
+});
+
+test("a preset hole works in every layout mode, the radial and cross-hatch ones included", () => {
+  for (const type of PATTERN_TYPES) {
+    const { activeHoles, stats } = computePattern(doc({ "hole.shape": "Plus", "layout.type": type }));
+    assert.ok(activeHoles.length > 20, `${type}: ${activeHoles.length}`);
+    assert.ok(stats.displayOAR > 0 && stats.displayOAR < 100, type);
+    if (type !== "Voronoi" && type !== "Flow Lines") assert.equal(stats.hasOverlap, false, type);
+  }
 });

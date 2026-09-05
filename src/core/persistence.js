@@ -12,8 +12,11 @@ import {
   HOLE_SHAPES,
   MAX_BOUNDARY_POINTS,
   MAX_BOUNDARY_RINGS,
+  MAX_CUSTOM_POINTS,
+  MAX_CUSTOM_RINGS,
   MAX_CUTOUT_POINTS,
   MAX_CUTOUTS,
+  MAX_SHAPE_LAYERS,
   MAX_ASSET_DATA_URL_CHARS,
   MAX_ASSET_TOTAL_CHARS,
   MAX_ASSETS,
@@ -363,6 +366,73 @@ function validateCutouts(raw) {
   return cutouts;
 }
 
+// ─── The Custom hole shape ────────────────────────────────────────────
+// An outline in unit space: rings of [x, y] pairs within the unit square (a
+// little slack for a vertex that rounding pushed over), read by the even-odd
+// rule. A ring that cannot be repaired is dropped, like a boundary ring.
+const CUSTOM_KINDS = ["none", "svg", "layers"];
+const LAYER_SHAPES = ["Circle", "Rectangle", "Hexagon", "Star", "Triangle", "Diamond", "Polygon"];
+const LAYER_ROLES = ["union", "subtract"];
+
+function validateUnitRing(raw) {
+  if (!Array.isArray(raw)) return null;
+  const ring = [];
+  for (const p of raw.slice(0, MAX_CUSTOM_POINTS)) {
+    const pair = Array.isArray(p) ? p : null;
+    if (!pair) return null;
+    const x = num(pair[0], NaN, "custom.coord");
+    const y = num(pair[1], NaN, "custom.coord");
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    ring.push([x, y]);
+  }
+  return ring.length >= 3 ? ring : null;
+}
+
+function validateShapeLayers(raw) {
+  if (!Array.isArray(raw)) return [];
+  const layers = [];
+  const takenIds = new Set();
+  for (const [index, entry] of raw.slice(0, MAX_SHAPE_LAYERS).entries()) {
+    const l = obj(entry);
+    const shape = pick(l.shape, LAYER_SHAPES, null);
+    if (!shape) continue;
+    let id = typeof l.id === "string" && l.id ? l.id.slice(0, 64) : `layer-${index + 1}`;
+    while (takenIds.has(id)) id = `${id}-${index + 1}`;
+    takenIds.add(id);
+    const points = shape === "Polygon" ? validateRing(l.points, MAX_CUSTOM_POINTS) : [];
+    if (shape === "Polygon" && !points) continue;
+    layers.push({
+      id,
+      shape,
+      role: pick(l.role, LAYER_ROLES, "union"),
+      x: num(l.x, 0, "layer.coord"),
+      y: num(l.y, 0, "layer.coord"),
+      w: num(l.w, 10, "layer.size"),
+      h: num(l.h, 10, "layer.size"),
+      rotation: num(l.rotation, 0, "layer.rotation"),
+      // The preset-like parameters a Star or Rectangle layer reads.
+      ratio: num(l.ratio, 0.5, "hole.ratio"),
+      count: int(l.count, 5, "hole.count"),
+      points: points || [],
+    });
+  }
+  return layers;
+}
+
+function validateCustomShape(raw, fallback) {
+  const c = obj(raw);
+  const rings = Array.isArray(c.rings) ? c.rings.slice(0, MAX_CUSTOM_RINGS).map(validateUnitRing).filter(Boolean) : [];
+  const kind = pick(c.kind, CUSTOM_KINDS, fallback.kind);
+  return {
+    kind: rings.length ? kind : "none",
+    name: typeof c.name === "string" ? c.name.trim().slice(0, 60) : fallback.name,
+    rings,
+    aspect: num(c.aspect, fallback.aspect, "custom.aspect"),
+    lockAspect: bool(c.lockAspect, fallback.lockAspect),
+    layers: validateShapeLayers(c.layers),
+  };
+}
+
 function validateRemovedHoles(raw) {
   if (!Array.isArray(raw)) return [];
   const seen = new Set();
@@ -419,6 +489,9 @@ export function validateDocument(raw) {
       diamondOrient: pick(hole.diamondOrient, DIAMOND_ORIENTATIONS, d.hole.diamondOrient),
       triEquilateral: bool(hole.triEquilateral, d.hole.triEquilateral),
       shapeMix: num(hole.shapeMix, d.hole.shapeMix, "hole.shapeMix"),
+      ratio: num(hole.ratio, d.hole.ratio, "hole.ratio"),
+      count: int(hole.count, d.hole.count, "hole.count"),
+      custom: validateCustomShape(hole.custom, d.hole.custom),
     },
     layout: {
       type: pick(layout.type, PATTERN_TYPES, d.layout.type),

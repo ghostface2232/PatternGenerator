@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_CUTOUTS, MAX_PATHS, MAX_VARIATION_LAYERS } from "../core/constants.js";
+import { CUSTOM_SHAPE, CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_CUTOUTS, MAX_PATHS, MAX_VARIATION_LAYERS } from "../core/constants.js"; // prettier-ignore
 import { cloneVariation, createDocument } from "../core/document.js";
 import {
   buildParams,
@@ -346,6 +346,11 @@ export default function App() {
         // Switching from Circle/Hex → custom size: init from diameter
         patch["hole.w"] = shape === "Pill" ? hole.diameter * 2 : hole.diameter;
         patch["hole.h"] = shape === "Triangle" ? (hole.diameter * Math.sqrt(3)) / 2 : hole.diameter;
+      }
+      // A custom outline arrives with proportions of its own: its height
+      // follows its width until the lock is released.
+      if (shape === CUSTOM_SHAPE && hole.custom.lockAspect) {
+        patch["hole.h"] = (patch["hole.w"] ?? hole.w) * (hole.custom.aspect || 1);
       }
       api.patch(patch);
     };

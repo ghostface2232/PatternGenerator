@@ -55,6 +55,16 @@ export function createDocument() {
       diamondOrient: "Point up",
       triEquilateral: true, // Triangle: lock H = W·√3/2
       shapeMix: 0.5, // Superellipse only: 0 diamond · 0.5 ellipse · 1 near-square
+      // The preset shapes' parameter (0…1, read across each preset's own
+      // range) and count (a star's points, a row's slots).
+      ratio: 0.5,
+      count: 5,
+      // The Custom shape: an outline in unit space (its bounding box the unit
+      // square), read from an SVG file (`kind: "svg"`) or built in the shape
+      // editor (`kind: "layers"`, with the editable stack in `layers` and the
+      // composed result in `rings`). `aspect` is the outline's own height over
+      // width, and `lockAspect` keeps H at W × aspect.
+      custom: { kind: "none", name: "", rings: [], aspect: 1, lockAspect: true, layers: [] },
     },
     layout: {
       type: "Staggered 60°",

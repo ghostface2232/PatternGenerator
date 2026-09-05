@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HOLE_SHAPES } from "../core/constants.js";
+import { HOLE_SHAPES, PRESET_HOLE_SHAPES } from "../core/constants.js";
 import { SHAPES, calcHoleArea, calcShapeGap, checkShapeOverlap, holeSVGElement, isPointInsideHole } from "./shapes.js";
+import { SHAPE_PRESETS, presetRings } from "./shape-presets.js";
+import { ringsArea, ringsBBox, ringsContains } from "./rings.js";
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`);
 const hole = (x, y, w, h, extra = {}) => ({ x, y, w, h, holeRadius: 0, ...extra });
@@ -115,4 +117,72 @@ test("the polygon shape is not a shape a document may name", () => {
   // asking for holes with no outline to draw.
   assert.ok(SHAPES.Polygon, "the registry has it");
   assert.equal(HOLE_SHAPES.includes("Polygon"), false, "the dropdown does not offer it");
+});
+
+// ─── Phase 4: the preset shapes, one unit-space entry for all of them ───
+
+test("every preset shape scales its unit outline by the hole's width and height", () => {
+  for (const name of PRESET_HOLE_SHAPES) {
+    const preset = SHAPE_PRESETS[name];
+    const rings = presetRings(name, 0.5, preset.count?.default);
+    assert.ok(rings.length >= 1, name);
+    const unit = ringsArea(rings);
+    assert.ok(unit > 0.05 && unit <= 1, `${name}: unit area ${unit}`);
+    // Area is unitArea × w × h exactly, so a 6 × 3 outline covers 18 times it.
+    near(calcHoleArea(name, 6, 3, 0, rings), unit * 18, 1e-9);
+    // The outline's longest extent is exactly 1, and its origin is on the hole.
+    const box = ringsBBox(rings);
+    near(Math.max(box.right - box.left, box.bottom - box.top), 1, 1e-9);
+    assert.ok(box.left < 0 && box.right > 0 && box.top < 0 && box.bottom > 0, `${name}: the origin is inside the box`);
+    // Its SVG element is one path per hole, and its hit test reads the outline
+    // rather than the box: the middle of a ring is metal.
+    const h = hole(10, 10, 6, 3, { rings });
+    assert.match(holeSVGElement(10, 10, name, 6, 3, 'fill="#000"', "", 0, 0, rings), /^ {4}<path d="M [^"]+" fill-rule="evenodd" fill="#000" \/>\n$/); // prettier-ignore
+    const middle = isPointInsideHole(10, 10, h, name);
+    assert.equal(middle, ringsContains(rings, 0, 0), name);
+    assert.equal(isPointInsideHole(10 + 6 * box.right + 0.2, 10, h, name), false, `${name}: outside the width`);
+  }
+  // The parameters do what they say: a thicker plus covers more, a star with
+  // more points covers more, a wider bore leaves less.
+  assert.ok(ringsArea(presetRings("Plus", 0.9)) > ringsArea(presetRings("Plus", 0.1)));
+  assert.ok(ringsArea(presetRings("Star", 0.9, 5)) > ringsArea(presetRings("Star", 0.1, 5)));
+  assert.equal(presetRings("Star", 0.5, 7)[0].length, 14);
+  assert.ok(ringsArea(presetRings("Ring", 0.9)) < ringsArea(presetRings("Ring", 0.1)));
+  near(ringsArea(presetRings("Ring", 0)), (Math.PI / 4) * (1 - 0.1 * 0.1), 0.01);
+  assert.equal(presetRings("Slots", 0.5, 4).length, 4);
+  // The same request comes back as the same list, so every hole shares one.
+  assert.equal(presetRings("Star", 0.3, 6), presetRings("Star", 0.3, 6));
+});
+
+test("preset holes measure their clearance by the outline, turned as they are", () => {
+  const rings = presetRings("Plus", 0.5);
+  const a = hole(0, 0, 10, 10, { rings });
+  // A second plus to the right, arms 2 mm apart: the gap is between the arms,
+  // not between the boxes.
+  const b = hole(12, 0, 10, 10, { rings });
+  near(calcShapeGap(a, b, "Plus"), 2, 1e-9);
+  // Turned by 45° it becomes a cross whose arm tips reach the corner: nearer.
+  const turned = hole(12, 0, 10, 10, { rings, angle: Math.PI / 4 });
+  assert.ok(calcShapeGap(a, turned, "Plus") < 2);
+  // Diagonal neighbours whose boxes overlap but whose arms do not are clear.
+  const diagonal = hole(8, 8, 10, 10, { rings });
+  assert.ok(calcShapeGap(a, diagonal, "Plus") > 0, "the boxes overlap, the arms do not");
+  assert.equal(checkShapeOverlap(a, hole(6, 0, 10, 10, { rings }), "Plus"), true);
+  // Rings: the bore is metal, so a small hole inside it is clear of the ring.
+  const washer = hole(0, 0, 10, 10, { rings: presetRings("Ring", 0.6) });
+  const pin = hole(0, 0, 1, 1, { rings: presetRings("Ring", 0.5) });
+  assert.ok(calcShapeGap(washer, pin, "Ring") > 1.9, "a pin inside the bore");
+});
+
+test("a preset's parameter never moves its points, so the free-form spacing holds still", () => {
+  // The star's points sit at the unit radius whatever its inner radius is; the
+  // plus's arm tips likewise. That is what keeps a parameter slider from
+  // clearing the user's hole removals — see patternSignature.
+  const reach = rings => rings.flat().reduce((r, [x, y]) => Math.max(r, Math.hypot(x, y)), 0);
+  near(reach(presetRings("Star", 0.1, 5)), reach(presetRings("Star", 0.9, 5)));
+  near(reach(presetRings("Ring", 0.1)), reach(presetRings("Ring", 0.9)));
+  near(reach(presetRings("Hex Nut", 0.1)), reach(presetRings("Hex Nut", 0.9)));
+  // Where the parameter genuinely moves the outline's furthest point — a
+  // plus's arm corners swing out as the arm widens — the reach follows it.
+  assert.ok(reach(presetRings("Plus", 0.9)) > reach(presetRings("Plus", 0.1)));
 });

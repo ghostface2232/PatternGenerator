@@ -8,7 +8,7 @@
 //                                    taper exit sizes and cull flags
 //   filterActive(holes, removed)     drops removed / culled holes
 //   computeStats(...)                OAR (theoretical or counted), ligament, overlaps
-import { CUSTOM_SIZE_SHAPES, DOC_LIMITS, MORPH_SHAPE, PERF_MODE_HOLE_LIMIT } from "./constants.js";
+import { CUSTOM_SHAPE, CUSTOM_SIZE_SHAPES, DOC_LIMITS, MORPH_SHAPE, PERF_MODE_HOLE_LIMIT } from "./constants.js";
 import { clamp, DEG } from "./math.js";
 import { basePolyVerts, insetConvexPoly, isConvexPoly, isInsidePoly, maxCornerRadius, polyBBox, polyCentroid, triInradius } from "../geometry/polygon.js"; // prettier-ignore
 import { ringsBBox } from "../geometry/rings.js";
@@ -16,6 +16,7 @@ import { erodeRings } from "../geometry/offset.js";
 import { calcHoleArea, getShape } from "../geometry/shapes.js";
 import { curvatureLimit, strokeBBox, strokeMaxWidth, strokeMinWidth } from "../geometry/stroke.js";
 import { superNFromMix } from "../geometry/superellipse.js";
+import { isPresetShape, presetRings } from "../geometry/shape-presets.js";
 import { compileBoundary, estimateVisibleHoleArea } from "../geometry/boundary.js";
 import { calcMinLigament, findOverlaps } from "../geometry/ligament.js";
 import { calcCellOAR } from "../geometry/oar.js";
@@ -36,6 +37,19 @@ import { CHANNEL_INFO, compileControllers, compiledDrivesChannel, evaluateCompil
 const IMPOSED_SHAPES = { Voronoi: "Polygon", "Flow Lines": "Stroke" };
 export const effectiveHoleShape = doc => IMPOSED_SHAPES[doc.layout.type] ?? doc.hole.shape;
 
+// The outline a unit-space shape (a preset, or Custom) draws with, from the
+// document's hole block: the preset's rings for its ratio and count, or the
+// custom outline the document holds. One list, shared by reference with every
+// hole of the document, since the hole's own width and height scale it. Null
+// for every other shape. A Custom shape with nothing loaded yet draws a square,
+// so the choice is visible before an outline arrives.
+const CUSTOM_PLACEHOLDER = [[[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]]]; // prettier-ignore
+export function holeUnitRings(hole) {
+  if (isPresetShape(hole.shape)) return presetRings(hole.shape, hole.ratio, hole.count);
+  if (hole.shape === CUSTOM_SHAPE) return hole.custom?.rings?.length ? hole.custom.rings : CUSTOM_PLACEHOLDER;
+  return null;
+}
+
 export function deriveGeometry(doc) {
   const { hole, layout, sheet, boundary, taper } = doc;
   const patternType = layout.type;
@@ -51,9 +65,11 @@ export function deriveGeometry(doc) {
   const effH =
     sizeShape === "Triangle" && hole.triEquilateral
       ? (hole.w * Math.sqrt(3)) / 2
-      : hasCustomSize
-        ? hole.h
-        : hole.diameter;
+      : sizeShape === CUSTOM_SHAPE && hole.custom?.lockAspect
+        ? hole.w * (hole.custom.aspect || 1)
+        : hasCustomSize
+          ? hole.h
+          : hole.diameter;
 
   const pitchX = effW + layout.edgeGapX;
   const pitchY = effH + layout.edgeGapY;
@@ -83,7 +99,13 @@ export function deriveGeometry(doc) {
 
   const radial = layout.radial;
   const radialExtents = getRadialShapeExtents(sizeShape, effW, effH, hole.diamondOrient);
-  const radialOuterRadius = getRadialShapeOuterRadius(sizeShape, effW, effH);
+  // A preset or custom outline's circumscribed radius comes from its own
+  // vertices; the radial engine, which cannot see them, reads the box instead
+  // and only ever spaces its rings wider.
+  const unitOutline = getShape(sizeShape).unit ? holeUnitRings(hole) : null;
+  const radialOuterRadius = unitOutline
+    ? unitOutline.flat().reduce((r, [x, y]) => Math.max(r, Math.hypot(x * effW, y * effH)), 0)
+    : getRadialShapeOuterRadius(sizeShape, effW, effH);
   const ringSpacing =
     radial.layout === "Concentric" ? hole.diameter + radial.edgeGap : radialExtents.radial + radial.edgeGap;
   const circumSpacing =
@@ -602,6 +624,8 @@ export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
   const morphs = holeShape === MORPH_SHAPE;
   const baseMix = hole.shapeMix ?? 0.5;
   const baseSuperN = morphs ? superNFromMix(baseMix) : undefined;
+  // A preset or custom outline: the same rings on every hole, by reference.
+  const unitRings = getShape(holeShape).unit ? holeUnitRings(hole) : null;
   const { size: hasSize, angle: hasAngle, shape: hasShape } = activeFieldChannels(doc, field);
   return baseHoles.map((base, index) => {
     const nx = perfW > 0 ? clamp((base.x - perfX) / perfW, 0, 1) : 0.5;
@@ -631,6 +655,7 @@ export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
     return {
       ...base,
       id: base.id || `hole-${index}`,
+      ...(unitRings ? { rings: unitRings } : null),
       culled,
       fieldValue: variation.enabled ? evaluateVariationField(nx, ny, variation, index + 1) : 1,
       scale,
@@ -640,11 +665,13 @@ export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
       w,
       h,
       holeRadius: scaledRadius,
-      area: calcHoleArea(holeShape, w, h, scaledRadius, size.entry ?? superN),
+      area: calcHoleArea(holeShape, w, h, scaledRadius, size.entry ?? unitRings ?? superN),
       exitW,
       exitH,
       exitHoleRadius,
-      exitArea: size.closed ? 0 : calcHoleArea(holeShape, exitW, exitH, exitHoleRadius, size.exit ?? superN),
+      exitArea: size.closed
+        ? 0
+        : calcHoleArea(holeShape, exitW, exitH, exitHoleRadius, size.exit ?? unitRings ?? superN),
       isClosed: taperActive && size.closed,
     };
   });
@@ -657,7 +684,9 @@ export function filterActive(holes, removedSet) {
 export function computeStats({ doc, g, holes, activeHoles, removedSet, overlaps, field = NO_FIELD }) {
   const { hole, sheet, boundary, variation } = doc;
   const shape = g.holeShape;
-  const baseSuperN = shape === MORPH_SHAPE ? superNFromMix(hole.shapeMix ?? 0.5) : undefined;
+  // The outline parameter of the shape at the document's own settings: the
+  // superellipse exponent, or a preset's or custom outline's rings.
+  const baseSuperN = shape === MORPH_SHAPE ? superNFromMix(hole.shapeMix ?? 0.5) : getShape(shape).unit ? holeUnitRings(hole) : undefined; // prettier-ignore
   const { effW, effH, taperActive, taperInset, region } = g;
   const activeHoleCount = activeHoles.length;
   const holeCount = holes.length;

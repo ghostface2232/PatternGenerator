@@ -82,6 +82,9 @@ export function getRadialShapeOuterRadius(shape, w, h) {
   if (shape === "Rectangle" || shape === "Superellipse") return Math.hypot(w, h) / 2;
   if (shape === "Pill") return Math.max(w, h) / 2;
   const vertices = shapeVertices(shape, w, h);
+  // A shape this file does not know (a preset or custom outline) is read as
+  // its box, which only ever spaces the rings further apart.
+  if (!vertices) return Math.hypot(w, h) / 2;
   return Math.max(...vertices.map(([x, y]) => Math.hypot(x, y)));
 }
 
