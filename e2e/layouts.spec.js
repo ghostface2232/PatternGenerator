@@ -100,6 +100,39 @@ test("the scatter seed shuffles the arrangement but never the minimum gap", asyn
   expect(await holes(page)).toBe(first);
 });
 
+test("a layout mode is still addressable with the variation panel open", async ({ page }) => {
+  // Spiral and Radial are layout modes AND variation field spaces. An accessible
+  // name has to be unique in the document, and the suite uses no `.first()`, so
+  // this fails on a collision rather than silently clicking the wrong control.
+  const variation = page.getByRole("switch", { name: "Size Variation", exact: true });
+  await variation.scrollIntoViewIfNeeded();
+  await variation.click();
+  await expect(page.getByRole("button", { name: "Spiral field space", exact: true })).toBeVisible();
+  await choose(page, "Type", "Spiral");
+  await choose(page, "Type", "Radial");
+  await expect(page.getByLabel("Radial Edge Gap", { exact: true })).toBeVisible();
+});
+
+test("two shuffles are two undo steps", async ({ page }) => {
+  // The seed is a numeric `set`, which coalesces under its own path by default —
+  // right for a slider drag, wrong here. A keyboard activation fires no
+  // pointerup, so nothing else closes the group.
+  await choose(page, "Type", "Scatter");
+  const seed = page.getByLabel("Scatter Seed", { exact: true });
+  const shuffle = page.getByRole("button", { name: "Shuffle the scatter seed", exact: true });
+  await shuffle.focus();
+  await page.keyboard.press("Enter");
+  const first = await seed.inputValue();
+  await page.keyboard.press("Enter");
+  const second = await seed.inputValue();
+  expect(second).not.toBe(first);
+
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect(seed).toHaveValue(first);
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect(seed).toHaveValue("1");
+});
+
 test("a spacing controller thins a scatter, and survives a reload", async ({ page }) => {
   await choose(page, "Type", "Scatter");
   const base = await holes(page);
@@ -116,7 +149,9 @@ test("a spacing controller thins a scatter, and survives a reload", async ({ pag
 
   await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
   await page.reload();
-  await expect(stat(page, "stat-holes")).toHaveText(String(thinned));
+  // Through the helper, not toHaveText: the readout is thousands-separated, so a
+  // bare String(n) would stop matching the moment a document ran past 999.
+  await expect.poll(() => holes(page)).toBe(thinned);
 });
 
 test("a spacing controller stretches the grid rows and keeps the columns straight", async ({ page }) => {
@@ -152,9 +187,98 @@ test("the modes that ignore the spacing channel say why", async ({ page }) => {
   await choose(page, "Type", "Radial");
   await expect(page.getByText(/no pitch for a spacing field to scale/)).toBeVisible();
 
-  // And a controller they ignore leaves the pattern untouched.
+  // And a controller they ignore leaves the pattern untouched — read the
+  // baseline BEFORE adding it, or the assertion never observes the add.
+  const before = await holes(page);
   await addController(page, "point");
-  const withController = await holes(page);
+  await setSlider(page, "Target Spacing", 2.5);
+  expect(await holes(page)).toBe(before);
+  // The open-area readout must not move either: the counted and theoretical
+  // figures differ slightly on identical geometry, so a controller that changes
+  // nothing flipping the path would move the headline number on its own.
+  const oar = await stat(page, "stat-oar").textContent();
   await page.getByRole("button", { name: "Remove every field controller", exact: true }).click();
-  expect(await holes(page)).toBe(withController);
+  expect(await holes(page)).toBe(before);
+  await expect(stat(page, "stat-oar")).toHaveText(oar);
+});
+
+test("a spacing edit clears removed holes, and a size edit does not", async ({ page }) => {
+  // The rule the whole pattern signature exists for: removed-hole indices
+  // address one particular generated list, so a controller that moves holes has
+  // to drop them and one that only redraws holes must not.
+  await choose(page, "Type", "Straight");
+  const total = await holes(page);
+  const removal = page.getByRole("switch", { name: "Click to Remove", exact: true });
+  await removal.scrollIntoViewIfNeeded();
+  await removal.click();
+  const box = await page.locator("canvas").boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect.poll(() => holes(page)).toBe(total - 1);
+  await removal.click();
+
+  await enableFields(page);
+  await chooseChannel(page, "Size");
+  await addController(page, "point");
+  // A size controller never moves a centre, so the removed hole is still gone.
+  await expect.poll(() => holes(page)).toBe(total - 1);
+
+  await chooseChannel(page, "Spacing");
+  await addController(page, "point");
+  await setSlider(page, "Target Spacing", 2.5);
+  // A spacing controller moves every row, so the removal is dropped — and undo
+  // brings both the controller and the removal back together.
+  const spread = await holes(page);
+  expect(spread).toBeLessThan(total - 1);
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect.poll(() => holes(page)).toBe(total - 1);
+});
+
+test("Spiral's two gaps are independent once unlinked", async ({ page }) => {
+  await choose(page, "Type", "Spiral");
+  const base = await holes(page);
+  // Linked, the turn gap follows the along gap and both loosen together.
+  await setSlider(page, "Along Gap", 8);
+  const linked = await holes(page);
+  expect(linked).toBeLessThan(base);
+  await expect(page.getByLabel("Turn Gap", { exact: true })).toHaveValue("8");
+
+  await page.getByTitle("Unlink gap").click();
+  await setSlider(page, "Turn Gap", 3);
+  await expect(page.getByLabel("Along Gap", { exact: true })).toHaveValue("8");
+  // Tighter turns, same step along the arm: more holes than the linked pair.
+  expect(await holes(page)).toBeGreaterThan(linked);
+});
+
+test("an image dropped while Spacing is selected lands on a channel it can drive", async ({ page }) => {
+  // A picture is decoded after the page loads and left out of share links, so it
+  // may not decide where a hole goes. The rail and the panel hide the tool; a
+  // file dropped on the page goes through neither, so it is redirected instead.
+  await enableFields(page);
+  await chooseChannel(page, "Spacing");
+  const png = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 2;
+    canvas.height = 1;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, 1, 1);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(1, 0, 1, 1);
+    return canvas.toDataURL("image/png");
+  });
+  await page.evaluate(async dataURL => {
+    const blob = await (await fetch(dataURL)).blob();
+    const file = new File([blob], "drop.png", { type: "image/png" });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    window.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, png);
+
+  await expect(page.getByText(/drop\.png · 2×1/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select size image controller 1", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Size field channel", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
 });

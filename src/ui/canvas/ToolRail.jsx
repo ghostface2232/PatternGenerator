@@ -32,10 +32,17 @@ export function ToolRail() {
   const inert = channel =>
     (channel === "shape" && doc.hole.shape !== MORPH_SHAPE) ||
     (channel === "spacing" && !layoutReadsSpacing(doc.hole.shape, doc.layout.type));
+  // Spacing has two distinct reasons for being inert and they blame different
+  // controls: Radial is the layout's doing, while the three uniform-ligament
+  // tilings are the SHAPE and the type together — telling someone on a hexagon
+  // honeycomb that "Staggered 60° does not read it" is false, since circles on
+  // Staggered 60° read it perfectly well.
   const why = channel =>
     channel === "shape"
       ? `${CHANNEL_INFO.shape.label} channel — needs the ${MORPH_SHAPE} hole shape`
-      : `${CHANNEL_INFO.spacing.label} channel — ${doc.layout.type} does not read it`;
+      : doc.layout.type === "Radial"
+        ? `${CHANNEL_INFO.spacing.label} channel — Radial does not read it`
+        : `${CHANNEL_INFO.spacing.label} channel — ${doc.hole.shape} on ${doc.layout.type} is an exact tiling, which does not read it`;
   // An image cannot drive spacing (see IMAGE_CHANNELS in fields/controllers.js).
   const kindDisabled = kind => full || (kind === "image" && !IMAGE_CHANNELS.includes(activeChannel));
 

@@ -272,23 +272,25 @@ Spacing 채널은 EDITABLE_CHANNELS에 들어왔고, 격자 계열은 6.2절이 
 
 ### 6.1 공통 인터페이스
 
+구현된 형태는 아래와 같으며, 계획 단계에서 적어 둔 ctx 객체와는 다릅니다. 실제 인터페이스는 이미 존재하던 평면 params 레코드를 그대로 쓰고, 여기에 spacing 필드 하나를 두 번째 인자로 더한 것입니다.
+
 ```js
 // layouts/index.js
 export const LAYOUTS = {
-  grid:       { label: "Grid",        params: [...], generate(ctx) },
-  staggered:  ...
-  radial:     ...
-  scatter:    { label: "Random Scatter", ... },
-  path:       { label: "Path", ... },
-  spiral:     { label: "Spiral", ... },
-  fibonacci:  { label: "Fibonacci", ... },   // 기존 Sunflower를 승격
-  crosshatch: { label: "Cross-hatch", ... },
-  voronoi:    { label: "Voronoi", ... },
-  flowlines:  { label: "Flow Lines", ... }
+  "Straight":      { family: "grid",       spacing: true,  theoretical: true },
+  "Staggered 60°": { family: "grid",       spacing: true,  theoretical: true },
+  "Staggered 45°": { family: "grid",       spacing: true,  theoretical: true },
+  "Radial":        { family: "radial",     spacing: false, theoretical: false },
+  "Custom Angle":  { family: "grid",       spacing: true,  theoretical: true },
+  "Cross-hatch":   { family: "crosshatch", spacing: true,  theoretical: true },
+  "Scatter":       { family: "free",       spacing: true,  theoretical: false },
+  "Spiral":        { family: "free",       spacing: true,  theoretical: false },
+  "Fibonacci":     { family: "free",       spacing: true,  theoretical: false },
 };
-// ctx = { boundary, hole, fields, rng, sheet, quality }
-// generate → { holes: [{x, y, angle, scale, shapeMix}], cells?: [...], strokes?: [...] }
+// generateHoles(params, spacing) → [{ x, y, angle? }]
 ```
+
+계획과 달라진 이유는 두 가지입니다. 첫째, params는 원시값만 담는 평면 레코드여야 합니다. PLACEMENT_PARAMS가 generateHoles의 구조 분해와 정확히 일치한다는 것이 removedHoles 규칙의 근거이고, 그 목록은 문자열로 서명되어야 하므로 샘플러 함수가 그 안에 들어갈 수 없습니다. 그래서 spacing은 두 번째 인자이고, patternSignature가 그 서명을 따로 붙입니다. 둘째, 키를 grid/staggered 같은 새 이름이 아니라 문서가 이미 쓰던 layout.type 문자열 그대로 둔 것은, 그 문자열이 곧 파일 포맷이기 때문입니다. 이름을 바꾸면 저장된 모든 문서가 로드 시 기본값으로 떨어집니다.
 
 모든 모드가 같은 boundary, hole, fields를 읽으므로 모드 전환 시 컨트롤러가 유지됩니다. 이것이 SolidVents가 강조하는 한 번의 클릭으로 모드 전환하는 경험의 정확한 구현입니다.
 
@@ -313,9 +315,13 @@ export const LAYOUTS = {
 
 layouts/*.test.js에 모드마다 결정성 (같은 시드 → 같은 결과), 경계 내 포함, 최소 간격 보장 (scatter), 홀 수 단조성 (간격 줄이면 홀 증가) 테스트를 둡니다.
 
-완료 기준: 9종 모드가 모두 컨트롤러 4채널을 읽고, 모드 전환 시 컨트롤러와 경계가 유지되며, 각 모드에서 SVG 내보내기가 정상입니다.
+완료 기준(개정): 드롭다운의 9종 모드가 모드 전환 시 컨트롤러와 경계를 유지하고, 각 모드에서 SVG 내보내기가 정상이며, Size·Angle·Shape 세 채널은 모든 모드에서, Spacing 채널은 그것을 읽는 모드에서 동작합니다.
 
-예상 규모: PR 8-10개 (모드당 1개, 인터페이스 1개, 공간 해시 1개).
+Spacing을 "9종 모두"로 적었던 애초의 기준은 잘못이었습니다. Radial의 세 하위 레이아웃과 균일 리거먼트 타일링 3종은 배치를 피치의 곱셈으로 표현하지 않고, 특히 타일링은 모든 변에 같은 리거먼트를 주는 것이 존재 이유이므로 그것을 늘이는 필드는 밀도 변조가 아니라 타일링의 파괴입니다. 대신 그 사실을 툴 레일과 패널이 명시하고, layoutReadsSpacing 하나가 UI·통계·배치의 판단 근거를 공유합니다.
+
+현재 상태: 9종 중 Radial을 제외한 8종이 Spacing을 읽습니다. 다만 격자 계열에서 홀 형상이 균일 리거먼트 타일링 3종(Hexagon+Staggered 60°, Diamond+Staggered 60°, Triangle+격자 전체)에 해당하면 그 조합만 읽지 않습니다. Path, Voronoi, Flow Lines는 위에 적은 이유로 남겨 두었으므로 이 Phase는 부분 완료입니다.
+
+예상 규모: PR 8-10개 (모드당 1개, 인터페이스 1개, 공간 해시 1개). 이 중 6개 분량을 진행했습니다.
 
 ## 7. Phase 4: 임의 경계와 커스텀 홀 형상
 

@@ -182,11 +182,20 @@ export function VariationPanel() {
           </div>
 
           <div style={groupLabel}>Field Space</div>
+          {/* Named "<space> field space", not just "<space>": two of these — Radial
+              and Spiral — are also layout modes in the Type dropdown, and an
+              accessible name has to be unique in the document. The Playwright
+              suite deliberately uses no `.first()`, so the collision failed the
+              helper that picks a layout mode whenever this panel was open. And
+              the chips carry aria-pressed for the usual reason: their only "on"
+              cue is their colour. */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4, marginBottom: 13 }}>
             {FIELD_SPACES.map(space => (
               <button
                 key={space}
                 onClick={() => actions.updateSelectedLayer({ space }, true)}
+                aria-label={`${space} field space`}
+                aria-pressed={layer.space === space}
                 style={chip(layer.space === space, { padding: "6px 2px" })}
               >
                 {space}
@@ -202,6 +211,8 @@ export function VariationPanel() {
                 <button
                   key={profile}
                   onClick={() => actions.updateSelectedLayer({ profile }, true)}
+                  aria-label={`${profile} size profile`}
+                  aria-pressed={active}
                   style={chip(active, {
                     height: 48,
                     display: "flex",

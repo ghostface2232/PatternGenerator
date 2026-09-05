@@ -81,6 +81,32 @@ function loadInitialDocument() {
   return stored;
 }
 
+// The compiled spacing field, memoised by VALUE rather than by identity.
+//
+// `compileSpacing` returns a fresh object for every edit of the fields block,
+// but only a change to its SIGNATURE can move a hole — and regenerating the
+// pattern costs orders of magnitude more than compiling the field. Keyed on
+// `fields` alone, a document holding one spacing controller re-ran the whole
+// layout on every frame of an unrelated size-controller drag: measured at about
+// 200 ms a frame on an 11 k-hole scatter, for byte-identical centres.
+//
+// Held in state and adjusted during render — React's own pattern for "I have a
+// new value but it means the same thing as the old one". The adjusting render
+// re-runs immediately, and only when the signature genuinely changed, in which
+// case the pattern was going to be regenerated anyway; the memo below sees the
+// same object both times, so it still generates once. A ref would read more
+// simply and is what the lint rules forbid, correctly: this value IS needed for
+// rendering.
+function useSpacingField(fields) {
+  const compiled = useMemo(() => compileSpacing(fields), [fields]);
+  const [held, setHeld] = useState(compiled);
+  if ((held?.signature ?? null) !== (compiled?.signature ?? null)) {
+    setHeld(compiled);
+    return compiled;
+  }
+  return held;
+}
+
 export default function App() {
   const [doc, api] = useDocument(loadInitialDocument);
   const closeHistoryGroup = api.closeGroup;
@@ -131,11 +157,11 @@ export default function App() {
   const geometry = useMemo(() => deriveGeometry(patternDoc), [patternDoc]);
   const params = useMemo(() => buildParams(patternDoc, geometry), [patternDoc, geometry]);
   // The spacing channel is the only part of the field system that moves a hole,
-  // so it is compiled apart from the rest and only it reaches the generator. It
-  // is null for a document with no spacing controller — which keeps this memo's
-  // value stable, so editing a size or angle controller still leaves the
-  // generated centres alone instead of regenerating the whole pattern.
-  const spacing = useMemo(() => compileSpacing(fields), [fields]);
+  // so it is compiled apart from the rest and only it reaches the generator.
+  // Held by signature (see useSpacingField) so that editing a size, angle or
+  // shape controller leaves the generated centres alone instead of regenerating
+  // the whole pattern for an identical result.
+  const spacing = useSpacingField(fields);
   const baseHoles = useMemo(() => generateHoles(params, spacing), [params, spacing]);
   // Decoding an image is asynchronous and lives outside the document, so the
   // maps arrive after the first render and simply recompile the field then.
@@ -316,7 +342,13 @@ export default function App() {
       );
     // Scatter's seed is a document field like any other, so shuffling it is one
     // undo step and the arrangement it produced can always be got back.
-    const reseedScatter = () => api.set("layout.scatter.seed", Math.floor(Math.random() * 100000));
+    // `merge: null` rather than the automatic key: a numeric `set` normally
+    // coalesces under its own path, which is right for a slider drag and wrong
+    // here — two Shuffles inside COALESCE_MS would collapse into one step and
+    // the first arrangement would be unreachable. The window-level pointerup
+    // closes the group after a mouse click, but not after a keyboard activation
+    // of the button, which is exactly how two shuffles land in the same group.
+    const reseedScatter = () => api.set("layout.scatter.seed", Math.floor(Math.random() * 100000), { merge: null });
     const setSunflowerGap = v =>
       api.patch({ "layout.radial.edgeGap": v, "layout.radial.circumGap": v }, { merge: "layout.radial.sunflower" });
     const setMarginUniform = v =>
