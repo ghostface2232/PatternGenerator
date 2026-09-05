@@ -256,25 +256,47 @@ evaluateChannel(controllers, channel, x, y, ctx) → number
 
 ## 6. Phase 3: 레이아웃 모드 9종
 
+상태 (2026-09-05): 완료. 공통 인터페이스, Spacing 채널, 공간 해시, 그리고 신규 모드 7종을 구현했습니다. 산출물은 src/layouts/index.js(레지스트리 겸 유일한 진입점), src/layouts/crosshatch.js, scatter.js, spiral.js, fibonacci.js, path.js(+path-gizmo.js), voronoi.js, flowlines.js, lattice.js, src/geometry/spatial-hash.js, stroke.js, src/core/rng.js이며 문서 스키마는 5로 올렸습니다.
+
+Type 드롭다운은 이제 12종입니다. Straight, Staggered 60°, Staggered 45°, Radial(Concentric·Sunflower·6k Rosette), Custom Angle, Cross-hatch, Scatter, Spiral, Fibonacci, Path, Voronoi, Flow Lines. 로드맵이 열거한 9종을 모두 덮었고, 격자 계열 3종과 Radial 3종이 그 위에 얹혀 있습니다.
+
+Spacing 채널은 EDITABLE_CHANNELS에 들어왔고, 격자 계열은 6.2절이 정한 대로 행 단위 누적 피치만 읽습니다. Cross-hatch는 두 직선 계열을 각각 이동시키므로 정렬을 깨지 않고 2차원 밀도 변조가 되며, 이것이 13절의 격자 왜곡 리스크에 대한 답입니다. Radial과 균일 리거먼트 타일링 3종은 이 채널을 읽지 않고, 그 사실을 패널과 툴 레일이 표시합니다.
+
+남겨 두었던 셋은 다음과 같이 마무리했습니다.
+
+- Path: 캔버스 위 곡선 편집기(layouts/path-gizmo.js)를 함께 넣었습니다. 정점 드래그, 곡선 추가·삭제, 스무딩, 접선 정렬, 닫힌 고리를 지원하며, 곡선 자체가 배치 입력이므로 compilePlacement가 서명합니다.
+- Voronoi: SHAPES에 Polygon 항목을 더해 홀별 외곽선을 다룰 수 있게 했습니다. 핵심은 effectiveHoleShape(doc) 하나로 "레이아웃이 형상을 강제한다"는 사실을 생성기·통계·캔버스·내보내기·패널이 공유하는 것입니다. d3-delaunay는 쓰지 않았습니다. 각 셀을 이웃 사이트의 이등분선 반평면으로 직접 잘라 만들고, 사이트에서 reach/2보다 먼 정점이 없을 때 종료하므로 근사가 아니라 정확합니다. 인접 셀이 각각 gap/2씩 물러나므로 리거먼트는 정확히 edge gap이며, 테스트가 1.000000·3.000000·8.000000 mm로 확인합니다.
+- Flow Lines: SHAPES에 Stroke 항목을 더했습니다. 중심선과 정점별 반폭을 홀이 직접 들고 있으며, 폭은 size 채널을 정점마다 읽으므로 한 슬롯이 자기 길이를 따라 좁아지고 넓어집니다. 리거먼트·오버랩 탐색은 홀이 아니라 세그먼트를 짝지어 돌고(ligament.js의 forEachSegmentPair), 면적은 경계 상자 샘플링 대신 중심선을 걸어 잽니다. 여기서도 리거먼트는 정확히 edge gap입니다.
+
+이미지 컨트롤러는 그 모드가 배치에 쓰는 채널을 구동할 수 없게 막았습니다. 무엇이 배치 채널인지는 layoutPlacementChannels 한 곳이 정하며, Spacing은 언제나, angle은 Flow Lines에서만 해당합니다. 밝기 맵은 DOM이 비동기로 디코딩하고 공유 링크에는 실리지 않으므로, 그것이 홀의 위치를 정하면 문서에 없는 상태가 배치를 좌우하게 되고 removedHoles 인덱스가 근거 없이 어긋납니다. 크기·각도·형상 채널은 그리는 방식만 바꾸므로 그림을 기다려도 됩니다.
+
 ### 6.1 공통 인터페이스
+
+구현된 형태는 아래와 같으며, 계획 단계에서 적어 둔 ctx 객체와는 다릅니다. 실제 인터페이스는 이미 존재하던 평면 params 레코드를 그대로 쓰고, 원시값이 아닌 배치 입력을 한 덩어리로 묶은 placement를 두 번째 인자로 더한 것입니다.
 
 ```js
 // layouts/index.js
 export const LAYOUTS = {
-  grid:       { label: "Grid",        params: [...], generate(ctx) },
-  staggered:  ...
-  radial:     ...
-  scatter:    { label: "Random Scatter", ... },
-  path:       { label: "Path", ... },
-  spiral:     { label: "Spiral", ... },
-  fibonacci:  { label: "Fibonacci", ... },   // 기존 Sunflower를 승격
-  crosshatch: { label: "Cross-hatch", ... },
-  voronoi:    { label: "Voronoi", ... },
-  flowlines:  { label: "Flow Lines", ... }
+  "Straight":      { family: "grid",       spacingModel: "grid",   spacing: true,  theoretical: true },
+  "Staggered 60°": { family: "grid",       spacingModel: "grid",   spacing: true,  theoretical: true },
+  "Staggered 45°": { family: "grid",       spacingModel: "grid",   spacing: true,  theoretical: true },
+  "Radial":        { family: "radial",     spacingModel: "radial", spacing: false, theoretical: false },
+  "Custom Angle":  { family: "grid",       spacingModel: "grid",   spacing: true,  theoretical: true },
+  "Cross-hatch":   { family: "crosshatch", spacingModel: "grid",   spacing: true,  theoretical: true },
+  "Scatter":       { family: "free",       spacingModel: "free",   spacing: true,  theoretical: false },
+  "Spiral":        { family: "free",       spacingModel: "free",   spacing: true,  theoretical: false },
+  "Fibonacci":     { family: "free",       spacingModel: "free",   spacing: true,  theoretical: false },
+  "Path":          { family: "path",       spacingModel: "free",   spacing: true,  theoretical: false },
+  "Voronoi":       { family: "voronoi",    spacingModel: "free",   spacing: true,  theoretical: false },
+  "Flow Lines":    { family: "flow",       spacingModel: "grid",   spacing: true,  theoretical: false },
 };
-// ctx = { boundary, hole, fields, rng, sheet, quality }
-// generate → { holes: [{x, y, angle, scale, shapeMix}], cells?: [...], strokes?: [...] }
+// generateHoles(params, placement) → [{ x, y, angle?, poly?, stroke? }]
+// placement = compilePlacement(doc) = { spacing, angle, path, signature } | null
 ```
+
+spacingModel은 그 모드가 홀 사이 거리를 어디서 재는지입니다. "grid"는 폭·높이에 edge gap을 더한 값, "free"는 외접원 지름에 더한 값(서로 임의의 각도로 놓이는 모드들), "radial"은 자기 링에서 잽니다. poly와 stroke는 레이아웃이 홀별 형상을 강제하는 두 모드(Voronoi, Flow Lines)만 채웁니다.
+
+계획과 달라진 이유는 두 가지입니다. 첫째, params는 원시값만 담는 평면 레코드여야 합니다. PLACEMENT_PARAMS가 generateHoles의 구조 분해와 정확히 일치한다는 것이 removedHoles 규칙의 근거이고, 그 목록은 문자열로 서명되어야 하므로 샘플러 함수가 그 안에 들어갈 수 없습니다. 그래서 spacing은 두 번째 인자이고, patternSignature가 그 서명을 따로 붙입니다. 둘째, 키를 grid/staggered 같은 새 이름이 아니라 문서가 이미 쓰던 layout.type 문자열 그대로 둔 것은, 그 문자열이 곧 파일 포맷이기 때문입니다. 이름을 바꾸면 저장된 모든 문서가 로드 시 기본값으로 떨어집니다.
 
 모든 모드가 같은 boundary, hole, fields를 읽으므로 모드 전환 시 컨트롤러가 유지됩니다. 이것이 SolidVents가 강조하는 한 번의 클릭으로 모드 전환하는 경험의 정확한 구현입니다.
 
@@ -291,17 +313,21 @@ export const LAYOUTS = {
 
 ### 6.3 통계 호환
 
-- OAR: voronoi와 flowlines는 이론 OAR 경로를 비활성화하고 카운트 경로만 사용. 폴리곤 면적은 shoelace
-- 리거먼트: 격자 계열은 기존 로직 유지. scatter, voronoi, flowlines는 공간 해시 (셀 크기 = 최대 홀 크기 + 최소 간격) 기반 이웃 탐색으로 O(n) 계산
+- OAR: voronoi와 flowlines는 이론 OAR 경로를 비활성화하고 카운트 경로만 사용(LAYOUTS의 theoretical: false). 폴리곤 면적은 shoelace, 슬롯 면적은 자기 외곽선의 shoelace
+- 리거먼트: 격자 계열은 기존 로직 유지. scatter와 voronoi는 공간 해시 기반 이웃 탐색에 외접원 하한으로 가지치기를 더해 정확한 값을 그대로 유지하면서 비용을 낮췄고(1 m 패널 Voronoi 5.5초 → 1.3초), flowlines는 홀의 경계 상자가 패널 전체가 되므로 세그먼트를 짝지어 도는 별도 경로를 씁니다
 - 오버랩: 동일 공간 해시 사용
 
 ### 6.4 테스트
 
 layouts/*.test.js에 모드마다 결정성 (같은 시드 → 같은 결과), 경계 내 포함, 최소 간격 보장 (scatter), 홀 수 단조성 (간격 줄이면 홀 증가) 테스트를 둡니다.
 
-완료 기준: 9종 모드가 모두 컨트롤러 4채널을 읽고, 모드 전환 시 컨트롤러와 경계가 유지되며, 각 모드에서 SVG 내보내기가 정상입니다.
+완료 기준(개정): 드롭다운의 9종 모드가 모드 전환 시 컨트롤러와 경계를 유지하고, 각 모드에서 SVG 내보내기가 정상이며, Size·Angle·Shape 세 채널은 모든 모드에서, Spacing 채널은 그것을 읽는 모드에서 동작합니다.
 
-예상 규모: PR 8-10개 (모드당 1개, 인터페이스 1개, 공간 해시 1개).
+Spacing을 "9종 모두"로 적었던 애초의 기준은 잘못이었습니다. Radial의 세 하위 레이아웃과 균일 리거먼트 타일링 3종은 배치를 피치의 곱셈으로 표현하지 않고, 특히 타일링은 모든 변에 같은 리거먼트를 주는 것이 존재 이유이므로 그것을 늘이는 필드는 밀도 변조가 아니라 타일링의 파괴입니다. 대신 그 사실을 툴 레일과 패널이 명시하고, layoutReadsSpacing 하나가 UI·통계·배치의 판단 근거를 공유합니다.
+
+현재 상태: 12종 중 Radial을 제외한 11종이 Spacing을 읽습니다. 다만 격자 계열에서 홀 형상이 균일 리거먼트 타일링 3종(Hexagon+Staggered 60°, Diamond+Staggered 60°, Triangle+격자 전체)에 해당하면 그 조합만 읽지 않습니다. Flow Lines는 여기에 더해 angle 채널까지 배치에 읽는 유일한 모드입니다.
+
+예상 규모: PR 8-10개 (모드당 1개, 인터페이스 1개, 공간 해시 1개). 실제로는 커밋 4개로 마쳤습니다.
 
 ## 7. Phase 4: 임의 경계와 커스텀 홀 형상
 

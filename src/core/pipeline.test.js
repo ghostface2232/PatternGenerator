@@ -1,11 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDocument, getIn, patchIn, setIn } from "./document.js";
-import { PLACEMENT_PARAMS, buildParams, computePattern, deriveGeometry, patternSignature } from "./pipeline.js";
+import {
+  PLACEMENT_PARAMS,
+  buildParams,
+  compilePlacement,
+  computePattern,
+  deriveGeometry,
+  patternSignature,
+} from "./pipeline.js";
 import { validateDocument } from "./persistence.js";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { generateHoles } from "../layouts/grid.js";
+import { generateHoles } from "../layouts/index.js";
 import { generateSVGString } from "../export/svg.js";
 
 // These numbers mirror e2e/smoke.spec.js so a geometry regression is caught
@@ -160,6 +167,14 @@ test("every edit that changes hole placement changes the signature", () => {
     { "layout.type": "Radial", "layout.radial.layout": "6k Rosette", "layout.radial.mode": "Circle" },
     { "boundary.margins.top": 8, "boundary.cornerRadius": 15 },
     { "hole.shape": "Rectangle", "hole.w": 6, "hole.h": 3, "layout.type": "Straight" },
+    { "layout.type": "Cross-hatch" },
+    { "layout.type": "Scatter" },
+    { "layout.type": "Spiral" },
+    { "layout.type": "Fibonacci" },
+    { "layout.type": "Path" },
+    { "layout.type": "Path", "layout.path.paths": [{ points: [{ x: 20, y: 30 }, { x: 90, y: 170 }, { x: 170, y: 60 }], closed: false }] }, // prettier-ignore
+    { "layout.type": "Voronoi" },
+    { "layout.type": "Flow Lines" },
   ];
   const edits = [
     { "hole.diameter": 7 },
@@ -182,6 +197,17 @@ test("every edit that changes hole placement changes the signature", () => {
     { "layout.radial.mode": "Circle" },
     { "layout.radial.layout": "Sunflower" },
     { "layout.radial.centerHole": true },
+    { "layout.crosshatch.angleA": 10 },
+    { "layout.crosshatch.angleB": 80 },
+    { "layout.scatter.seed": 4242 },
+    // The blocks the three newest modes place from. `layout.path` is a nested
+    // list rather than a number, and `compilePlacement` signs it whole; these
+    // are what would notice if it stopped.
+    { "layout.path.paths": [{ points: [{ x: 30, y: 30 }, { x: 170, y: 170 }], closed: false }] }, // prettier-ignore
+    { "layout.path.paths": [{ points: [{ x: 30, y: 30 }, { x: 170, y: 170 }], closed: true }] }, // prettier-ignore
+    { "layout.path.smooth": false },
+    { "layout.path.alignToTangent": false },
+    { "layout.flow.angle": 35 },
     { "sheet.w": 260 },
     { "sheet.h": 260 },
     { "boundary.margins.top": 12 },
@@ -512,7 +538,12 @@ test("PLACEMENT_PARAMS is exactly what generateHoles reads", () => {
   );
   assert.equal(source.match(/\barguments\b/), null, "generateHoles must not reach its input through arguments");
 
-  const destructuring = source.match(/^function generateHoles\(params\) \{\s*const \{([\s\S]*?)\} = params;/);
+  // generateHoles' second input is deliberately not a param: it holds a sampler
+  // and a nested list, and PLACEMENT_PARAMS is primitives. patternSignature
+  // signs it separately, from the same compilePlacement call the layouts read,
+  // and the tests below exercise that half.
+  assert.match(source, /^function generateHoles\(params, placement = null\) \{/);
+  const destructuring = source.match(/^function generateHoles\(params, placement = null\) \{\s*const \{([\s\S]*?)\} = params;/); // prettier-ignore
   assert.ok(destructuring, "could not find generateHoles' destructuring");
   const names = destructuring[1]
     .split(",")
@@ -537,9 +568,18 @@ test("no module let, var or ambient global in generateHoles' import closure", ()
   // the real one. Treat a failure as a design question, not a lint to satisfy by
   // rewriting the `let` as a const object — that spelling is the hole.
   //
-  // Two false alarms are known and deliberate: a pure module-level memo
-  // (`let cache = new Map()`) trips it, and so does a commented-out `let`.
-  const source = url => readFileSync(url, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  // One false alarm is known and deliberate: a pure module-level memo
+  // (`let cache = new Map()`) trips it.
+  //
+  // Comments are stripped first, both kinds. Not to be tidy: the scan below
+  // matches the bare words `document`, `window` and `process`, and prose about
+  // what a document holds is on nearly every file here. A `//` inside a string
+  // literal would be mangled by the second strip, and none of these files has
+  // one — the same assumption the block-comment strip has always made.
+  const source = url =>
+    readFileSync(url, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
   const closure = new Map();
   const walk = url => {
     if (closure.has(url.href)) return;
@@ -551,7 +591,7 @@ test("no module let, var or ambient global in generateHoles' import closure", ()
     // are stripped above for the same reason — one before an import hides it.
     for (const found of src.matchAll(/^\s*(?:import|export)[^"']*["'](\.[^"']+)["']/gm)) walk(new URL(found[1], url));
   };
-  walk(new URL("../layouts/grid.js", import.meta.url));
+  walk(new URL("../layouts/index.js", import.meta.url));
 
   // The exact list, not a count: in both escapes above the closure stayed at
   // five files while the true dependency set was six, so a floor said nothing.
@@ -559,10 +599,22 @@ test("no module let, var or ambient global in generateHoles' import closure", ()
   const files = [...closure.keys()].map(href => href.slice(root.length)).sort();
   assert.deepEqual(files, [
     "src/core/math.js",
+    "src/core/rng.js",
     "src/geometry/polygon.js",
     "src/geometry/rounded-rect.js",
+    "src/geometry/spatial-hash.js",
+    "src/layouts/crosshatch.js",
+    "src/layouts/fibonacci.js",
+    "src/layouts/field-sampling.js",
+    "src/layouts/flowlines.js",
     "src/layouts/grid.js",
+    "src/layouts/index.js",
+    "src/layouts/lattice.js",
+    "src/layouts/path.js",
     "src/layouts/radial-engine.js",
+    "src/layouts/scatter.js",
+    "src/layouts/spiral.js",
+    "src/layouts/voronoi.js",
   ]);
 
   for (const [href, src] of closure) {
@@ -668,10 +720,11 @@ test("the superellipse document computes and exports like any other shape", () =
   assert.ok(area(0) < area(0.5) && area(0.5) < area(1));
 });
 
-test("controllers never invalidate the removed-hole indices", () => {
-  // Nothing about a field moves a centre, so the removals a user made survive
+test("the size, angle and shape channels never invalidate the removed-hole indices", () => {
+  // None of the three moves a centre, so the removals a user made survive
   // adding, editing and enabling one. This is the property that keeps `fields`
-  // out of PLACEMENT_PARAMS.
+  // out of PLACEMENT_PARAMS — and the spacing channel is exactly the one that
+  // does not have it, which the next test is about.
   const base = doc({ removedHoles: [4, 9] });
   for (const patch of [
     { "fields.enabled": true },
@@ -684,4 +737,208 @@ test("controllers never invalidate the removed-hole indices", () => {
   }
   // But the morph shape itself is a shape swap, and that does move holes.
   assert.notEqual(patternSignature(doc({ "hole.shape": "Superellipse" })), patternSignature(createDocument()));
+});
+
+// ─── Phase 3: the spacing channel ─────────────────────────────────────
+
+const spacing = (patch = {}) => controller({ id: "s1", channel: "spacing", target: 2, radius: 70, ...patch });
+const withSpacing = (base, controllers) => patchIn(base, { "fields.enabled": true, "fields.controllers": controllers });
+
+test("every spacing edit that moves a hole changes the signature", () => {
+  // The same contract the placement params carry, for the input that is not one.
+  // generateHoles takes (params, spacing), so a signature over params alone would
+  // hold removals across a controller drag that moved every hole under them —
+  // and there would be no undo step pointing back at the arrangement they meant.
+  const positions = d => JSON.stringify(generateHoles(buildParams(d, deriveGeometry(d)), compilePlacement(d)));
+  const bases = [
+    { "layout.type": "Straight" },
+    { "layout.type": "Staggered 60°" },
+    { "layout.type": "Cross-hatch" },
+    { "layout.type": "Scatter" },
+    { "layout.type": "Spiral" },
+    { "layout.type": "Fibonacci" },
+    { "layout.type": "Path" },
+    { "layout.type": "Voronoi" },
+    { "layout.type": "Flow Lines" },
+  ];
+  const fields = [
+    [],
+    [spacing()],
+    [spacing({ target: 0.5 })],
+    [spacing({ target: 2.0001 })],
+    [spacing({ radius: 71 })],
+    [spacing({ strength: 0.5 })],
+    [spacing({ falloff: "linear" })],
+    [spacing({ geometry: { points: [{ x: 101, y: 100 }] } })],
+    [spacing({ kind: "line", geometry: { points: [{ x: 40, y: 40 }, { x: 160, y: 160 }] } })], // prettier-ignore
+    [spacing({ kind: "line", geometry: { points: [{ x: 40, y: 40 }, { x: 160, y: 160 }] }, oneSided: 1 })], // prettier-ignore
+    [spacing(), spacing({ id: "s2", geometry: { points: [{ x: 40, y: 40 }] } })],
+    // A spacing controller borrowing a size controller's geometry: editing the
+    // SIZE controller now moves holes, and the signature has to see it.
+    [controller({ id: "c1", channel: "size", geometry: { points: [{ x: 60, y: 60 }] } }), spacing({ id: "s2", syncWith: "c1" })], // prettier-ignore
+    [controller({ id: "c1", channel: "size", geometry: { points: [{ x: 150, y: 150 }] } }), spacing({ id: "s2", syncWith: "c1" })], // prettier-ignore
+  ];
+  let moved = 0;
+  for (const basePatch of bases) {
+    const documents = fields.map(controllers => withSpacing(doc(basePatch), controllers));
+    for (let i = 0; i < documents.length; i++) {
+      for (let j = i + 1; j < documents.length; j++) {
+        if (positions(documents[i]) === positions(documents[j])) continue;
+        moved++;
+        assert.notEqual(
+          patternSignature(documents[i]),
+          patternSignature(documents[j]),
+          `${JSON.stringify(basePatch)}: fields ${i} and ${j} place different holes but sign the same`
+        );
+      }
+    }
+  }
+  assert.ok(moved > 200, `expected the sweep to move holes often, got ${moved}`);
+});
+
+test("a spacing controller a mode ignores does not move the readout either", () => {
+  // The counted and theoretical open-area figures disagree slightly on identical
+  // geometry, so a controller that changes nothing must not flip the path — the
+  // headline number would move without a hole moving. Radial and the three
+  // uniform-ligament tilings all ignore the channel.
+  for (const patch of [
+    { "layout.type": "Radial" },
+    { "hole.shape": "Hexagon" },
+    { "hole.shape": "Diamond" },
+    { "hole.shape": "Triangle", "layout.type": "Straight" },
+  ]) {
+    const bare = computePattern(doc(patch));
+    const field = computePattern(withSpacing(doc(patch), [spacing({ target: 0.4 })]));
+    assert.equal(field.activeHoles.length, bare.activeHoles.length, JSON.stringify(patch));
+    assert.equal(field.stats.useCountedOAR, bare.stats.useCountedOAR, JSON.stringify(patch));
+    assert.equal(fixed(field.stats.displayOAR), fixed(bare.stats.displayOAR), JSON.stringify(patch));
+  }
+  // And a mode that DOES read it goes onto the counted path, because a stretched
+  // lattice has no unit cell left to divide by.
+  const straight = computePattern(doc({ "layout.type": "Straight" }));
+  const stretched = computePattern(withSpacing(doc({ "layout.type": "Straight" }), [spacing({ target: 2 })]));
+  assert.equal(straight.stats.useCountedOAR, false);
+  assert.equal(stretched.stats.useCountedOAR, true);
+  assert.ok(stretched.activeHoles.length < straight.activeHoles.length);
+});
+
+test("the new layout modes report an honest open area", () => {
+  // Cross-hatch has a unit cell — a parallelogram, not pitch × pitch — so it may
+  // use the theoretical figure; Scatter, Spiral and Fibonacci have no lattice at
+  // all and must count.
+  const cross = computePattern(doc({ "layout.type": "Cross-hatch" }));
+  assert.equal(cross.stats.useCountedOAR, false);
+  // Right-angled families give the straight grid's rectangular cell back.
+  const right = computePattern(
+    doc({ "layout.type": "Cross-hatch", "layout.crosshatch.angleA": 90, "layout.crosshatch.angleB": 0 })
+  );
+  assert.equal(fixed(right.stats.displayOAR), fixed(computePattern(doc({ "layout.type": "Straight" })).stats.displayOAR)); // prettier-ignore
+  // At a 60° crossing round holes one gap apart along both families are also
+  // one gap apart across the cell's short diagonal — the rhombus of the
+  // staggered 60° lattice — so the cell is side² · sin 60° and the open area
+  // RISES by 1/sin 60° over the square cell. The counted figure agrees.
+  const sixty = computePattern(
+    doc({ "layout.type": "Cross-hatch", "layout.crosshatch.angleA": 90, "layout.crosshatch.angleB": 30 })
+  );
+  assert.ok(Math.abs(sixty.stats.theoreticalOAR / right.stats.theoreticalOAR - 1 / Math.sin(Math.PI / 3)) < 1e-9);
+  assert.ok(Math.abs(sixty.stats.theoreticalOAR - sixty.stats.countedOAR) < 1);
+
+  for (const type of ["Scatter", "Spiral", "Fibonacci"]) {
+    assert.equal(computePattern(doc({ "layout.type": type })).stats.useCountedOAR, true, type);
+  }
+});
+
+test("cross-hatch leaves the requested gap along both families and across the diagonal", () => {
+  // The line spacings used to be the axis pitches (width + gap, height + gap)
+  // whatever the two directions, which is only right at right angles: a
+  // 20 × 2 mm slot with 3 mm gaps at 0°/30° put every hole on top of its
+  // neighbour along the 0° lines and read a ligament of 0. Each family's
+  // spacing now comes from the hole's clearance along the other family's
+  // direction, and every other lattice vector that could reach the hole — the
+  // short diagonal once the crossing is sharper than 60°, and stranger ones
+  // when the families are far from square — is held to the smaller gap. So the
+  // smallest ligament is the smaller of the two gaps, exactly, for every shape
+  // and any crossing.
+  for (const [patch, expected] of [
+    [{ "hole.shape": "Rectangle", "hole.w": 20, "hole.h": 2, "layout.edgeGapX": 3, "layout.edgeGapY": 3, "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 30 }, 3], // prettier-ignore
+    [{ "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 30 }, 3],
+    [{ "hole.shape": "Pill", "hole.w": 12, "hole.h": 4, "layout.edgeGapX": 2, "layout.edgeGapY": 4, "layout.crosshatch.angleA": 15, "layout.crosshatch.angleB": 70 }, 2], // prettier-ignore
+    [{ "hole.shape": "Diamond", "hole.w": 8, "hole.h": 4, "hole.diamondOrient": "Flat up", "layout.crosshatch.angleA": 10, "layout.crosshatch.angleB": 50 }, 3], // prettier-ignore
+    [{ "hole.shape": "Triangle", "hole.w": 6, "hole.h": 6, "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 30 }, 3], // prettier-ignore
+    // Unequal gaps at a sharp crossing skew the lattice until its closest
+    // vector is one no picture of the cell suggests (3v − 2u here): checking
+    // only the two diagonals left every one of these holes overlapping.
+    [{ "layout.gapLinked": false, "layout.edgeGapX": 1, "layout.edgeGapY": 4, "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 5 }, 1], // prettier-ignore
+    [{ "hole.shape": "Rectangle", "hole.w": 20, "hole.h": 2, "layout.gapLinked": false, "layout.edgeGapX": 1, "layout.edgeGapY": 4, "layout.crosshatch.angleA": 0, "layout.crosshatch.angleB": 20 }, 1], // prettier-ignore
+    [{ "hole.shape": "Pill", "hole.w": 12, "hole.h": 4, "layout.gapLinked": false, "layout.edgeGapX": 1, "layout.edgeGapY": 4, "layout.crosshatch.angleA": 33, "layout.crosshatch.angleB": -70 }, 1], // prettier-ignore
+  ]) {
+    const result = computePattern(doc({ "layout.type": "Cross-hatch", ...patch }));
+    assert.ok(result.activeHoles.length > 100, JSON.stringify(patch));
+    assert.equal(result.overlaps.size, 0, JSON.stringify(patch));
+    assert.ok(Math.abs(result.stats.minLigament - expected) < 1e-6, `${JSON.stringify(patch)}: ${result.stats.minLigament}`); // prettier-ignore
+    // The theoretical open area is the cell that was actually drawn.
+    assert.ok(Math.abs(result.stats.theoreticalOAR - result.stats.countedOAR) < 1, JSON.stringify(patch));
+  }
+  // A right-angled crossing is the Straight grid, pitch for pitch, and a slot
+  // that is 20 mm along one family and 2 mm along the other keeps its two
+  // pitches apart on the panel even with the gaps linked.
+  const slot = { "hole.shape": "Rectangle", "hole.w": 20, "hole.h": 2, "layout.edgeGapX": 3, "layout.edgeGapY": 1 };
+  const right = deriveGeometry(doc({ "layout.type": "Cross-hatch", "layout.crosshatch.angleA": 90, "layout.crosshatch.angleB": 0, ...slot })); // prettier-ignore
+  assert.ok(Math.abs(right.crossPitchA - 23) < 1e-9 && Math.abs(right.crossPitchB - 3) < 1e-9);
+  assert.equal(
+    computePattern(doc({ "layout.type": "Cross-hatch", "layout.crosshatch.angleA": 90, "layout.crosshatch.angleB": 0, ...slot })).activeHoles.length, // prettier-ignore
+    computePattern(doc({ "layout.type": "Straight", ...slot })).activeHoles.length
+  );
+});
+
+test("the staggered unit cell is the lattice that was actually drawn", () => {
+  // The staggered modes push their rows apart far enough that the DIAGONAL
+  // clearance is the gap that was asked for, which for a hole that is not square
+  // lifts the row pitch well above the nominal one. The theoretical open-area
+  // ratio used to divide by the nominal cell anyway: a 3 × 8 mm rectangle on
+  // Staggered 60° at a 3 mm gap read 77.0% open, and — being a clean infinite
+  // pattern — took the theoretical path and put that in the readout. It is
+  // 38.0% open.
+  //
+  // Pinned against the counted figure rather than against a constant, because
+  // the counted figure is arrived at completely differently (sampling the holes
+  // that are actually there) and the two agreeing IS the property.
+  for (const patch of [
+    { "hole.shape": "Rectangle", "hole.w": 3, "hole.h": 8, "layout.type": "Staggered 60°" },
+    { "hole.shape": "Rectangle", "hole.w": 8, "hole.h": 3, "layout.type": "Staggered 45°" },
+    { "hole.shape": "Pill", "hole.w": 9, "hole.h": 3, "layout.type": "Staggered 60°" },
+    { "hole.diameter": 5, "layout.type": "Staggered 60°" },
+    { "hole.diameter": 4, "layout.type": "Staggered 45°" },
+    { "hole.shape": "Hexagon", "layout.type": "Staggered 60°" },
+    { "layout.type": "Straight" },
+    { "layout.type": "Custom Angle" },
+  ]) {
+    const { stats } = computePattern(doc(patch));
+    assert.ok(
+      Math.abs(stats.theoreticalOAR - stats.countedOAR) < 1,
+      `${JSON.stringify(patch)}: theoretical ${stats.theoreticalOAR.toFixed(2)} against counted ${stats.countedOAR.toFixed(2)}` // prettier-ignore
+    );
+  }
+});
+
+test("the panel and the generator agree on the lattice", () => {
+  // deriveGeometry reports the row pitch the panel prints; generateHoles walks
+  // it. They were two independent derivations, and disagreed for Staggered 45°.
+  for (const patch of [
+    {},
+    { "layout.type": "Staggered 45°" },
+    { "layout.type": "Straight" },
+    { "layout.type": "Custom Angle" },
+    { "hole.shape": "Hexagon" },
+    { "hole.shape": "Rectangle", "hole.w": 9, "hole.h": 3, "layout.type": "Staggered 45°" },
+  ]) {
+    const d = doc(patch);
+    const g = deriveGeometry(d);
+    const holes = generateHoles(buildParams(d, g));
+    const rows = [...new Set(holes.map(h => h.y))].sort((a, b) => a - b);
+    const drawn = rows[1] - rows[0];
+    assert.ok(Math.abs(drawn - g.effPitchY) < 1e-9, `${JSON.stringify(patch)}: drew ${drawn}, reported ${g.effPitchY}`);
+    const columns = [...new Set(holes.filter(h => h.y === rows[0]).map(h => h.x))].sort((a, b) => a - b);
+    assert.ok(Math.abs(columns[1] - columns[0] - g.inRowPitchX) < 1e-9, JSON.stringify(patch));
+  }
 });

@@ -21,12 +21,29 @@ import { distPointSeg } from "../geometry/polygon.js";
 import { imageWeightAt } from "./image-map.js";
 
 export const FIELD_CHANNELS = ["size", "spacing", "angle", "shape"];
-// The channels the editor offers today. `spacing` is modelled, validated and
-// evaluated here — it round-trips through save, share and undo — but nothing
-// reads it yet: it decides where holes go, which is the layouts' business, and
-// they start reading it in Phase 3. Offering a tool that visibly does nothing
-// would be worse than not offering it, so the UI lists these three.
-export const EDITABLE_CHANNELS = ["size", "angle", "shape"];
+// The channels the editor offers. `spacing` joined them in Phase 3, when the
+// layout modes started reading it; not every mode does, so the panel says which
+// ones (see layoutReadsSpacing in layouts/index.js) rather than offering a tool
+// that silently does nothing.
+export const EDITABLE_CHANNELS = ["size", "spacing", "angle", "shape"];
+// An image cannot drive a channel the LAYOUT reads, and the reason is not
+// aesthetic. A brightness map is decoded from a bitmap by the DOM,
+// asynchronously, and share links do not carry the picture at all — so a
+// controller reading one would make hole POSITIONS depend on state that is not
+// in the document and does not arrive with it. `removedHoles` indices address
+// one particular generated list, and patternSignature can only sign what the
+// document holds; holes that shuffle when a decode finishes would leave those
+// indices pointing at other holes, with no edit and so no undo step anywhere in
+// sight. A channel that only changes how a hole is DRAWN is free to wait for the
+// picture.
+//
+// Which channels those are depends on the mode, so this takes the list rather
+// than deciding it: spacing always (every mode that reads it, reads it while
+// placing), and the angle channel as well under Flow Lines, where it is the
+// direction field the lines follow. See layoutPlacementChannels in
+// layouts/index.js, which is the one place that answer is written down.
+export const imageChannels = (placementChannels = ["spacing"]) =>
+  EDITABLE_CHANNELS.filter(channel => !placementChannels.includes(channel));
 export const CONTROLLER_KINDS = ["point", "line", "curve", "polyline", "image"];
 export const FALLOFFS = ["smooth", "linear", "hard"];
 // -1 / 0 / +1 — which side of a line, curve or polyline the controller reaches.
@@ -203,6 +220,12 @@ export function compileControllers(controllers, ctx = {}) {
       oneSided: source.kind === "point" || source.kind === "image" ? 0 : Math.sign(controller.oneSided || 0),
     };
     if (source.kind === "image") {
+      // See imageChannels: a picture arrives asynchronously and does not travel
+      // in a share link, so it may not decide where a hole goes. Dropped here as
+      // well as hidden in the UI, because a hand-edited file can still ask, and
+      // so can a document that was switched into a mode which reads one more
+      // channel than the mode it was drawn in.
+      if ((ctx.placementChannels ?? ["spacing"]).includes(controller.channel)) continue;
       const map = ctx.imageMaps?.[controller.image?.assetId];
       // No decoded bitmap (a share link drops them, and decoding is async) →
       // the controller is inert rather than a hard zero over its rectangle.

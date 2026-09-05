@@ -11,6 +11,8 @@ import {
   MAX_ASSET_DATA_URL_CHARS,
   MAX_ASSET_TOTAL_CHARS,
   MAX_ASSETS,
+  MAX_PATHS,
+  MAX_PATH_POINTS,
   MAX_VARIATION_LAYERS,
   PATTERN_TYPES,
   RADIAL_LAYOUTS,
@@ -46,6 +48,25 @@ const MIGRATIONS = {
   // inert (fields disabled, no controllers, no assets) — so a v1 document reads
   // back with exactly the pattern it was saved with.
   1: doc => ({ ...doc, schemaVersion: 2 }),
+  // 2 → 3: Phase 3 adds the layout modes Cross-hatch, Scatter, Spiral and
+  // Fibonacci, with `layout.crosshatch` and `layout.scatter` to describe the
+  // first two. A v2 document names none of them and carries neither block, so
+  // validateDocument fills both from createDocument()'s defaults and the
+  // document reads back with the pattern it was saved with — the new blocks are
+  // read only by modes a v2 document cannot be in.
+  2: doc => ({ ...doc, schemaVersion: 3 }),
+  // 3 → 4: the Path layout, with `layout.path` describing the curves holes are
+  // strung along. A v3 document cannot name that mode and carries no such block,
+  // so validateDocument fills it from createDocument()'s default — an empty list
+  // of curves, which the layout only reads when Path is the mode.
+  3: doc => ({ ...doc, schemaVersion: 4 }),
+  // 4 → 5: the Voronoi and Flow Lines layouts. Voronoi needed no new block — it
+  // sows its cell sites from `layout.scatter.seed`, which v4 already carries —
+  // and Flow Lines adds `layout.flow` for the direction its lines head in where
+  // no controller says otherwise. A v4 document can name neither mode, so
+  // validateDocument filling the block from the default reads its pattern back
+  // unchanged.
+  4: doc => ({ ...doc, schemaVersion: 5 }),
 };
 
 // ─── Validation ───────────────────────────────────────────────────────
@@ -246,6 +267,34 @@ function validateAssets(raw, controllers) {
   return assets;
 }
 
+// The Path layout's curves. A vertex with a coordinate that is not a number
+// poisons every distance the walk takes, so — as with a controller's geometry —
+// a curve that cannot be repaired is dropped whole rather than passed through
+// with a hole in it.
+function validatePaths(raw) {
+  if (!Array.isArray(raw)) return [];
+  const paths = [];
+  for (const entry of raw.slice(0, MAX_PATHS)) {
+    const source = obj(entry);
+    const rawPoints = Array.isArray(source.points) ? source.points.slice(0, MAX_PATH_POINTS) : [];
+    const points = [];
+    let broken = false;
+    for (const p of rawPoints) {
+      const point = obj(p);
+      const x = num(point.x, NaN, "layout.path.coord");
+      const y = num(point.y, NaN, "layout.path.coord");
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        broken = true;
+        break;
+      }
+      points.push({ x, y });
+    }
+    if (broken || points.length < 2) continue;
+    paths.push({ points, closed: bool(source.closed, false) });
+  }
+  return paths;
+}
+
 function validateRemovedHoles(raw) {
   if (!Array.isArray(raw)) return [];
   const seen = new Set();
@@ -273,6 +322,8 @@ export function validateDocument(raw) {
   const hole = obj(r.hole);
   const layout = obj(r.layout);
   const radial = obj(layout.radial);
+  const crosshatch = obj(layout.crosshatch);
+  const scatter = obj(layout.scatter);
   const taper = obj(r.taper);
   const appearance = obj(r.appearance);
   const margin = key => num(margins[key], d.boundary.margins[key], "boundary.margins");
@@ -303,6 +354,20 @@ export function validateDocument(raw) {
       edgeGapY: num(layout.edgeGapY, d.layout.edgeGapY, "layout.edgeGap"),
       gapLinked: bool(layout.gapLinked, d.layout.gapLinked),
       customAngle: num(layout.customAngle, d.layout.customAngle, "layout.customAngle"),
+      crosshatch: {
+        angleA: num(crosshatch.angleA, d.layout.crosshatch.angleA, "layout.crosshatch.angle"),
+        angleB: num(crosshatch.angleB, d.layout.crosshatch.angleB, "layout.crosshatch.angle"),
+      },
+      // Rounded to an integer as well as clamped: the seed is fed to a 32-bit
+      // PRNG, so a fractional one would be truncated somewhere and the document
+      // would no longer say what it produces.
+      scatter: { seed: int(scatter.seed, d.layout.scatter.seed, "layout.scatter.seed") },
+      path: {
+        paths: validatePaths(obj(layout.path).paths),
+        smooth: bool(obj(layout.path).smooth, d.layout.path.smooth),
+        alignToTangent: bool(obj(layout.path).alignToTangent, d.layout.path.alignToTangent),
+      },
+      flow: { angle: num(obj(layout.flow).angle, d.layout.flow.angle, "layout.flow.angle") },
       radial: {
         edgeGap: num(radial.edgeGap, d.layout.radial.edgeGap, "layout.radial.gap"),
         circumGap: num(radial.circumGap, d.layout.radial.circumGap, "layout.radial.gap"),

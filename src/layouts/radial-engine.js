@@ -1,10 +1,14 @@
-const TAU = Math.PI * 2;
-const EPS = 1e-9;
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 // For n >= 1, consecutive golden-angle Fermat points have a normalized
 // nearest-neighbour distance slightly above 1.6. Using the lower bound keeps
 // the requested edge gap intact after the spiral is scaled to the hole size.
-const SUNFLOWER_SAFE_SEPARATION = 1.6;
+// The top-level Fibonacci mode scales its own point set by the same fact, so the
+// constant lives there and both read the one copy.
+import { FERMAT_SAFE_SEPARATION } from "./fibonacci.js";
+import { convexPolyGap } from "../geometry/polygon.js";
+
+const TAU = Math.PI * 2;
+const EPS = 1e-9;
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
 export function diamondFlatAngle(w, h) {
   return -Math.atan2(h, w);
@@ -100,9 +104,72 @@ function shapeSupport(shape, w, h, orientation, direction) {
     return (Math.abs(s) * (h - w)) / 2 + w / 2;
   }
   const vertices = shapeVertices(shape, w, h);
+  // A per-hole outline or anything unknown: the box it fits in, which only ever
+  // measures the hole wide and so leaves more metal, never less.
+  if (!vertices) return (Math.abs(c) * w) / 2 + (Math.abs(s) * h) / 2;
   let support = -Infinity;
   for (const [x, y] of vertices) support = Math.max(support, x * c + y * s);
   return support;
+}
+
+// The width of a hole measured along `direction` — its shadow when lit from the
+// side — for a hole turned by `orientation`. Superellipses read as their box,
+// the same conservative reading the radial modes make of them.
+export function shapeExtent(shape, w, h, orientation, direction) {
+  return (
+    shapeSupport(shape, w, h, orientation, direction) + shapeSupport(shape, w, h, orientation, direction + Math.PI)
+  );
+}
+
+// The centre distance, along `direction`, at which two holes of this shape are
+// exactly `gap` apart — what a layout that places neighbours along a direction
+// other than the hole's own axes needs to leave the edge gap it was asked for.
+//
+// This is not the extent above plus the gap, except for a circle or a
+// direction along the hole's own axis: two 20 × 2 mm slots at 45° pass each
+// other after a horizontal shift of well under their 15.6 mm horizontal
+// extent, and spacing them by the extent leaves metal nobody asked for. What
+// is wanted is the shift at which the hole's clearance from its own translate
+// first reaches the gap. That clearance is the distance from the shift to the
+// hole's difference body (a convex set containing the origin), which never
+// decreases along a ray out of the origin — so the shift can be bisected on.
+// Circle and pill have closed forms; the polygonal shapes (superellipse as its
+// box, which only ever leaves more metal) use the exact convex-polygon
+// clearance. Bounded above by extent + gap, which is always enough.
+export function shapeReach(shape, w, h, orientation, direction, gap) {
+  const g = Math.max(0, gap);
+  if (shape === "Circle") return w + g;
+  const local = direction - orientation;
+  const c = Math.cos(local),
+    s = Math.sin(local);
+  if (shape === "Pill") {
+    // A stadium of radius r about a straight run of half-length a; its
+    // difference body grown by the gap is the stadium of half-length 2a and
+    // radius 2r + gap, and the ray out of the centre leaves it either through
+    // the straight side or round one of the end caps.
+    const r = Math.min(w, h) / 2,
+      a = Math.max(w, h) / 2 - r,
+      R = 2 * r + g;
+    const along = Math.abs(w >= h ? c : s),
+      across = Math.abs(w >= h ? s : c);
+    if (across > 0 && (R / across) * along <= 2 * a) return R / across;
+    return 2 * a * along + Math.sqrt(Math.max(0, R * R - 4 * a * a * across * across));
+  }
+  const vertices = shapeVertices(shape, w, h) ?? [
+    [-w / 2, -h / 2],
+    [w / 2, -h / 2],
+    [w / 2, h / 2],
+    [-w / 2, h / 2],
+  ];
+  const shifted = t => vertices.map(([x, y]) => [x + t * c, y + t * s]);
+  let lo = 0,
+    hi = shapeExtent(shape, w, h, orientation, direction) + g;
+  for (let i = 0; i < 64 && hi - lo > 1e-12; i++) {
+    const mid = (lo + hi) / 2;
+    if (convexPolyGap(vertices, shifted(mid)) >= g) hi = mid;
+    else lo = mid;
+  }
+  return hi;
 }
 
 export function projectedShapeGap(a, b, config) {
@@ -282,7 +349,7 @@ export function generateRadialHoles(options) {
     const minimumCenterDistance = outerRadius * 2 + requestedGap;
     // A centre hole makes n=0 -> n=1 the limiting pair. Without it, the
     // tighter n=1 -> n=4 Fermat pair determines the scale.
-    const spiralScale = minimumCenterDistance / (centerHole ? 1 : SUNFLOWER_SAFE_SEPARATION);
+    const spiralScale = minimumCenterDistance / (centerHole ? 1 : FERMAT_SAFE_SEPARATION);
     for (let n = 1; ; n++) {
       const radius = spiralScale * Math.sqrt(n);
       if (radius > maxRadius + EPS) break;

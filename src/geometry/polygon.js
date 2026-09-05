@@ -50,6 +50,104 @@ export function segmentGap(a, b, c, d) {
   );
 }
 
+// Shoelace area, signed: positive when the polygon is wound the way
+// `isInsideConvexPoly` expects (clockwise on screen, since y runs down). The
+// sign is what tells `insetConvexPoly` which side of an edge the inside is on.
+export function signedPolyArea(verts) {
+  let sum = 0;
+  for (let i = 0; i < verts.length; i++) {
+    const [x1, y1] = verts[i],
+      [x2, y2] = verts[(i + 1) % verts.length];
+    sum += x1 * y2 - x2 * y1;
+  }
+  return sum / 2;
+}
+
+export const polyArea = verts => Math.abs(signedPolyArea(verts));
+
+// Area centroid of a simple polygon, which for a convex one is always strictly
+// inside it — the property that makes it the safe centre to scale a hole about.
+// Falls back to the vertex mean for a degenerate outline with no area.
+export function polyCentroid(verts) {
+  let twice = 0,
+    cx = 0,
+    cy = 0;
+  for (let i = 0; i < verts.length; i++) {
+    const [x1, y1] = verts[i],
+      [x2, y2] = verts[(i + 1) % verts.length];
+    const cross = x1 * y2 - x2 * y1;
+    twice += cross;
+    cx += (x1 + x2) * cross;
+    cy += (y1 + y2) * cross;
+  }
+  if (Math.abs(twice) < 1e-12) {
+    const n = verts.length || 1;
+    return [verts.reduce((sum, v) => sum + v[0], 0) / n, verts.reduce((sum, v) => sum + v[1], 0) / n];
+  }
+  return [cx / (3 * twice), cy / (3 * twice)];
+}
+
+// Axis-aligned extent of a vertex list. Zeroes for an empty one, so a cell that
+// the inset below closed up entirely reads as a hole of no size rather than as
+// ±Infinity propagating through the statistics.
+export function polyBBox(verts) {
+  if (!verts.length) return { left: 0, right: 0, top: 0, bottom: 0 };
+  let left = Infinity,
+    right = -Infinity,
+    top = Infinity,
+    bottom = -Infinity;
+  for (const [x, y] of verts) {
+    if (x < left) left = x;
+    if (x > right) right = x;
+    if (y < top) top = y;
+    if (y > bottom) bottom = y;
+  }
+  return { left, right, top, bottom };
+}
+
+// Sutherland–Hodgman against one half-plane: the part of a convex polygon where
+// n·p ≤ c, with `n` a unit vector. Convex in, convex out, and the workhorse
+// under both the Voronoi cell construction (one half-plane per nearby site) and
+// the inset below (one per edge).
+export function clipPolyHalfPlane(verts, nx, ny, c) {
+  const out = [];
+  for (let i = 0; i < verts.length; i++) {
+    const a = verts[i],
+      b = verts[(i + 1) % verts.length];
+    const da = nx * a[0] + ny * a[1] - c;
+    const db = nx * b[0] + ny * b[1] - c;
+    if (da <= 0) out.push(a);
+    if ((da < 0 && db > 0) || (da > 0 && db < 0)) {
+      const t = da / (da - db);
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+  }
+  return out;
+}
+
+// A convex polygon with every edge moved `d` inward along its own normal — the
+// exact Minkowski erosion by a disc of radius d for a convex shape, which is
+// what makes the ligament between two Voronoi cells inset by g/2 each come out
+// at exactly g. Returns [] when the polygon closes up entirely.
+export function insetConvexPoly(verts, d) {
+  if (!(d > 0)) return verts;
+  if (verts.length < 3) return [];
+  // The normal (y₂−y₁, x₁−x₂) points outward only for the winding above, so a
+  // list handed over the other way round would be GROWN by d rather than shrunk.
+  const flip = signedPolyArea(verts) < 0 ? -1 : 1;
+  let out = verts;
+  for (let i = 0; i < verts.length && out.length >= 3; i++) {
+    const [x1, y1] = verts[i],
+      [x2, y2] = verts[(i + 1) % verts.length];
+    const nx = (y2 - y1) * flip,
+      ny = (x1 - x2) * flip;
+    const len = Math.hypot(nx, ny);
+    if (len < 1e-12) continue;
+    out = clipPolyHalfPlane(out, nx / len, ny / len, (nx * x1 + ny * y1) / len - d);
+  }
+  return out.length >= 3 ? out : [];
+}
+
 // Isoceles triangle inradius (base w, height h): r = area / semiperimeter.
 export function triInradius(w, h) {
   const slant = Math.hypot(w / 2, h);
@@ -105,13 +203,7 @@ export function maxCornerRadius(verts) {
 // Area of a convex polygon with rounded corners. Each rounded corner removes a
 // kite of area r²·cot(α/2) and gives back a circular sector of ½r²(π−α).
 export function roundedPolyArea(verts, holeRadius) {
-  let area = 0;
-  for (let i = 0; i < verts.length; i++) {
-    const [x1, y1] = verts[i],
-      [x2, y2] = verts[(i + 1) % verts.length];
-    area += x1 * y2 - x2 * y1;
-  }
-  area = Math.abs(area) / 2;
+  let area = polyArea(verts);
   const r = Math.min(holeRadius || 0, maxCornerRadius(verts));
   if (r <= 0) return area;
   for (let i = 0; i < verts.length; i++) {

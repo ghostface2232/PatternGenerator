@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_VARIATION_LAYERS } from "../core/constants.js";
+import { CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_PATHS, MAX_VARIATION_LAYERS } from "../core/constants.js";
 import { cloneVariation, createDocument } from "../core/document.js";
 import {
   buildParams,
   compileDocumentField,
+  fieldContext,
+  compilePlacement,
   computeStats,
   decorateHoles,
   deriveGeometry,
@@ -27,10 +29,11 @@ import {
   serializeDocument,
   touchRecent,
 } from "../core/persistence.js";
-import { generateHoles } from "../layouts/grid.js";
+import { generateHoles, layoutPlacementChannels } from "../layouts/index.js";
+import { addPathVertex, newPath, removePathVertex } from "../layouts/path-gizmo.js";
 import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
-import { EDITABLE_CHANNELS, MAX_CONTROLLERS, createController } from "../fields/controllers.js";
+import { EDITABLE_CHANNELS, MAX_CONTROLLERS, createController, imageChannels } from "../fields/controllers.js";
 import { readImageFile, splitImageMaps, useImageMaps } from "./useImageMaps.js";
 import { generateSVGParts } from "../export/svg.js";
 import { renderPNGBlob } from "../export/png.js";
@@ -80,6 +83,32 @@ function loadInitialDocument() {
   return stored;
 }
 
+// The compiled placement inputs, memoised by VALUE rather than by identity.
+//
+// `compilePlacement` returns a fresh object for every edit of the document, but
+// only a change to its SIGNATURE can move a hole — and regenerating the pattern
+// costs orders of magnitude more than compiling the field. Keyed on identity
+// alone, a document holding one spacing controller re-ran the whole layout on
+// every frame of an unrelated size-controller drag: measured at about 200 ms a
+// frame on an 11 k-hole scatter, for byte-identical centres.
+//
+// Held in state and adjusted during render — React's own pattern for "I have a
+// new value but it means the same thing as the old one". The adjusting render
+// re-runs immediately, and only when the signature genuinely changed, in which
+// case the pattern was going to be regenerated anyway; the memo below sees the
+// same object both times, so it still generates once. A ref would read more
+// simply and is what the lint rules forbid, correctly: this value IS needed for
+// rendering.
+function usePlacementField(doc) {
+  const compiled = useMemo(() => compilePlacement(doc), [doc]);
+  const [held, setHeld] = useState(compiled);
+  if ((held?.signature ?? null) !== (compiled?.signature ?? null)) {
+    setHeld(compiled);
+    return compiled;
+  }
+  return held;
+}
+
 export default function App() {
   const [doc, api] = useDocument(loadInitialDocument);
   const closeHistoryGroup = api.closeGroup;
@@ -105,6 +134,7 @@ export default function App() {
   const [variationAdvanced, setVariationAdvanced] = useState(false);
   const [variationHud, setVariationHud] = useState(null);
   const [fieldEditMode, setFieldEditMode] = useState(false);
+  const [pathEditModeOn, setPathEditMode] = useState(false);
   const [activeChannel, setActiveChannel] = useState(EDITABLE_CHANNELS[0]);
   const [fieldTool, setFieldTool] = useState(null); // armed kind for click-to-add on the canvas
   // Which controller the inspector is showing. UI state, like every other
@@ -112,6 +142,9 @@ export default function App() {
   // click, and clicking between controllers would evict real edits from a
   // hundred-step history.
   const [selectedId, setSelectedId] = useState(null);
+  // Which Path curve the panel shows and the canvas highlights. UI state for the
+  // same reason a controller selection is: it changes on every click.
+  const [selectedPathIndex, setSelectedPath] = useState(0);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [savedDoc, setSavedDoc] = useState(() => (startedClean ? doc : null)); // last written to localStorage
@@ -126,10 +159,30 @@ export default function App() {
   // setIn() shares untouched branches, so keying memos on the sub-objects means
   // e.g. a colour or removed-hole edit never regenerates the pattern.
   const { hole, layout, sheet, boundary, taper, variation, fields } = doc;
+  // Both of these are UI state ABOUT the document, so both are derived rather
+  // than trusted: undo can shorten the curve list under a selection, and leaving
+  // another mode does not stop this one being on. Clamping here rather than at
+  // every edit means neither can outlive what it points at — a selection past
+  // the end threw on the next "+ vertex", and an edit mode still on after the
+  // layout type changed left the canvas dragging invisible handles with the
+  // badge describing it and no control left on screen to switch it off.
+  // Left on rather than merely ignored: turning it off here means coming back to
+  // Path later arrives with the canvas quiet, which is what leaving a mode ought
+  // to mean. Adjusting state during render is React's own answer to "this state
+  // no longer matches the props"; the `&&` keeps this render correct as well,
+  // since the re-render happens after it.
+  if (pathEditModeOn && layout.type !== "Path") setPathEditMode(false);
+  const pathEditMode = pathEditModeOn && layout.type === "Path";
+  const selectedPath = Math.max(0, Math.min(selectedPathIndex, layout.path.paths.length - 1));
   const patternDoc = useMemo(() => ({ hole, layout, sheet, boundary, taper }), [hole, layout, sheet, boundary, taper]);
   const geometry = useMemo(() => deriveGeometry(patternDoc), [patternDoc]);
   const params = useMemo(() => buildParams(patternDoc, geometry), [patternDoc, geometry]);
-  const baseHoles = useMemo(() => generateHoles(params), [params]);
+  // The placement inputs that are not primitives: the spacing channel and the
+  // Path curves. Held by signature (see usePlacementField) so that editing a
+  // size, angle or shape controller leaves the generated centres alone instead
+  // of regenerating the whole pattern for an identical result.
+  const placement = usePlacementField(doc);
+  const baseHoles = useMemo(() => generateHoles(params, placement), [params, placement]);
   // Decoding an image is asynchronous and lives outside the document, so the
   // maps arrive after the first render and simply recompile the field then.
   const decodedImages = useImageMaps(doc.assets);
@@ -141,7 +194,10 @@ export default function App() {
     () => splitImageMaps(decodedImages, doc.assets),
     [decodedImages, doc.assets]
   );
-  const field = useMemo(() => compileDocumentField(fields, { imageMaps }), [fields, imageMaps]);
+  const field = useMemo(
+    () => compileDocumentField(fields, fieldContext(layout.type, imageMaps)),
+    [fields, imageMaps, layout.type]
+  );
   const holeDoc = useMemo(() => ({ ...patternDoc, variation, fields }), [patternDoc, variation, fields]);
   const holes = useMemo(
     () => decorateHoles(baseHoles, holeDoc, geometry, field),
@@ -149,7 +205,9 @@ export default function App() {
   );
   const removedSet = useMemo(() => new Set(doc.removedHoles), [doc.removedHoles]);
   const activeHoles = useMemo(() => filterActive(holes, removedSet), [holes, removedSet]);
-  const overlaps = useMemo(() => findOverlaps(activeHoles, hole.shape), [activeHoles, hole.shape]);
+  // `geometry.holeShape`, not `hole.shape`: Voronoi draws each hole as its own
+  // cell, and two cells are compared as the polygons they are.
+  const overlaps = useMemo(() => findOverlaps(activeHoles, geometry.holeShape), [activeHoles, geometry.holeShape]);
   const stats = useMemo(
     () => computeStats({ doc: holeDoc, g: geometry, params, holes, activeHoles, removedSet, overlaps, field }),
     [holeDoc, geometry, params, holes, activeHoles, removedSet, overlaps, field]
@@ -307,6 +365,15 @@ export default function App() {
           ? { "layout.radial.linked": false }
           : { "layout.radial.linked": true, "layout.radial.circumGap": doc.layout.radial.edgeGap }
       );
+    // Scatter's seed is a document field like any other, so shuffling it is one
+    // undo step and the arrangement it produced can always be got back.
+    // `merge: null` rather than the automatic key: a numeric `set` normally
+    // coalesces under its own path, which is right for a slider drag and wrong
+    // here — two Shuffles inside COALESCE_MS would collapse into one step and
+    // the first arrangement would be unreachable. The window-level pointerup
+    // closes the group after a mouse click, but not after a keyboard activation
+    // of the button, which is exactly how two shuffles land in the same group.
+    const reseedScatter = () => api.set("layout.scatter.seed", Math.floor(Math.random() * 100000), { merge: null });
     const setSunflowerGap = v =>
       api.patch({ "layout.radial.edgeGap": v, "layout.radial.circumGap": v }, { merge: "layout.radial.sunflower" });
     const setMarginUniform = v =>
@@ -367,6 +434,7 @@ export default function App() {
       setVariationEditMode(next);
       if (next) {
         setHoleRemovalMode(false);
+        setPathEditMode(false);
         setFieldEditMode(false);
         setFieldTool(null);
         if (!history.ref.current.enabled) history.commit(current => ({ ...current, enabled: true }));
@@ -453,6 +521,7 @@ export default function App() {
       if (on) {
         setHoleRemovalMode(false);
         setVariationEditMode(false);
+        setPathEditMode(false);
         if (!api.ref.current.fields.enabled) api.set("fields.enabled", true);
       } else {
         setFieldTool(null);
@@ -470,7 +539,11 @@ export default function App() {
     const selectController = setSelectedId;
     // `geometry` overrides the default placement when the controller is being
     // drawn on the canvas rather than dropped from the panel.
-    const addController = (kind, geometry = null) => {
+    // `geometry` overrides where it is placed; `onChannel` overrides which
+    // channel it drives, for the one caller that knows better than the panel's
+    // current selection — Flow Lines asking for the angle controller its own
+    // direction field needs.
+    const addController = (kind, geometry = null, onChannel = null) => {
       const current = api.ref.current.fields;
       if (current.controllers.length >= MAX_CONTROLLERS) {
         // Nothing more can be placed, so stop promising that a click will place
@@ -479,8 +552,20 @@ export default function App() {
         setFieldTool(null);
         return null;
       }
-      const controller = createController({ channel: activeChannel, kind, area: perfArea, existing: current.controllers }); // prettier-ignore
+      // An image cannot drive spacing, so a picture asked for while that channel
+      // is selected lands on one that can rather than becoming a controller that
+      // is inert by construction. The rail and the panel disable the button for
+      // the same reason; this covers the file dropped on the page, which does not
+      // go through either.
+      const allowed = imageChannels(layoutPlacementChannels(doc.layout.type));
+      const wanted = onChannel ?? activeChannel;
+      const channel = kind === "image" && !allowed.includes(wanted) ? allowed[0] : wanted;
+      const controller = createController({ channel, kind, area: perfArea, existing: current.controllers });
       if (geometry) controller.geometry = geometry;
+      if (channel !== activeChannel) {
+        setActiveChannel(channel);
+        setSelectedId(null);
+      }
       api.update(d => ({
         ...d,
         fields: { ...d.fields, enabled: true, controllers: [...d.fields.controllers, controller] },
@@ -489,6 +574,11 @@ export default function App() {
       enterFieldEditMode(true);
       return controller.id;
     };
+    // Flow Lines' direction IS the angle field, and a document with no angle
+    // controller draws straight slots — a mode that looks like it does nothing
+    // until you have read that its input lives in another panel. One button puts
+    // that input on the canvas, on the right channel, ready to drag.
+    const addFlowDirection = () => addController("point", null, "angle");
     const updateController = (id, patch, live = false) =>
       api.update(
         d => mapControllers(d, c => (c.id === id ? { ...c, ...patch } : c)),
@@ -545,8 +635,58 @@ export default function App() {
       setHoleRemovalMode(on);
       if (on) {
         setVariationEditMode(false);
+        setPathEditMode(false);
         enterFieldEditMode(false);
       }
+    };
+
+    // ─── Path curves ───────────────────────────────────────────────
+    // The curves live in the document, so every edit here is an undo step and a
+    // vertex drag coalesces into one, exactly like a controller handle.
+    const livePaths = () => api.ref.current.layout.path.paths;
+    const togglePathEditMode = () => {
+      const next = !pathEditModeOn;
+      setPathEditMode(next);
+      if (next) {
+        setVariationEditMode(false);
+        setHoleRemovalMode(false);
+        enterFieldEditMode(false);
+        // Editing needs something to edit: the layout draws a default curve
+        // when the list is empty, and this makes that same curve real rather
+        // than leaving the canvas showing a line with no handles on it.
+        if (livePaths().length === 0) api.set("layout.path.paths", [newPath(perfArea)]);
+      }
+    };
+    const addPath = () => {
+      const paths = livePaths();
+      if (paths.length >= MAX_PATHS) return;
+      api.set("layout.path.paths", [...paths, newPath(perfArea, paths)]);
+      setSelectedPath(paths.length);
+      setPathEditMode(true);
+    };
+    // No `setSelectedPath` here: React may run a reducer more than once, so a
+    // state update inside one is not something to rely on — and the selection is
+    // clamped where it is read instead, which also covers the undo that brings a
+    // removed curve back.
+    const removePath = index =>
+      api.set(
+        "layout.path.paths",
+        livePaths().filter((_, i) => i !== index)
+      );
+    const setPaths = (paths, live = false) =>
+      api.set("layout.path.paths", paths, live ? { merge: "layout.path.paths" } : {});
+    const editPathVertices = (index, edit) => {
+      const paths = livePaths();
+      if (!paths[index]) return;
+      const next = edit(paths[index]);
+      if (next) setPaths(paths.map((path, i) => (i === index ? next : path)));
+    };
+    const addVertex = index => editPathVertices(index, addPathVertex);
+    const removeVertex = index => editPathVertices(index, removePathVertex);
+    const togglePathClosed = index => {
+      const paths = livePaths();
+      if (!paths[index]) return;
+      setPaths(paths.map((path, i) => (i === index ? { ...path, closed: !path.closed } : path)));
     };
     const resetView = () => {
       setZoom(1);
@@ -562,6 +702,7 @@ export default function App() {
       setCircumEdgeGap,
       toggleRadialLinked,
       setSunflowerGap,
+      reseedScatter,
       setMarginUniform,
       toggleMarginLinked,
       applyPreset,
@@ -581,15 +722,24 @@ export default function App() {
       selectChannel,
       selectController,
       addController,
+      addFlowDirection,
       updateController,
       removeController,
       clearControllers,
       setControllerImage,
       clearControllerImage,
       setHoleRemoval,
+      togglePathEditMode,
+      addPath,
+      removePath,
+      setPaths,
+      addVertex,
+      removeVertex,
+      togglePathClosed,
+      selectPath: setSelectedPath,
       resetView,
     };
-  }, [doc, api, history, variationEditMode, fieldEditMode, activeChannel, perfArea, selectedId, selectedControllerId]);
+  }, [doc, api, history, variationEditMode, fieldEditMode, pathEditModeOn, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
@@ -628,8 +778,10 @@ export default function App() {
       setVariationEditMode(false);
       setHoleRemovalMode(false);
       setFieldEditMode(false);
+      setPathEditMode(false);
       setFieldTool(null);
       setSelectedId(null);
+      setSelectedPath(0);
       setVariationHud(null);
     },
     [api, flushPending]
@@ -749,6 +901,8 @@ export default function App() {
     variationHud,
     setVariationHud,
     fieldEditMode,
+    pathEditMode,
+    selectedPath,
     activeChannel,
     fieldTool,
     setFieldTool,

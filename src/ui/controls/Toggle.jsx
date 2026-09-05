@@ -1,10 +1,11 @@
-export function Toggle({ value, onChange, dark, label }) {
+export function Toggle({ value, onChange, dark, label, disabled = false }) {
   const accent = dark ? "#60a5fa" : "#2563eb";
   return (
     <div
-      onClick={() => onChange(!value)}
+      onClick={() => !disabled && onChange(!value)}
       role="switch"
       aria-checked={value}
+      aria-disabled={disabled || undefined}
       aria-label={label}
       style={{
         width: 34,
@@ -12,7 +13,7 @@ export function Toggle({ value, onChange, dark, label }) {
         borderRadius: 9,
         padding: 2,
         flexShrink: 0,
-        cursor: "pointer",
+        cursor: disabled ? "default" : "pointer",
         background: value ? accent : dark ? "#333" : "#ccc",
         transition: "background 0.2s",
         display: "flex",

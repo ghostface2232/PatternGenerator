@@ -5,18 +5,25 @@ import {
   CHANNEL_INFO,
   EDITABLE_CHANNELS,
   FALLOFFS,
+  imageChannels,
   MAX_CONTROLLERS,
   MAX_POLYLINE_POINTS,
 } from "../../fields/controllers.js";
+import { effectiveHoleShape } from "../../core/pipeline.js";
+import { layoutPlacementChannels, layoutReadsSpacing } from "../../layouts/index.js";
 import { addPolylinePoint, removePolylinePoint } from "../../fields/controller-gizmo.js";
 import { useEditor } from "../EditorContext.jsx";
 import { Select, SliderRow, Toggle } from "../controls/index.js";
 import { readImageFile } from "../useImageMaps.js";
 import { MONO } from "../theme.js";
-import { Section } from "./Section.jsx";
+import { Section, groupLabelStyle } from "./Section.jsx";
 
 const KIND_ICON = { point: Circle, line: Minus, curve: Spline, polyline: Waypoints, image: ImageIcon };
 const KINDS = ["point", "line", "curve", "polyline", "image"];
+// An image cannot drive a channel the mode places by — its brightness map is
+// decoded asynchronously and left out of share links, so it may not decide where
+// a hole goes. See imageChannels in fields/controllers.js.
+const kindsFor = (channel, allowed) => (allowed.includes(channel) ? KINDS : KINDS.filter(kind => kind !== "image"));
 
 export function FieldsPanel() {
   const { doc, theme, ui, actions, selectedController: selected } = useEditor();
@@ -29,9 +36,16 @@ export function FieldsPanel() {
   const channelControllers = fields.controllers.filter(c => c.channel === activeChannel);
   const info = CHANNEL_INFO[activeChannel];
   const full = fields.controllers.length >= MAX_CONTROLLERS;
-  // The shape channel only has something to morph when the hole is the one shape
-  // with a free parameter, so say so rather than letting it look broken.
-  const shapeInert = activeChannel === "shape" && doc.hole.shape !== MORPH_SHAPE;
+  // Two channels can be live and still have nothing to act on here. Say so
+  // rather than letting them look broken: the shape channel needs the one hole
+  // shape with a free parameter, and the spacing channel needs a layout mode
+  // that lays holes out row by row or point by point.
+  // The EFFECTIVE shape, so a mode that imposes one answers for it: a Voronoi
+  // cell is a polygon nothing morphs, whatever the dropdown still says.
+  const shape = effectiveHoleShape(doc);
+  const shapeInert = activeChannel === "shape" && shape !== MORPH_SHAPE;
+  const spacingInert = activeChannel === "spacing" && !layoutReadsSpacing(shape, doc.layout.type);
+  const kinds = kindsFor(activeChannel, imageChannels(layoutPlacementChannels(doc.layout.type)));
 
   // Selected state has to reach assistive tech, not just the eye: every chip
   // below is a button whose only "on" cue is its colour.
@@ -47,13 +61,7 @@ export function FieldsPanel() {
     padding: "6px 2px",
     ...extra,
   });
-  const groupLabel = {
-    fontSize: 9,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-    color: theme.textSecondary,
-    marginBottom: 6,
-  };
+  const groupLabel = groupLabelStyle(theme);
   const iconBtn = (extra = {}) => ({
     width: 28,
     height: 28,
@@ -99,8 +107,8 @@ export function FieldsPanel() {
       }
     >
       <div style={{ fontSize: 9, color: theme.textSecondary, marginBottom: 10, lineHeight: 1.6 }}>
-        Drop a controller on the sheet and it drives one channel — how big the holes near it are, which way they turn,
-        or what shape they take. Spacing arrives with the Phase 3 layout modes.
+        Drop a controller on the sheet and it drives one channel — how big the holes near it are, how far apart they
+        sit, which way they turn, or what shape they take.
       </div>
 
       <button
@@ -170,11 +178,31 @@ export function FieldsPanel() {
             </div>
           )}
 
+          {spacingInert && (
+            <div
+              style={{
+                padding: "7px 9px",
+                borderRadius: 5,
+                background: theme.warnBg,
+                color: theme.textSecondary,
+                fontSize: 9,
+                lineHeight: 1.6,
+                marginBottom: 12,
+              }}
+            >
+              {doc.layout.type === "Radial"
+                ? "Radial does not read this channel: two of its three ring layouts place their rings by solving for the gaps they are given, so there is no one pitch to scale. Spiral and Fibonacci are the variable-density radial patterns."
+                : `${shape} on ${doc.layout.type} is an exact interlocking tiling with the same ligament on every edge — a spacing field would be stretching the tiling, not varying its density. Change the hole shape or the pattern type to use this channel.`}
+            </div>
+          )}
+
           <div style={groupLabel}>
             Add ({fields.controllers.length}/{MAX_CONTROLLERS})
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4, marginBottom: 12 }}>
-            {KINDS.map(kind => {
+          <div
+            style={{ display: "grid", gridTemplateColumns: `repeat(${kinds.length}, 1fr)`, gap: 4, marginBottom: 12 }}
+          >
+            {kinds.map(kind => {
               const Icon = KIND_ICON[kind];
               return (
                 <button

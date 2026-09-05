@@ -1,13 +1,15 @@
 // Pure canvas drawing of the current scene. No React, no state: the component
 // gathers everything into a `scene` object and calls drawScene() in an effect.
 // Returns the view transform so pointer handlers can map client → sheet space.
-import { traceHolePath } from "../geometry/shapes.js";
+import { holeExitOutline, holeOutline, traceHolePath } from "../geometry/shapes.js";
+import { strokeMaxWidth } from "../geometry/stroke.js";
 import { tracePerfBoundary } from "../geometry/boundary.js";
 import { evaluateVariationField } from "../fields/variation-engine.js";
 import { computeGizmo } from "../fields/gizmo.js";
 import { channelBase, evaluateCompiled, resolveSyncedGeometry } from "../fields/controllers.js";
 import { controllerHandles, controllerPolyline } from "../fields/controller-gizmo.js";
 import { placementCorners } from "../fields/image-map.js";
+import { defaultPathPoints, flattenPath } from "../layouts/path.js";
 import { computeView } from "./view.js";
 
 export function drawScene(canvas, scene) {
@@ -36,6 +38,9 @@ export function drawScene(canvas, scene) {
     holeColor,
     bgColor,
     geometry,
+    pathBlock,
+    pathEditMode,
+    selectedPath,
   } = scene;
   const { sheetW, sheetH, marginLeft, marginTop, marginRight, marginBottom, cornerRadius, patternType, radialMode } =
     params;
@@ -143,7 +148,12 @@ export function drawScene(canvas, scene) {
     ctx.fillStyle = holeColor;
     holes.forEach((h, i) => {
       if (removedSet.has(i) || h.culled) return;
-      ctx.fillRect(h.x - h.w * 0.35, h.y - h.h * 0.35, h.w * 0.7, h.h * 0.7);
+      // A hole that carries its own outline is not centred in its bounding box,
+      // so the cheap stand-in is a square about its own origin — a Voronoi
+      // cell's site is inside its cell, and its narrower dimension fits there.
+      const w = h.poly ? Math.min(h.w, h.h) : h.w;
+      const height = h.poly ? Math.min(h.w, h.h) : h.h;
+      ctx.fillRect(h.x - w * 0.35, h.y - height * 0.35, w * 0.7, height * 0.7);
     });
   } else {
     // `overlaps` indexes the active (non-removed, non-culled) list; map back to `holes`.
@@ -158,7 +168,10 @@ export function drawScene(canvas, scene) {
 
     holes.forEach((h, i) => {
       const isRemoved = removedSet.has(i);
-      const r = Math.max(h.w, h.h) / 2;
+      // How big to draw the marks placed AT a hole — the removed cross, the
+      // highlight. That is the hole's own extent, except for a slot, whose
+      // extent is the panel and whose width is what a mark should match.
+      const r = h.stroke ? Math.max(0.15, strokeMaxWidth(h.stroke) / 2) : Math.max(h.w, h.h) / 2;
       if (h.culled && !isRemoved) {
         // Culled by the size floor: gone from the real pattern. Show a faint ghost only while editing.
         if (variation.enabled && variationEditMode && showHud) {
@@ -175,7 +188,7 @@ export function drawScene(canvas, scene) {
       if (isRemoved) {
         if (!showHud) return; // HUD hidden: removed holes vanish entirely
         ctx.beginPath();
-        traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, h.superN);
+        traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, holeOutline(h));
         ctx.strokeStyle = dark ? "rgba(255,100,100,0.25)" : "rgba(200,50,50,0.2)";
         ctx.lineWidth = 0.4;
         ctx.setLineDash([1, 1]);
@@ -197,7 +210,7 @@ export function drawScene(canvas, scene) {
       const isOverlap = activeOverlapSet.has(i);
       const isClosed = h.isClosed;
       ctx.beginPath();
-      traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, h.superN);
+      traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, holeOutline(h));
       ctx.fillStyle = isClosed
         ? dark
           ? "rgba(220,50,50,0.55)"
@@ -226,13 +239,13 @@ export function drawScene(canvas, scene) {
       // Taper ring: fill gap between entry and exit shapes
       if (showTaperRings && h.exitW > 0 && h.exitH > 0 && !isClosed) {
         ctx.beginPath();
-        traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, h.superN);
+        traceHolePath(ctx, h.x, h.y, holeShape, h.w, h.h, h.angle, h.holeRadius, holeOutline(h));
         ctx.save();
         ctx.clip();
         ctx.fillStyle = dark ? "rgba(80,85,95,0.6)" : "rgba(160,165,175,0.5)";
         ctx.fillRect(h.x - h.w, h.y - h.h, h.w * 2, h.h * 2);
         ctx.beginPath();
-        traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius, h.superN);
+        traceHolePath(ctx, h.x, h.y, holeShape, h.exitW, h.exitH, h.angle, h.exitHoleRadius, holeExitOutline(h));
         ctx.fillStyle = holeColor;
         ctx.fill();
         ctx.restore();
@@ -248,6 +261,20 @@ export function drawScene(canvas, scene) {
 
   if (variation.enabled && variationEditMode && selectedVariationLayer && showHud) {
     drawGizmo(ctx, selectedVariationLayer, { marginLeft, marginTop, perfW, perfH }, sheetW, sheetH, baseScale, dark);
+  }
+  if (geometry.isPath && showHud) {
+    // Drawn whenever the mode is Path, not only while editing it: the curve is
+    // what the holes are strung along, and a mode whose one input is invisible
+    // until you press a button in a panel is a mode you have to be told about.
+    // Handles still belong to the edit mode.
+    drawPaths(ctx, {
+      pathBlock,
+      selectedPath,
+      editing: pathEditMode,
+      bounds: { xMin: marginLeft, xMax: marginLeft + perfW, yMin: marginTop, yMax: marginTop + perfH },
+      baseScale,
+      dark,
+    });
   }
   if (showFieldOverlay) {
     // Over the holes, not under them: at 35% open area a third of the sheet is
@@ -432,6 +459,64 @@ function drawControllers(
 // it widens keeps a small reach legible and a huge one out of the way; the
 // controller's own path stays fully opaque either way.
 const bandAlpha = radius => 0.1 * Math.max(0.22, Math.min(1, 40 / Math.max(1, radius || 1)));
+
+// The Path layout's curves and their draggable vertices.
+//
+// The curve itself is drawn whenever the mode is on, including the default one
+// the layout falls back to when the document holds none — so "no path of your
+// own yet" is something you can SEE, outlined under the holes, rather than
+// something a panel has to tell you. The handles are the edit mode's, and they
+// go on top of the holes, because a handle you cannot see is not a handle.
+function drawPaths(ctx, { pathBlock, selectedPath, editing, bounds, baseScale, dark }) {
+  const own = pathBlock?.paths || [];
+  const paths = own.length ? own : [{ points: defaultPathPoints(bounds), closed: false, ghost: true }];
+  const px = 1 / baseScale;
+  const accent = dark ? "#f97316" : "#c2410c";
+  const faint = dark ? "rgba(249,115,22,0.35)" : "rgba(194,65,12,0.3)";
+  // The sheet is light in both themes — it is metal, not chrome — so the guide
+  // takes its contrast from the sheet rather than from the app's palette. A 35%
+  // bright orange over light grey is a line you have to be told is there.
+  const guide = "rgba(180,60,10,0.75)";
+  paths.forEach((path, index) => {
+    const active = editing && !path.ghost && index === selectedPath;
+    const poly = flattenPath(path.points, { closed: path.closed, smooth: pathBlock.smooth !== false });
+    if (poly.length >= 2) {
+      ctx.beginPath();
+      ctx.moveTo(poly[0].x, poly[0].y);
+      for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+      ctx.strokeStyle = active ? accent : editing ? faint : guide;
+      ctx.lineWidth = (active ? 1.6 : 1.3) * px;
+      ctx.setLineDash([4 * px, 3 * px]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // The chord through the vertices, so a smoothed curve still shows what the
+    // handles actually control.
+    if (editing && pathBlock.smooth !== false && path.points.length > 1) {
+      ctx.beginPath();
+      ctx.moveTo(path.points[0].x, path.points[0].y);
+      for (let i = 1; i < path.points.length; i++) ctx.lineTo(path.points[i].x, path.points[i].y);
+      if (path.closed) ctx.closePath();
+      ctx.strokeStyle = active ? faint : dark ? "rgba(249,115,22,0.15)" : "rgba(194,65,12,0.12)";
+      ctx.lineWidth = 0.7 * px;
+      ctx.stroke();
+    }
+    if (!active) return;
+    // Ink fill, accent ring: the same handle the variation gizmo's reach point
+    // and the controllers' hollow handles use, at the reach point's size. The
+    // ring is what reads — filled with the accent, a handle over a black hole
+    // was a dark dot on a dark dot.
+    for (const point of path.points) {
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 5 * px, 0, Math.PI * 2);
+      ctx.fillStyle = dark ? "#0f0f11" : "#ffffff";
+      ctx.fill();
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1.6 * px;
+      ctx.stroke();
+    }
+  });
+}
 
 const CHANNEL_COLOR = {
   size: { dark: "#60a5fa", light: "#2563eb" },

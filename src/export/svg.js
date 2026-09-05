@@ -7,7 +7,7 @@
 // which threw RangeError and left the export button doing nothing. A Blob built
 // from the chunks has no such limit; generateSVGString joins them for callers
 // that want the text (tests, and any small document).
-import { holeSVGElement } from "../geometry/shapes.js";
+import { holeExitOutline, holeOutline, holeSVGElement } from "../geometry/shapes.js";
 import { perfBoundarySVG } from "../geometry/boundary.js";
 
 export function generateSVGParts(holes, params) {
@@ -31,7 +31,20 @@ export function generateSVGParts(holes, params) {
       const topW = taperDirection === "Top larger" ? pt.w : pt.exitW;
       const topH = taperDirection === "Top larger" ? pt.h : pt.exitH;
       if (topW > 0 && topH > 0)
-        parts.push(holeSVGElement(pt.x, pt.y, shape, topW, topH, holeFill, "", pt.angle, pt.holeRadius, pt.superN));
+        parts.push(
+          holeSVGElement(
+            pt.x,
+            pt.y,
+            shape,
+            topW,
+            topH,
+            holeFill,
+            "",
+            pt.angle,
+            pt.holeRadius,
+            topW === pt.w ? holeOutline(pt) : holeExitOutline(pt)
+          )
+        );
     });
     parts.push(`  </g>\n  <g id="exit-side">\n`);
     holes.forEach(pt => {
@@ -49,14 +62,14 @@ export function generateSVGParts(holes, params) {
             'stroke="#666" stroke-width="0.15"',
             pt.angle,
             pt.exitHoleRadius,
-            pt.superN
+            botW === pt.w ? holeOutline(pt) : holeExitOutline(pt)
           )
         );
     });
     parts.push(`  </g>\n`);
   } else {
     holes.forEach(pt => {
-      parts.push(holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, holeFill, "", pt.angle, pt.holeRadius, pt.superN));
+      parts.push(holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, holeFill, "", pt.angle, pt.holeRadius, holeOutline(pt)));
     });
   }
   parts.push(`  </g>\n</svg>`);

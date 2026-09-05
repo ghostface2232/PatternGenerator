@@ -10,10 +10,21 @@
 // w = horizontal extent, h = vertical extent, both in mm. Rotation is a per-hole
 // `angle` (radians) applied by the callers below, so shape code stays canonical.
 //
-// `n` is the superellipse exponent, and only Superellipse reads it: it is the one
-// shape whose outline varies per hole, because the `shape` field channel morphs
-// it (fields/controllers.js). Every other shape ignores the argument, and `gap`
-// reads `superN` off the hole objects it is handed rather than taking it apart.
+// `n` is the per-hole OUTLINE parameter, and only three shapes read it: the
+// superellipse exponent, which the `shape` field channel morphs per hole
+// (fields/controllers.js); the cell polygon, which the Voronoi layout hands to
+// each hole individually; and the centreline plus widths of a Flow Lines slot.
+// Every other shape ignores the argument. Callers get it from `holeOutline(hole)`
+// rather than reaching for any of the three fields by name, and `gap` reads it
+// off the hole objects it is handed.
+//
+// Two entries carry an optional operation beyond the five, because for them the
+// generic answer is not merely slower but wrong:
+//
+//   verts(hole, w, h, n)             absolute outline, for a shape no w × h box bounds
+//   segments(hole, n)                the pieces a curve-shaped hole is near things by
+//   visibleArea(hole, n, area, in)   area inside the boundary, for a shape whose
+//                                    bounding box is most of the panel
 import {
   basePolyVerts,
   convexPolyGap,
@@ -26,6 +37,7 @@ import {
   unitToward,
 } from "./polygon.js";
 import { hexEdgeReach, hexVertices } from "./hexagon.js";
+import { strokeArea, strokeContains, strokeGap, strokeOutline, strokeSegments, strokeVisibleArea } from "./stroke.js"; // prettier-ignore
 import { isInsideRoundedRect } from "./rounded-rect.js";
 import { superArea, superContains, superellipseGap, superellipseVerts } from "./superellipse.js";
 
@@ -273,9 +285,56 @@ const polyShape = name => ({
       holePolyVerts(name, h2.x, h2.y, h2.w, h2.h, h2.angle)
     );
   },
+  verts: (hole, w, h) => holePolyVerts(name, hole.x, hole.y, w, h, hole.angle),
   rotates: true,
   polygon: true,
 });
+
+// ─── Polygon (one outline per hole) ───────────────────────────────────
+// The shape whose outline is not a function of w, h and a corner radius at all:
+// the Voronoi layout gives every hole its own cell, already inset by half the
+// ligament, in coordinates relative to that hole's site. `w` and `h` are that
+// outline's bounding box, kept only because the generic machinery around it —
+// the search grid in ligament.js, the sampling box in boundary.js, the size
+// floor the variation cull reads — needs some measure of how big a hole is.
+//
+// Convex by construction (a Voronoi cell clipped by half-planes is), which is
+// what lets it borrow the same containment and clearance code the Diamond and
+// Triangle use. A concave outline would silently read as its convex hull here.
+const NO_POLY = [];
+const outlineOf = value => (Array.isArray(value) && value.length >= 3 ? value : NO_POLY);
+const absolutePoly = (verts, hole) => verts.map(([x, y]) => [hole.x + x, hole.y + y]);
+
+const Polygon = {
+  area(w, h, holeRadius, poly) {
+    const verts = outlineOf(poly);
+    return verts.length ? roundedPolyArea(verts, holeRadius) : 0;
+  },
+  trace(ctx, cx, cy, w, h, holeRadius, poly) {
+    const verts = outlineOf(poly);
+    if (verts.length) tracePolyPath(ctx, cx, cy, verts, holeRadius);
+  },
+  svg(x, y, w, h, holeRadius, poly) {
+    const verts = outlineOf(poly);
+    return `<path d="${verts.length ? roundedPolySVGPath(x, y, verts, holeRadius) : ""}"`;
+  },
+  contains(x, y, w, h, holeRadius, poly) {
+    const verts = outlineOf(poly);
+    return verts.length > 0 && isInsideRoundedPoly(x, y, verts, holeRadius);
+  },
+  gap(h1, h2) {
+    const a = outlineOf(h1.poly),
+      b = outlineOf(h2.poly);
+    // No outline is not "these two touch": a hole with nothing to draw cannot
+    // be the narrowest bridge on the sheet, and Infinity is what leaves the
+    // minimum to the pairs that do have one.
+    if (!a.length || !b.length) return Infinity;
+    return convexPolyGap(absolutePoly(a, h1), absolutePoly(b, h2));
+  },
+  verts: (hole, w, h, poly) => absolutePoly(outlineOf(poly), hole),
+  rotates: false,
+  polygon: true,
+};
 
 // ─── Circle ───────────────────────────────────────────────────────────
 const Circle = {
@@ -348,6 +407,44 @@ const Superellipse = {
   rotates: true,
 };
 
+// The last two are deliberately absent from HOLE_SHAPES in core/constants.js:
+// they are not shapes anyone picks, they are the shapes a layout imposes —
+// `Polygon` by Voronoi, `Stroke` by Flow Lines — and `effectiveHoleShape` in
+// core/pipeline.js is the one place that decides so.
+// ─── Stroke (a slot along a curve) ────────────────────────────────────
+// The Flow Lines layout's hole: a centreline and a half-width at every vertex
+// of it, so one slot can taper along its length. The two things it does not
+// share with every other entry here are in `segments` and `visibleArea`, and
+// both come from the same fact — a slot may run the width of the panel, so its
+// bounding box says nothing about where it is. See geometry/stroke.js.
+const Stroke = {
+  area(w, h, holeRadius, stroke) {
+    return strokeArea(stroke);
+  },
+  trace(ctx, cx, cy, w, h, holeRadius, stroke) {
+    const outline = strokeOutline(stroke);
+    if (!outline.length) return;
+    ctx.moveTo(cx + outline[0][0], cy + outline[0][1]);
+    for (let i = 1; i < outline.length; i++) ctx.lineTo(cx + outline[i][0], cy + outline[i][1]);
+    ctx.closePath();
+  },
+  svg(x, y, w, h, holeRadius, stroke) {
+    const outline = strokeOutline(stroke);
+    if (!outline.length) return `<path d=""`;
+    const d = outline.map(([vx, vy]) => `${f3(x + vx)} ${f3(y + vy)}`).join(" L ");
+    return `<path d="M ${d} Z"`;
+  },
+  contains(x, y, w, h, holeRadius, stroke) {
+    return strokeContains(x, y, stroke);
+  },
+  gap(h1, h2) {
+    return strokeGap(h1, h1.stroke, h2, h2.stroke);
+  },
+  segments: (hole, stroke) => strokeSegments(hole, stroke),
+  visibleArea: (hole, stroke, exactArea, inside) => strokeVisibleArea(hole, stroke, exactArea, inside),
+  rotates: false,
+};
+
 export const SHAPES = {
   Circle,
   Rectangle,
@@ -356,9 +453,29 @@ export const SHAPES = {
   Diamond: polyShape("Diamond"),
   Triangle: polyShape("Triangle"),
   Superellipse,
+  Polygon,
+  Stroke,
 };
 
 export const getShape = name => SHAPES[name] || SHAPES.Circle;
+
+// The per-hole outline parameter, entry profile and exit profile. One accessor
+// each, so every drawing, hit-testing and export path hands the shape whatever
+// that shape reads without knowing which one it has.
+export const holeOutline = hole => hole.poly ?? hole.stroke ?? hole.superN;
+export const holeExitOutline = hole => hole.exitPoly ?? hole.exitStroke ?? hole.superN;
+
+// Absolute outline vertices of a polygon-shaped hole, or null for the shapes
+// that are not polygons. Callers use it to bound a hole exactly rather than
+// through the rotated w × h box, which no polygon fills and which the Voronoi
+// cell — not even centred on its own site — would badly misplace.
+export function holeVertices(hole, shape, useExit = false) {
+  const def = getShape(shape);
+  if (!def.polygon) return null;
+  const w = useExit ? hole.exitW : hole.w;
+  const h = useExit ? hole.exitH : hole.h;
+  return def.verts(hole, w, h, useExit ? holeExitOutline(hole) : holeOutline(hole));
+}
 
 // ─── Shape-agnostic entry points (the API the rest of the app uses) ───
 export function calcHoleArea(shape, w, h, holeRadius, n) {
@@ -395,14 +512,19 @@ export function isPointInsideHole(px, py, hole, shape, useExit = false) {
   const h = useExit ? hole.exitH : hole.h;
   const radius = useExit ? hole.exitHoleRadius : hole.holeRadius;
   if (w <= 0 || h <= 0) return false;
-  const angle = hole.angle || 0;
+  const def = getShape(shape);
+  // Only the shapes that are actually drawn rotated are un-rotated here. The
+  // rest carry an angle that nothing draws — Circle by symmetry, a Voronoi cell
+  // because its outline is already in sheet directions — and turning the query
+  // point by it would test the wrong place.
+  const angle = def.rotates ? hole.angle || 0 : 0;
   const cos = Math.cos(-angle),
     sin = Math.sin(-angle);
   const dx = px - hole.x,
     dy = py - hole.y;
   const x = dx * cos - dy * sin,
     y = dx * sin + dy * cos;
-  return getShape(shape).contains(x, y, w, h, radius, hole.superN);
+  return def.contains(x, y, w, h, radius, useExit ? holeExitOutline(hole) : holeOutline(hole));
 }
 
 // Signed clearance between two holes of the same shape (< 0 when they overlap).
