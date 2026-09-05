@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Upload } from "lucide-react";
+import { Layers, Upload } from "lucide-react";
 import { CUSTOM_SHAPE, DIN_PRESETS, HOLE_SHAPES, MORPH_SHAPE, PATTERN_TYPES } from "../../core/constants.js";
 import { useEditor } from "../EditorContext.jsx";
 import { Dropdown, SliderRow } from "../controls/index.js";
@@ -7,7 +7,7 @@ import { MONO } from "../theme.js";
 import { Section, hintStyle } from "./Section.jsx";
 
 export function PatternPanel() {
-  const { doc, api, theme, actions, geometry } = useEditor();
+  const { doc, api, theme, ui, actions, geometry } = useEditor();
   const fileInput = useRef(null);
   const [importError, setImportError] = useState("");
   const isCustom = doc.hole.shape === CUSTOM_SHAPE;
@@ -79,6 +79,14 @@ export function PatternPanel() {
           style={smallButton}
         >
           <Upload size={11} /> Import SVG shape
+        </button>
+        <button
+          onClick={() => ui.setShapeEditorOpen(true)}
+          aria-label="Open the shape editor"
+          title="Stack basic shapes that add to or cut from the hole"
+          style={smallButton}
+        >
+          <Layers size={11} /> Shape editor
         </button>
       </div>
       <input

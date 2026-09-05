@@ -34,6 +34,7 @@ import { addPathVertex, newPath, removePathVertex } from "../layouts/path-gizmo.
 import { createCutout } from "../geometry/boundary.js";
 import { defaultBoundaryRings, insertBoundaryVertex, nearestBoundaryEdge, removeBoundaryVertex } from "../geometry/boundary-gizmo.js"; // prettier-ignore
 import { inspectSVG, svgToRings, svgToUnitShape } from "../geometry/svg-import.js";
+import { layersToUnitShape } from "../geometry/custom-shape.js";
 import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
 import { EDITABLE_CHANNELS, MAX_CONTROLLERS, createController, imageChannels } from "../fields/controllers.js";
@@ -48,6 +49,7 @@ import { GlobalStyles } from "./GlobalStyles.jsx";
 import { TopBar } from "./TopBar.jsx";
 import { CanvasView } from "./canvas/CanvasView.jsx";
 import { Sidebar } from "./Sidebar.jsx";
+import { ShapeEditor } from "./ShapeEditor.jsx";
 
 const AUTOSAVE_MS = 300;
 
@@ -144,6 +146,8 @@ export default function App() {
   // Which cutout the panel's inspector shows and the canvas highlights. UI
   // state, like every other selection here.
   const [selectedCutoutId, setSelectedCutoutId] = useState(null);
+  // The boolean shape editor's modal. Its stack is its own state until Apply.
+  const [shapeEditorOpen, setShapeEditorOpen] = useState(false);
   const [activeChannel, setActiveChannel] = useState(EDITABLE_CHANNELS[0]);
   const [fieldTool, setFieldTool] = useState(null); // armed kind for click-to-add on the canvas
   // Which controller the inspector is showing. UI state, like every other
@@ -367,6 +371,23 @@ export default function App() {
       const current = api.ref.current.hole;
       const w = CUSTOM_SIZE_SHAPES.includes(current.shape) ? current.w : current.diameter;
       api.patch({ "hole.shape": CUSTOM_SHAPE, "hole.custom": custom, "hole.w": w, "hole.h": w * custom.aspect });
+      return true;
+    };
+    // The shape editor's stack, composed into the Custom hole: the layers and
+    // the rings they compose to go into the document together, one undo step.
+    const applyShapeLayers = layers => {
+      const custom = layersToUnitShape(layers, "shape editor");
+      if (!custom.rings.length) return false;
+      const current = api.ref.current.hole;
+      const lockAspect = current.custom.lockAspect;
+      const w = CUSTOM_SIZE_SHAPES.includes(current.shape) ? current.w : current.diameter;
+      api.patch({
+        "hole.shape": CUSTOM_SHAPE,
+        "hole.custom": { ...custom, lockAspect },
+        "hole.w": w,
+        ...(lockAspect ? { "hole.h": w * custom.aspect } : null),
+      });
+      setShapeEditorOpen(false);
       return true;
     };
     const setEdgeGapX = v =>
@@ -827,6 +848,7 @@ export default function App() {
     return {
       setShape,
       importHoleSVG,
+      applyShapeLayers,
       setEdgeGapX,
       setEdgeGapY,
       toggleGapLinked,
@@ -1058,6 +1080,8 @@ export default function App() {
     pathEditMode,
     boundaryEditMode,
     selectedCutoutId: selectedCutout?.id ?? null,
+    shapeEditorOpen,
+    setShapeEditorOpen,
     selectedPath,
     activeChannel,
     fieldTool,
@@ -1118,6 +1142,7 @@ export default function App() {
           <CanvasView />
           <Sidebar />
         </div>
+        {shapeEditorOpen && <ShapeEditor />}
       </div>
     </EditorContext.Provider>
   );

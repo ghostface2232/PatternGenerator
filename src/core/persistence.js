@@ -38,6 +38,7 @@ import {
   MAX_CONTROLLERS,
   ONE_SIDED_VALUES,
 } from "../fields/controllers.js";
+import { LAYER_ROLES, LAYER_SHAPES } from "../geometry/custom-shape.js";
 
 export const FILE_EXTENSION = ".perf.json";
 export const FILE_MIME = "application/json";
@@ -371,8 +372,6 @@ function validateCutouts(raw) {
 // little slack for a vertex that rounding pushed over), read by the even-odd
 // rule. A ring that cannot be repaired is dropped, like a boundary ring.
 const CUSTOM_KINDS = ["none", "svg", "layers"];
-const LAYER_SHAPES = ["Circle", "Rectangle", "Hexagon", "Star", "Triangle", "Diamond", "Polygon"];
-const LAYER_ROLES = ["union", "subtract"];
 
 function validateUnitRing(raw) {
   if (!Array.isArray(raw)) return null;

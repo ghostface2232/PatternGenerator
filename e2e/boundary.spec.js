@@ -190,3 +190,42 @@ test("a preset hole shape has its own parameters, and an SVG file becomes a cust
   await page.getByRole("switch", { name: "Keep proportions", exact: true }).click();
   await expect(page.getByLabel("Height (H)", { exact: true })).toHaveValue("2.5");
 });
+
+test("the shape editor stacks shapes that add to or cut from the hole", async ({ page }) => {
+  await page.getByRole("button", { name: "Open the shape editor", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Shape editor", exact: true });
+  await expect(dialog).toBeVisible();
+  // The stack opens with one disc; a second, cutting, makes a washer with a
+  // bite — and the preview says one piece.
+  await page.getByRole("button", { name: "Add circle layer", exact: true }).click();
+  await page.getByRole("switch", { name: "Layer cuts from the hole", exact: true }).click();
+  const x = page.getByLabel("Layer X", { exact: true });
+  await x.fill("0");
+  await x.press("Enter");
+  const w = page.getByLabel("Layer Width", { exact: true });
+  await w.fill("5");
+  await w.press("Enter");
+  const h = page.getByLabel("Layer Height", { exact: true });
+  await h.fill("5");
+  await h.press("Enter");
+  await expect(page.getByText(/1 piece/)).toBeVisible();
+  await page.getByRole("button", { name: "Apply the shape editor", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Hole Shape", exact: true })).toHaveText(/Custom/);
+  await expect(page.getByText(/from the shape editor/)).toBeVisible();
+  await expect(stat(page, "stat-holes")).toHaveText("739");
+  // A washer covers less than the disc did: the open area fell.
+  const washer = await oar(page);
+  expect(washer).toBeLessThan(35.4);
+  const text = await download(page, "SVG");
+  expect(text.match(/<path d="M /g)).toHaveLength(739);
+  expect(text).toContain('fill-rule="evenodd"');
+  // Reopening finds the stack, and cancelling changes nothing.
+  await page.getByRole("button", { name: "Open the shape editor", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Select layer 2", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel the shape editor", exact: true }).click();
+  expect(await oar(page)).toBe(washer);
+  // One undo step takes the whole shape back.
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect(stat(page, "stat-oar")).toHaveText("35.4");
+});
