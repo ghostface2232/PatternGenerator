@@ -11,6 +11,18 @@ async function setSlider(page, label, value) {
 
 const stat = (page, id) => page.getByTestId(id);
 
+// One press-release gesture on a slider track, a fraction of the way along it.
+// The measuring and the pressing have to be the same act. The interface is laid
+// out in a web font fetched at run time, and the reflow when it lands drops the
+// Hole Diameter track 10 px — more than twice the 4 px it is tall — so a
+// coordinate captured before an earlier step points at empty panel afterwards
+// and the gesture is silently lost. Going through the locator re-measures,
+// waits for the box to hold still and checks the point really hits the control.
+async function clickSliderAt(slider, fraction) {
+  const { width, height } = await slider.boundingBox();
+  await slider.click({ position: { x: width * fraction, y: height / 2 } });
+}
+
 // Drive a slider from inside the page: find the range input by the label on its
 // numeric field rather than by position, which a sidebar reorder would break.
 const SET_SLIDER = `(label, value) => {
@@ -107,9 +119,12 @@ test("undo and redo walk through edits, and a slider drag is one step", async ({
 
   // A range-slider drag emits many changes but should undo in one step.
   const slider = page.locator('input[type="range"]').first(); // Hole Diameter
-  const box = await slider.boundingBox();
-  await page.mouse.move(box.x + box.width * 0.23, box.y + box.height / 2);
+  const { width } = await slider.boundingBox();
+  // Hover through the locator so the press lands on the track wherever the
+  // layout has settled; only then read the box the drag steps along.
+  await slider.hover({ position: { x: width * 0.23, y: 2 } });
   await page.mouse.down();
+  const box = await slider.boundingBox();
   for (let i = 1; i <= 8; i++) await page.mouse.move(box.x + box.width * (0.23 + i * 0.05), box.y + box.height / 2);
   await page.mouse.up();
   const dragged = await page.getByLabel("Hole Diameter", { exact: true }).inputValue();
@@ -120,14 +135,22 @@ test("undo and redo walk through edits, and a slider drag is one step", async ({
 
 test("two quick slider gestures remain separate undo steps", async ({ page }) => {
   const slider = page.locator('input[type="range"]').first(); // Hole Diameter
-  const box = await slider.boundingBox();
-  await page.mouse.click(box.x + box.width * 0.35, box.y + box.height / 2);
-  const first = await page.getByLabel("Hole Diameter", { exact: true }).inputValue();
-  await page.mouse.click(box.x + box.width * 0.65, box.y + box.height / 2);
-  await expect(page.getByLabel("Hole Diameter", { exact: true })).not.toHaveValue(first);
+  const field = page.getByLabel("Hole Diameter", { exact: true });
+  const start = await field.inputValue();
 
+  await clickSliderAt(slider, 0.35);
+  await expect(field).not.toHaveValue(start);
+  const first = await field.inputValue();
+  await clickSliderAt(slider, 0.65);
+  await expect(field).not.toHaveValue(first);
+
+  // Both gestures fall inside COALESCE_MS, so this is what tells them apart from
+  // one drag: the first undo gives back only the second gesture, the next only
+  // the first.
   await page.keyboard.press("Control+z");
-  await expect(page.getByLabel("Hole Diameter", { exact: true })).toHaveValue(first);
+  await expect(field).toHaveValue(first);
+  await page.keyboard.press("Control+z");
+  await expect(field).toHaveValue(start);
 });
 
 test("a damaged recent list cannot blank the application", async ({ page }) => {
