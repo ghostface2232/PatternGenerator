@@ -51,7 +51,7 @@
 
 ## 2. 목표와 원칙
 
-목표: 2026년 말까지 레이아웃 9종, 4채널 컨트롤러, 이미지 제어, 임의 경계, DXF 및 STEP 내보내기, URL 공유를 갖춘 브라우저 도구를 GitHub Pages에 배포한다.
+목표: 2026년 말까지 레이아웃 9종, 4채널 컨트롤러, 이미지 제어, 임의 경계, SVG 개선 및 DXF 내보내기, URL 공유를 갖춘 브라우저 도구를 GitHub Pages에 배포한다.
 
 원칙:
 
@@ -92,7 +92,6 @@ src/
     svg.js               generateSVGString 이동
     png.js
     dxf.js               Phase 5
-    step.js              Phase 5
   render/
     canvas-renderer.js   순수 그리기 함수 (ctx, doc, viewport) → void
     hud.js
@@ -309,7 +308,7 @@ spacingModel은 그 모드가 홀 사이 거리를 어디서 재는지입니다.
 - concentric: 기존 Radial Concentric과 6k Rosette 유지
 - crosshatch: 두 방향 (angle1, angle2) 직선 배열의 교점에 배치. Custom Angle의 일반화
 - voronoi: Poisson 점 집합의 Voronoi 셀을 만들고, 각 셀을 gap/2만큼 안쪽으로 오프셋한 다각형을 홀로 사용. d3-delaunay 사용. 셀 다각형 홀은 SHAPES 인터페이스에 polygon 형상을 추가해 처리. 리거먼트는 오프셋 거리로 정확히 계산 가능
-- flowlines: 홀이 아니라 가변 폭 연속 선. 벡터장 (angle 필드가 방향, spacing 필드가 밀도, size 필드가 폭)에서 스트림라인을 적분하고, 폭을 따라 오프셋한 닫힌 폴리곤으로 출력. SVG와 DXF에서는 path 하나로, STEP에서는 폴리곤 프리즘으로 내보냄
+- flowlines: 홀이 아니라 가변 폭 연속 선. 벡터장 (angle 필드가 방향, spacing 필드가 밀도, size 필드가 폭)에서 스트림라인을 적분하고, 폭을 따라 오프셋한 닫힌 폴리곤으로 출력. SVG와 DXF에서는 닫힌 윤곽으로 내보냄
 
 ### 6.3 통계 호환
 
@@ -367,7 +366,17 @@ SolidVents의 형상 편집기는 큰 기능이므로 세 단계로 나눕니다
 
 예상 규모: PR 6-8개.
 
-## 8. Phase 5: DXF와 STEP 내보내기
+## 8. Phase 5: SVG 개선과 DXF 내보내기
+
+범위 개정 (2026-09-06): STEP/STP 내보내기와 Split은 구현 범위에서 제외합니다.
+
+구현 순서 (각 항목을 독립 커밋):
+1. 공통 절단 윤곽, 경계 클리핑, 커프 보정과 회귀 테스트
+2. SVG 레이어·단위·절단 모드와 DXF R2000 작성기
+3. 내보내기 대화상자, 다운로드 통합, 브라우저 검증
+4. 영역별 리뷰 3개와 종합 리뷰 1개, 발견된 문제 수정 및 문서 갱신
+
+내보내기 설정은 문서 스키마와 분리합니다. 내부 기하 단위는 mm로 유지하고 파일 작성 시 변환합니다.
 
 ### 8.1 SVG 개선 (작은 PR)
 
@@ -383,21 +392,12 @@ SolidVents의 형상 편집기는 큰 기능이므로 세 단계로 나눕니다
 - 레이어: OUTLINE, HOLES, HOLES_EXIT, KEEPOUT. 색상 인덱스 지정
 - 테스트: 엔티티 수, 레이어 이름, 좌표 값을 문자열 파싱으로 검증. 실제 파일 검증은 LibreCAD 또는 Fusion 360에서 한 번 수동 확인 후 결과를 README에 기록
 
-### 8.3 STEP (export/step.js)
+### 8.3 내보내기 UI
 
-두 가지 구현 경로가 있으며, 1차는 자체 작성 방식을 권장합니다.
-
-- 권장 1차: 프로파일 압출 B-rep을 직접 쓰는 STEP AP214 라이터. 판은 외곽 루프와 홀 루프를 가진 위 아래 평면 두 개와 측면으로 구성. 직선 변은 PLANE, 원호 변은 CYLINDRICAL_SURFACE로 측면을 만듭니다. 홀은 외곽 루프의 inner bound로 표현되므로 불리언이 필요 없습니다. Draft Angle은 측면을 CONICAL_SURFACE로 바꾸는 것으로 구현할 수 있고, 이는 현재 테이퍼 모델과 정확히 대응합니다
-- 대안: opencascade.js (WASM 약 10MB 이상)를 필요할 때 동적 로드해 판 압출 후 홀을 cut. 구현은 쉽지만 번들 크기와 로드 시간이 크고 PWA 캐시 부담이 있습니다. 1차 방식이 특정 CAD에서 열리지 않는 문제가 반복될 때만 채택합니다
-- STP Split: 홀 수가 임계값 (기본 5,000)을 넘으면 판을 격자 블록으로 나눠 블록마다 별도 솔리드로 출력. 사용자가 블록 수를 지정
-- 검증: FreeCAD를 CI 컨테이너에 설치해 headless로 STEP을 열고 솔리드 수와 부피를 확인하는 스크립트를 scripts/verify-step.py로 둡니다. CI에서 어렵다면 로컬 검증 절차를 문서화
-
-### 8.4 내보내기 UI
-
-- 내보내기 대화상자: 형식 (SVG, DXF, STEP, PNG), 단위, 레이어 옵션, 커프, STP Split, 파일명
+- 내보내기 대화상자: 형식 (SVG, DXF, PNG), 단위, 레이어 옵션, 커프, 파일명
 - 내보내기 전 요약: 홀 수, OAR, 최소 리거먼트, 폐공 수, 판 크기. 최소 리거먼트가 판 두께보다 작으면 경고
 
-완료 기준: 같은 문서를 SVG, DXF, STEP으로 내보내 Fusion 360 또는 SolidWorks에서 열었을 때 치수가 mm 단위로 일치합니다.
+완료 기준: 같은 문서를 SVG, DXF로 내보내 Fusion 360 또는 SolidWorks에서 열었을 때 치수가 mm 단위로 일치합니다.
 
 예상 규모: PR 5-6개.
 
@@ -447,7 +447,6 @@ Phase 2부터 캔버스 위 편집이 중심이 되므로 사이드바 중심 �
 | 4 | Phase 2 컨트롤러 | 4채널 컨트롤러, 이미지 제어 | PR 6-8 |
 | 5 | Phase 3 레이아웃 9종 | scatter, path, spiral, crosshatch, voronoi, flowlines | PR 8-10 |
 | 6 | Phase 4 경계와 커스텀 형상 | 임의 외곽선, SVG 임포트, 불리언 형상 | PR 6-8 |
-| 7 | Phase 5b STEP | STEP 라이터, Split, Draft | PR 3-4 |
 | 8 | Phase 6 성능 | 워커, WebGL 렌더러 | PR 4-5 |
 | 9 | Phase 7 템플릿과 문서 | 갤러리, 온보딩, 가이드, i18n | PR 5-6 |
 
@@ -457,15 +456,14 @@ DXF를 Phase 2보다 앞에 두는 이유는 구현 비용이 낮고 현재 사�
 
 ## 13. 리스크와 대응
 
-- STEP 호환성: 직접 작성한 B-rep이 특정 CAD에서 열리지 않을 수 있습니다. FreeCAD 검증 스크립트로 조기 발견하고, 반복 실패 시 opencascade.js로 전환합니다
 - Spacing 채널의 격자 왜곡: 행 단위 가변 피치는 열 정렬을 깨뜨립니다. 격자 모드에서는 spacing을 행 방향 하나로 제한하고, 2차원 가변 밀도가 필요하면 scatter 모드를 권하는 안내를 UI에 둡니다
 - 리팩터링 중 회귀: Phase 0 시작 전에 스모크 테스트를 먼저 작성해 기준값 (홀 수, OAR, 리거먼트, SVG 해시)을 고정합니다
-- 번들 크기: d3-delaunay, polygon-clipping, lz-string은 합쳐 100KB 미만입니다. opencascade.js는 채택하더라도 동적 import로 분리합니다
+- 번들 크기: d3-delaunay, polygon-clipping, lz-string은 합쳐 100KB 미만입니다.
 - 단일 파일 관례에 의존하는 AGENTS.md: Phase 0 마지막 PR에서 반드시 갱신합니다
 
 ## 14. 성공 지표
 
-- 템플릿 갤러리의 12종 문서가 모두 SVG, DXF, STEP으로 내보내지고 Fusion 360에서 치수가 일치함
+- 템플릿 갤러리의 12종 문서가 모두 SVG, DXF로 내보내지고 Fusion 360에서 치수가 일치함
 - 100,000개 홀 문서에서 팬과 줌 60fps, 재생성 200ms 이내
 - 공유 링크 라운드트립에서 홀 수와 OAR이 소수점 첫째 자리까지 동일함
 - 심리스 타일링 gap 0에서 OAR 100.0과 최소 리거먼트가 설정 gap과 일치하는 기존 보증이 모든 Phase에서 유지됨
@@ -473,4 +471,4 @@ DXF를 Phase 2보다 앞에 두는 이유는 구현 비용이 낮고 현재 사�
 
 ## 15. 범위 밖
 
-계정, 결제, 클라우드 저장소, 마켓플레이스, 일일 내보내기 제한, 서버 사이드 렌더링, DXF 임포트, 3D 뷰어. 3D 뷰어는 STEP 내보내기가 안정된 뒤 three.js로 검토할 수 있으나 이 로드맵에는 포함하지 않습니다.
+계정, 결제, 클라우드 저장소, 마켓플레이스, 일일 내보내기 제한, 서버 사이드 렌더링, DXF 임포트, 3D 뷰어.
