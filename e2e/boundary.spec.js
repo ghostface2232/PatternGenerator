@@ -283,3 +283,47 @@ for (const shortcut of ["preset", "randomize"]) {
     await expect(editBoundary).toHaveAttribute("aria-pressed", "false");
   });
 }
+
+test("small SVG circles import and unsupported proportions preserve the current hole", async ({ page }) => {
+  const input = page.getByLabel("Hole outline file", { exact: true });
+  await input.setInputFiles({
+    name: "small.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from('<svg><circle r="0.1"/></svg>'),
+  });
+  await expect(page.getByText(/small · 1 outline/)).toBeVisible();
+  const before = await oar(page);
+  await input.setInputFiles({
+    name: "thin.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from('<svg><rect width="100" height="1"/></svg>'),
+  });
+  await expect(page.getByText(/height-to-width ratio/)).toBeVisible();
+  expect(await oar(page)).toBe(before);
+  await expect(page.getByText(/small · 1 outline/)).toBeVisible();
+});
+
+test("the shape editor reports unsupported proportions and bounds new layer positions", async ({ page }) => {
+  await page.getByRole("button", { name: "Open the shape editor", exact: true }).click();
+  const width = page.getByLabel("Layer Width", { exact: true });
+  const height = page.getByLabel("Layer Height", { exact: true });
+  await width.fill("200");
+  await width.press("Enter");
+  await height.fill("0.1");
+  await height.press("Enter");
+  await page.getByRole("button", { name: "Apply the shape editor", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText(/height-to-width ratio/);
+  await expect(page.getByRole("dialog", { name: "Shape editor", exact: true })).toBeVisible();
+  const x = page.getByLabel("Layer X", { exact: true });
+  await x.fill("100");
+  await x.press("Enter");
+  // The numeric control itself clamps X to 50; successive automatic
+  // placements must also stay within the document's larger 100 mm limit.
+  for (let i = 0; i < 3; i++) {
+    await page.getByRole("button", { name: "Add circle layer", exact: true }).click();
+    await expect(page.getByRole("button", { name: `Select layer ${i + 2}`, exact: true })).toBeVisible();
+  }
+  await expect(x).toHaveValue("100");
+  await page.getByRole("button", { name: "Cancel the shape editor", exact: true }).click();
+  await expect(stat(page, "stat-oar")).toHaveText("35.4");
+});

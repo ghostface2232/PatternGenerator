@@ -10,9 +10,10 @@
 // editor can reopen it; the composed rings are cached beside it
 // (hole.custom.rings) so the pipeline never runs the clipper.
 import { basePolyVerts } from "./polygon.js";
-import { circleRing, normalizeRings, ringsArea, ringsBBox, transformRings, unitRings } from "./rings.js";
+import { circleRing, normalizeRings, ringsArea, ringsBBox, transformRings } from "./rings.js";
 import { differencePolygons, unionPolygons } from "./offset.js";
 import { presetRings } from "./shape-presets.js";
+import { fitCustomOutline } from "./svg-import.js";
 import { arcPoints } from "./rings.js";
 
 export const LAYER_SHAPES = ["Circle", "Rectangle", "Hexagon", "Star", "Triangle", "Diamond", "Polygon"];
@@ -130,7 +131,7 @@ export function composeLayers(layers) {
 export function layersToUnitShape(layers, name = "shape") {
   const polygons = composeLayers(layers);
   const rings = polygons.flat();
-  const unit = unitRings(rings);
+  const unit = fitCustomOutline(rings);
   return {
     kind: "layers",
     name: String(name || "shape").slice(0, 60),

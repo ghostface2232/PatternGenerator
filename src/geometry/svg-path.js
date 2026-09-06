@@ -357,7 +357,7 @@ function rectPoints(attrs, tolerance) {
 
 function ellipsePoints(cx, cy, rx, ry, tolerance) {
   if (!(rx > 0) || !(ry > 0)) return null;
-  const n = arcSegmentsFor(Math.max(rx, ry), Math.PI * 2, tolerance);
+  const n = Math.max(8, arcSegmentsFor(Math.max(rx, ry), Math.PI * 2, tolerance));
   const pts = [];
   for (let i = 0; i < n; i++) {
     const a = (Math.PI * 2 * i) / n;

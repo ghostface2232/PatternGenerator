@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { composeLayers, createShapeLayer, designExtent, layerRings, layersToUnitShape } from "./custom-shape.js";
 import { ringsArea, ringsBBox, ringsContains } from "./rings.js";
+import { createDocument } from "../core/document.js";
+import { validateDocument } from "../core/persistence.js";
+import { MAX_CUSTOM_POINTS } from "../core/constants.js";
 import { calcHoleArea, isPointInsideHole } from "./shapes.js";
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`);
@@ -70,4 +73,30 @@ test("reordering a cut and a later addition changes the restored solid", () => {
   near(ringsArea(cutLast), 100 - 36);
   assert.equal(ringsContains(cutLast, 0, 0), false);
   near(ringsArea(composeLayers([cut, base]).flat()), 100);
+});
+
+test("a complex composed outline survives save validation without losing its far end", () => {
+  const layers = Array.from({ length: 12 }, (_, i) => ({
+    ...createShapeLayer("Circle"),
+    id: `layer-${i}`,
+    x: i * 9,
+  }));
+  const rawArea = ringsArea(composeLayers(layers).flat());
+  const custom = layersToUnitShape(layers);
+  assert.ok(custom.rings.every(ring => ring.length <= MAX_CUSTOM_POINTS));
+  const doc = createDocument();
+  doc.hole.shape = "Custom";
+  doc.hole.custom = custom;
+  const restored = validateDocument(JSON.parse(JSON.stringify(doc)));
+  assert.deepEqual(restored.hole.custom, custom);
+  assert.equal(ringsContains(custom.rings, 0.49, 0), true);
+  const fittedArea = ringsArea(custom.rings) * 109 * 10;
+  assert.ok(Math.abs(fittedArea - rawArea) / rawArea < 0.003);
+});
+
+test("the editor rejects proportions that would change after a reload", () => {
+  assert.throws(
+    () => layersToUnitShape([{ ...createShapeLayer("Rectangle"), w: 200, h: 0.1 }]),
+    /height-to-width ratio/
+  );
 });

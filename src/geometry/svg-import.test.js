@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { svgToRings, svgToUnitShape } from "./svg-import.js";
+import { inspectSVG, svgToRings, svgToUnitShape } from "./svg-import.js";
 import { ringsArea, ringsContains, ringsGap } from "./rings.js";
 
 const square = (x, y, size) => [
@@ -53,4 +53,25 @@ test("import normalization retains nested bores and cancels duplicate loops", ()
     assert.equal(winding(rings, x, 5) !== 0, solid);
   }
   assert.deepEqual(svgToRings('<svg><rect width="10" height="10"/><rect width="10" height="10"/></svg>'), []);
+});
+
+test("small SVG primitives retain closed outlines during the coarse inspection pass", () => {
+  for (const element of ['<circle r="0.1"/>', '<ellipse rx="0.2" ry="0.1"/>', '<circle r="1"/>']) {
+    const file = `<svg>${element}</svg>`;
+    const info = inspectSVG(file);
+    assert.equal(info.hasOutline, true);
+    assert.ok(info.width > 0 && info.height > 0);
+    const custom = svgToUnitShape(file);
+    assert.ok(custom.rings[0].length >= 8 && custom.rings[0].length <= 400);
+    assert.ok(Math.abs(ringsArea(custom.rings) - Math.PI / 4) < 0.005);
+  }
+});
+
+test("SVG proportions that cannot survive document validation are rejected", () => {
+  for (const [w, h] of [
+    [100, 1],
+    [1, 100],
+  ]) {
+    assert.throws(() => svgToUnitShape(`<svg><rect width="${w}" height="${h}"/></svg>`), /height-to-width ratio/);
+  }
 });

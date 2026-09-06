@@ -2,7 +2,13 @@
 // scaled to millimetres, simplified to the roadmap's 0.05 mm and cut down to
 // the document's caps. Pure; the file reading and the question to the user
 // about an unknown scale are the UI's.
-import { MAX_BOUNDARY_POINTS, MAX_BOUNDARY_RINGS, MAX_CUSTOM_POINTS, MAX_CUSTOM_RINGS } from "../core/constants.js";
+import {
+  DOC_LIMITS,
+  MAX_BOUNDARY_POINTS,
+  MAX_BOUNDARY_RINGS,
+  MAX_CUSTOM_POINTS,
+  MAX_CUSTOM_RINGS,
+} from "../core/constants.js";
 import { ringsBBox, simplifyRing, unitRings } from "./rings.js";
 import { parseSVGOutline } from "./svg-path.js";
 import { resolveEvenOddRings } from "./offset.js";
@@ -77,7 +83,7 @@ export function svgToUnitShape(text, fileName = "", caps = {}) {
     maxPoints: caps.maxPoints ?? MAX_CUSTOM_POINTS,
     tolerance: 0.002 * size,
   });
-  const unit = unitRings(fitted);
+  const unit = fitCustomOutline(fitted);
   return {
     kind: "svg",
     name: String(fileName || "outline")
@@ -93,4 +99,40 @@ export function svgToUnitShape(text, fileName = "", caps = {}) {
 function outlineSize(shapes) {
   const box = ringsBBox(shapes.flatMap(shape => shape.rings));
   return Math.max(1e-9, box.right - box.left, box.bottom - box.top);
+}
+
+// Shared by SVG import and the shape editor: cache only outlines the document
+// can read back without cutting vertices or changing the locked proportions.
+export function fitCustomOutline(rings) {
+  const unit = unitRings(rings);
+  if (!unit.rings.length) return unit;
+  const [minAspect, maxAspect] = DOC_LIMITS["custom.aspect"];
+  if (unit.aspect < minAspect || unit.aspect > maxAspect) {
+    throw new Error(`the outline's height-to-width ratio must be between ${minAspect} and ${maxAspect}`);
+  }
+  if (unit.rings.length > MAX_CUSTOM_RINGS) {
+    throw new Error(`the outline has too many loops (maximum ${MAX_CUSTOM_RINGS}); simplify the design`);
+  }
+  // Already within the caps: preserve the existing vertices exactly.
+  if (unit.rings.every(ring => ring.length <= MAX_CUSTOM_POINTS)) return unit;
+  return {
+    ...unit,
+    rings: unit.rings.map(ring => {
+      if (ring.length <= MAX_CUSTOM_POINTS) return ring;
+      let low = 0,
+        high = 1;
+      let fitted = ring;
+      // Find the smallest simplification tolerance that meets the cap,
+      // instead of doubling past it and needlessly discarding detail.
+      for (let i = 0; i < 32; i++) {
+        const tolerance = (low + high) / 2;
+        const candidate = simplifyRing(ring, tolerance);
+        if (candidate.length <= MAX_CUSTOM_POINTS) {
+          high = tolerance;
+          fitted = candidate;
+        } else low = tolerance;
+      }
+      return fitted;
+    }),
+  };
 }

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Check, ChevronDown, ChevronUp, Minus, Plus, X } from "lucide-react";
-import { MAX_SHAPE_LAYERS } from "../core/constants.js";
+import { DOC_LIMITS, MAX_SHAPE_LAYERS } from "../core/constants.js";
 import { LAYER_SHAPES, composeLayers, createShapeLayer, designExtent, layerRings } from "../geometry/custom-shape.js";
 import { ringsSVGPath } from "../geometry/rings.js";
 import { SHAPE_PRESETS } from "../geometry/shape-presets.js";
@@ -19,6 +19,7 @@ export function ShapeEditor() {
     ? doc.hole.custom.layers
     : [{ ...createShapeLayer("Circle"), w: 12, h: 12 }];
   const [layers, setLayers] = useState(initial);
+  const [applyError, setApplyError] = useState("");
   const [selectedId, setSelectedId] = useState(initial[0]?.id ?? null);
   const selected = layers.find(l => l.id === selectedId) ?? layers[0] ?? null;
   const composed = useMemo(() => composeLayers(layers), [layers]);
@@ -50,7 +51,7 @@ export function ShapeEditor() {
     // A second shape lands beside the first rather than on top of it, so it
     // is visibly a second shape.
     const { box } = extent;
-    if (layers.length) layer.x = Math.round(box.right + layer.w / 2 + 1);
+    if (layers.length) layer.x = Math.min(DOC_LIMITS["layer.coord"][1], Math.round(box.right + layer.w / 2 + 1));
     setLayers(current => [...current, layer]);
     setSelectedId(layer.id);
   };
@@ -369,6 +370,11 @@ export function ShapeEditor() {
             borderTop: `1px solid ${theme.sectionBorder}`,
           }}
         >
+          {applyError && (
+            <span role="alert" style={{ color: theme.textPrimary, fontSize: 11 }}>
+              {applyError}
+            </span>
+          )}
           <button
             onClick={() => ui.setShapeEditorOpen(false)}
             aria-label="Cancel the shape editor"
@@ -379,7 +385,14 @@ export function ShapeEditor() {
             Cancel
           </button>
           <button
-            onClick={() => actions.applyShapeLayers(layers)}
+            onClick={() => {
+              setApplyError("");
+              try {
+                actions.applyShapeLayers(layers);
+              } catch (error) {
+                setApplyError(error.message);
+              }
+            }}
             disabled={empty}
             aria-label="Apply the shape editor"
             style={chip(true, { padding: "7px 14px", opacity: empty ? 0.4 : 1, display: "flex", alignItems: "center", gap: 5 })} // prettier-ignore
