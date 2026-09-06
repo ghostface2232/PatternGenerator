@@ -39,6 +39,7 @@ import {
   ONE_SIDED_VALUES,
 } from "../fields/controllers.js";
 import { LAYER_ROLES, LAYER_SHAPES } from "../geometry/custom-shape.js";
+import { normalizeRings } from "../geometry/rings.js";
 
 export const FILE_EXTENSION = ".perf.json";
 export const FILE_MIME = "application/json";
@@ -317,14 +318,14 @@ function validatePaths(raw) {
 // that cannot be repaired is dropped whole, like a controller's geometry; a
 // ring longer than the cap is cut at it rather than dropped, since an outline
 // with its last vertices missing is still nearly the outline.
-function validateRing(raw, cap) {
+function validateRing(raw, cap, limit = "boundary.coord") {
   if (!Array.isArray(raw)) return null;
   const ring = [];
   for (const p of raw.slice(0, cap)) {
     const pair = Array.isArray(p) ? p : p && typeof p === "object" ? [p.x, p.y] : null;
     if (!pair) return null;
-    const x = num(pair[0], NaN, "boundary.coord");
-    const y = num(pair[1], NaN, "boundary.coord");
+    const x = num(pair[0], NaN, limit);
+    const y = num(pair[1], NaN, limit);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
     ring.push([x, y]);
   }
@@ -398,7 +399,7 @@ function validateShapeLayers(raw) {
     let id = typeof l.id === "string" && l.id ? l.id.slice(0, 64) : `layer-${index + 1}`;
     while (takenIds.has(id)) id = `${id}-${index + 1}`;
     takenIds.add(id);
-    const points = shape === "Polygon" ? validateRing(l.points, MAX_CUSTOM_POINTS) : [];
+    const points = shape === "Polygon" ? validateRing(l.points, MAX_CUSTOM_POINTS, "layer.coord") : [];
     if (shape === "Polygon" && !points) continue;
     layers.push({
       id,
@@ -420,13 +421,20 @@ function validateShapeLayers(raw) {
 
 function validateCustomShape(raw, fallback) {
   const c = obj(raw);
-  const rings = Array.isArray(c.rings) ? c.rings.slice(0, MAX_CUSTOM_RINGS).map(validateUnitRing).filter(Boolean) : [];
+  // Wound the way every ring the app makes is wound — outers one way, holes
+  // the other — since the canvas paints the outline by the non-zero rule and
+  // the area reads the signed sum: a hand-edited bore wound like its outer
+  // would otherwise fill in on screen and count as metal removed twice.
+  const rings = Array.isArray(c.rings)
+    ? normalizeRings(c.rings.slice(0, MAX_CUSTOM_RINGS).map(validateUnitRing).filter(Boolean))
+    : [];
   const kind = pick(c.kind, CUSTOM_KINDS, fallback.kind);
   return {
     kind: rings.length ? kind : "none",
     name: typeof c.name === "string" ? c.name.trim().slice(0, 60) : fallback.name,
     rings,
-    aspect: num(c.aspect, fallback.aspect, "custom.aspect"),
+    // Without an outline there are no proportions to keep.
+    aspect: rings.length ? num(c.aspect, fallback.aspect, "custom.aspect") : 1,
     lockAspect: bool(c.lockAspect, fallback.lockAspect),
     layers: validateShapeLayers(c.layers),
   };

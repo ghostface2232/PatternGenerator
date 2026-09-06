@@ -563,4 +563,45 @@ test("the hole's preset parameters and custom outline are validated and round-tr
   const star = patchIn(createDocument(), { "hole.shape": "Star", "hole.ratio": 0.3, "hole.count": 7 });
   assert.deepEqual(deserializeDocument(serializeDocument(star)), star);
   assert.equal(computePattern(deserializeDocument(serializeDocument(star))).activeHoles.length, computePattern(star).activeHoles.length); // prettier-ignore
+  // No outline, no proportions: a stale aspect does not stretch the placeholder.
+  assert.equal(validateDocument({ hole: { custom: { kind: "svg", rings: [], aspect: 3 } } }).hole.custom.aspect, 1);
+  // A polygon layer's vertices are design coordinates, bounded like the rest of the layer.
+  const far = validateDocument({ hole: { custom: { layers: [{ shape: "Polygon", points: [[0, 0], [1500, 0], [0, 1500]] }] } } }); // prettier-ignore
+  assert.equal(far.hole.custom.layers[0].points[1][0], DOC_LIMITS["layer.coord"][1]);
+});
+
+test("a hand-edited custom outline is wound the way the app winds its own", () => {
+  // A washer whose bore is wound like its outer: the canvas would paint the
+  // bore solid and the area would count it twice. Loaded, it is a washer.
+  const outer = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]]; // prettier-ignore
+  const bore = [[-0.25, -0.25], [0.25, -0.25], [0.25, 0.25], [-0.25, 0.25]]; // prettier-ignore
+  const d = validateDocument({
+    hole: { shape: "Custom", w: 10, h: 10, custom: { kind: "svg", rings: [outer, bore], aspect: 1, lockAspect: true } },
+  });
+  const [o, b] = d.hole.custom.rings;
+  const signed = ring => ring.reduce((s, [x, y], i) => s + (x * ring[(i + 1) % ring.length][1] - ring[(i + 1) % ring.length][0] * y), 0); // prettier-ignore
+  assert.ok(signed(o) * signed(b) < 0, "the bore is wound against the outer");
+  const { holes } = computePattern(d);
+  assert.ok(Math.abs(holes[0].area - 75) < 1e-6, `${holes[0].area}`);
+});
+
+test("a boundary, its cutouts, a custom hole and the trim flag survive a share link", () => {
+  const letter = [[20, 20], [180, 20], [180, 180], [20, 180]]; // prettier-ignore
+  const counter = [[80, 80], [120, 80], [120, 120], [80, 120]]; // prettier-ignore
+  const d = patchIn(createDocument(), {
+    "boundary.shape": "Polygon",
+    "boundary.rings": [letter, counter],
+    "boundary.cutouts": [{ id: "cut-1", shape: "Rectangle", x: 40, y: 150, w: 30, h: 12, rotation: 15, cornerRadius: 2, points: [] }], // prettier-ignore
+    "boundary.trim": true,
+    "hole.shape": "Custom",
+    "hole.custom": { kind: "svg", name: "ring", rings: [[[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]], [[-0.2, 0.2], [0.2, 0.2], [0.2, -0.2], [-0.2, -0.2]]], aspect: 1, lockAspect: true, layers: [] }, // prettier-ignore
+  });
+  const back = decodeShareHash(encodeShareHash(d));
+  assert.deepEqual({ ...back, id: null }, { ...d, id: null });
+  const a = computePattern(d),
+    b = computePattern(back);
+  assert.ok(a.activeHoles.length > 10);
+  assert.equal(b.activeHoles.length, a.activeHoles.length);
+  assert.equal(b.stats.displayOAR, a.stats.displayOAR);
+  assert.equal(b.stats.grossArea, a.stats.grossArea);
 });

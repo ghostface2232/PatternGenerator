@@ -50,8 +50,23 @@ export function holeUnitRings(hole) {
   return null;
 }
 
+// The height of a Custom hole whose proportions are locked: the outline's own
+// height over width applied to the hole's width, bounded like the height
+// slider it stands in for — a tall outline on a wide hole must not describe a
+// hole no slider could. The pipeline and the panel's writes read this one.
+export function lockedCustomHeight(w, custom) {
+  return clamp(w * (custom?.aspect || 1), ...DOC_LIMITS["hole.h"]);
+}
+
+// The perforation region (geometry/boundary.js) this document describes.
+// Compiled once in deriveGeometry and handed on from there; the Radial
+// layout's Circle fill is part of the region, so the mode travels with it.
+export function regionFromDocument(doc) {
+  return compileBoundary(doc.sheet, doc.boundary, doc.layout.type === "Radial" && doc.layout.radial.mode === "Circle");
+}
+
 export function deriveGeometry(doc) {
-  const { hole, layout, sheet, boundary, taper } = doc;
+  const { hole, layout, taper } = doc;
   const patternType = layout.type;
   // A mode that imposes its own hole shape sizes it from ONE number. The shape
   // dropdown is not driving anything there, so neither are its width and height
@@ -66,7 +81,7 @@ export function deriveGeometry(doc) {
     sizeShape === "Triangle" && hole.triEquilateral
       ? (hole.w * Math.sqrt(3)) / 2
       : sizeShape === CUSTOM_SHAPE && hole.custom?.lockAspect
-        ? hole.w * (hole.custom.aspect || 1)
+        ? lockedCustomHeight(hole.w, hole.custom)
         : hasCustomSize
           ? hole.h
           : hole.diameter;
@@ -152,7 +167,7 @@ export function deriveGeometry(doc) {
   // every layout fills and the variation field is normalised over — the
   // margin-inset rectangle for the Rectangle and Ellipse outlines, a polygon's
   // own bounding box, clipped to the sheet, for Polygon.
-  const region = compileBoundary(sheet, boundary, patternType === "Radial" && radial.mode === "Circle");
+  const region = regionFromDocument(doc);
   const perfX = region.frame.xMin;
   const perfY = region.frame.yMin;
   const perfW = region.w;
@@ -391,29 +406,30 @@ export function compileSpacing(fields) {
 }
 
 // Everything `generateHoles` needs that is not a primitive, compiled once and
-// signed once. Today that is the spacing field and the Path layout's curves;
-// both move holes, neither fits in a record of primitives, and both have to be
-// covered by the same signature the removed-hole rule reads.
+// signed once: the spacing and angle fields, the Path layout's curves and the
+// boundary region when it is not the plain rectangle. Each moves holes, none
+// fits in a record of primitives, and all have to be covered by the same
+// signature the removed-hole rule reads.
 //
-// `null` when this document has neither, which is the common case and the one
-// that has to cost nothing: the layouts then run the arithmetic they always ran,
-// to the last bit, and every pinned baseline still holds.
+// `null` when this document has none of them, which is the common case and the
+// one that has to cost nothing: the layouts then run the arithmetic they always
+// ran, to the last bit, and every pinned baseline still holds.
 //
 // The decision about which modes read the spacing channel lives here rather than
 // in the generator, so the sampler and the signature cannot disagree about it —
 // a field the signature covered but the layout ignored used to clear the user's
 // hole removals for nothing.
-export function compilePlacement(doc) {
+//
+// `region` is the one `deriveGeometry` compiled, when the caller has it: the
+// generator, the statistics and the renderer then read the same object, and a
+// polygon's edge index is built once per edit rather than once per consumer.
+export function compilePlacement(doc, region = null) {
   const channels = layoutPlacementChannels(doc.layout.type);
   // The boundary region, when it is anything but the plain rectangle the
   // params already describe (see isPlainRect): an ellipse, a polygon or a
   // cutout moves holes and is not a primitive, so it travels here and is signed
   // here, like the Path layout's curves.
-  const compiledRegion = compileBoundary(
-    doc.sheet,
-    doc.boundary,
-    doc.layout.type === "Radial" && doc.layout.radial.mode === "Circle"
-  );
+  const compiledRegion = region ?? regionFromDocument(doc);
   const boundary = compiledRegion.isPlainRect ? null : compiledRegion;
   const spacing =
     channels.includes("spacing") && layoutReadsSpacing(effectiveHoleShape(doc), doc.layout.type)
@@ -823,7 +839,7 @@ export function computeStats({ doc, g, holes, activeHoles, removedSet, overlaps,
 export function computePattern(doc, ctx = {}) {
   const g = deriveGeometry(doc);
   const params = buildParams(doc, g);
-  const placement = compilePlacement(doc);
+  const placement = compilePlacement(doc, g.region);
   const baseHoles = generateHoles(params, placement);
   const field = compileDocumentField(doc.fields, { ...fieldContext(doc.layout.type, ctx.imageMaps), ...ctx });
   const holes = decorateHoles(baseHoles, doc, g, field);
@@ -900,7 +916,8 @@ export const PLACEMENT_PARAMS = [
 // clear them (see ui/useDocument.js). Link flags, colours and the document name
 // are absent by construction: they never reach buildParams.
 export function patternSignature(doc) {
-  const params = buildParams(doc, deriveGeometry(doc));
+  const g = deriveGeometry(doc);
+  const params = buildParams(doc, g);
   // The second half of generateHoles' input is the second half of the signature,
   // and it comes from the same `compilePlacement` call that builds what the
   // layouts read — one function, so the signature cannot describe a field the
@@ -908,7 +925,7 @@ export function patternSignature(doc) {
   // spacing channel at all: in the four that ignore it, signing it anyway meant
   // dragging that controller's radius wiped the user's hole removals for a field
   // nothing reads.
-  const placement = compilePlacement(doc)?.signature ?? "";
+  const placement = compilePlacement(doc, g.region)?.signature ?? "";
   // Pairs of [type, text] inside JSON. The type keeps null, undefined and NaN
   // apart — JSON alone writes all three as null in array position, and the three
   // behave very differently in the arithmetic in generateHoles. JSON's quoting

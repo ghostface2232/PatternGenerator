@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDocument, getIn, patchIn, setIn } from "./document.js";
-import { PATTERN_TYPES, PRESET_HOLE_SHAPES } from "./constants.js";
+import { DOC_LIMITS, PATTERN_TYPES, PRESET_HOLE_SHAPES } from "./constants.js";
 import {
   PLACEMENT_PARAMS,
   buildParams,
@@ -1147,6 +1147,10 @@ test("the preset parameters and the custom outline reshape a hole without moving
   near(computePattern(tall).holes[0].area, 32);
   const free = deriveGeometry(patchIn(tall, { "hole.custom.lockAspect": false }));
   assert.equal(free.effH, 4);
+  // The locked height is bounded like the height slider: a 20:1 outline on a
+  // 30 mm hole is not a 600 mm hole.
+  const extreme = deriveGeometry(patchIn(tall, { "hole.w": DOC_LIMITS["hole.w"][1], "hole.custom.aspect": 20 }));
+  assert.equal(extreme.effH, DOC_LIMITS["hole.h"][1]);
 });
 
 test("a preset hole works in every layout mode, the radial and cross-hatch ones included", () => {

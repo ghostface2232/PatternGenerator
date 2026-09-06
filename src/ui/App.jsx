@@ -10,6 +10,7 @@ import {
   decorateHoles,
   deriveGeometry,
   filterActive,
+  lockedCustomHeight,
 } from "../core/pipeline.js";
 import {
   FILE_EXTENSION,
@@ -354,7 +355,7 @@ export default function App() {
       // A custom outline arrives with proportions of its own: its height
       // follows its width until the lock is released.
       if (shape === CUSTOM_SHAPE && hole.custom.lockAspect) {
-        patch["hole.h"] = (patch["hole.w"] ?? hole.w) * (hole.custom.aspect || 1);
+        patch["hole.h"] = lockedCustomHeight(patch["hole.w"] ?? hole.w, hole.custom);
       }
       api.patch(patch);
     };
@@ -370,7 +371,7 @@ export default function App() {
       if (!custom.rings.length) throw new Error("the file's outline is too small to keep");
       const current = api.ref.current.hole;
       const w = CUSTOM_SIZE_SHAPES.includes(current.shape) ? current.w : current.diameter;
-      api.patch({ "hole.shape": CUSTOM_SHAPE, "hole.custom": custom, "hole.w": w, "hole.h": w * custom.aspect });
+      api.patch({ "hole.shape": CUSTOM_SHAPE, "hole.custom": custom, "hole.w": w, "hole.h": lockedCustomHeight(w, custom) }); // prettier-ignore
       return true;
     };
     // The shape editor's stack, composed into the Custom hole: the layers and
@@ -385,7 +386,7 @@ export default function App() {
         "hole.shape": CUSTOM_SHAPE,
         "hole.custom": { ...custom, lockAspect },
         "hole.w": w,
-        ...(lockAspect ? { "hole.h": w * custom.aspect } : null),
+        ...(lockAspect ? { "hole.h": lockedCustomHeight(w, custom) } : null),
       });
       setShapeEditorOpen(false);
       return true;
