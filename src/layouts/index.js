@@ -166,8 +166,12 @@ export function generateHoles(params, placement = null) {
 
   // Diamond "Flat up" = canonical point-up rhombus rotated onto one of its edges.
   const flatTheta = holeShape === "Diamond" && diamondOrient === "Flat up" ? diamondFlatAngle(hw * 2, hh * 2) : 0;
+  // A sharp rectangle with cutouts keeps the loose edges the rectangle always
+  // had: only the cutouts take centres away (see looseCentres).
   const clipToBoundary = region
-    ? pts => pts.filter(p => region.contains(p.x, p.y))
+    ? region.looseCentres
+      ? pts => pts.filter(p => !region.inCutout(p.x, p.y))
+      : pts => pts.filter(p => region.contains(p.x, p.y))
     : pts =>
         cornerRadius > 0 ? pts.filter(p => isInsideRoundedRect(p.x, p.y, xMin, yMin, xMax, yMax, cornerRadius)) : pts;
 
@@ -185,7 +189,16 @@ export function generateHoles(params, placement = null) {
       layout: radialLayout,
       ringSpacing,
       circumSpacing,
-      center: radialLayout === "Concentric" ? { x: sheetW / 2, y: sheetH / 2 } : undefined,
+      // Concentric rings have always been centred on the sheet, which is the
+      // frame's centre for the rectangle they were written for. An ellipse or
+      // a polygon boundary has a centre of its own — a logo in the corner of
+      // the sheet — so the rings gather on that.
+      center:
+        radialLayout === "Concentric"
+          ? region && region.kind !== "rect"
+            ? { x: region.cx, y: region.cy }
+            : { x: sheetW / 2, y: sheetH / 2 }
+          : undefined,
       centerHole,
       cornerRadius,
       diamondOrient,

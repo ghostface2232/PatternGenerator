@@ -1440,6 +1440,45 @@ test("radial rings, a spiral and a path are clipped by a polygon boundary", () =
   assert.ok(circle.activeHoles.every(h => circle.region.contains(h.x, h.y)));
 });
 
+test("a cutout on the rectangle takes away only the holes it covers", () => {
+  // The sharp rectangle keeps its loose edges (grid centres overhang the
+  // perforation bounds by up to a hole radius) whether or not it has a cutout,
+  // so a small cutout far from the edges removes the holes under it and no
+  // other. The rounded rectangle was always strict and stays so.
+  const cutout = { id: "c", shape: "Circle", x: 60, y: 60, w: 2, h: 2, rotation: 0, cornerRadius: 0, points: [] };
+  const cases = [
+    { "hole.shape": "Triangle", "layout.type": "Straight" },
+    { "hole.shape": "Hexagon" },
+    { "layout.type": "Cross-hatch" },
+    { "layout.type": "Radial" },
+    { "layout.type": "Radial", "layout.radial.layout": "Sunflower" },
+    { "layout.type": "Staggered 60°", "sheet.w": 203, "sheet.h": 203 },
+    { "layout.type": "Staggered 60°", "boundary.cornerRadius": 20 },
+  ];
+  for (const patch of cases) {
+    const plain = place(doc(patch));
+    const cut = place(doc({ ...patch, "boundary.cutouts": [cutout] }));
+    const covered = plain.filter(h => Math.hypot(h.x - 60, h.y - 60) <= 1).length;
+    assert.ok(covered <= 1, JSON.stringify(patch));
+    assert.equal(cut.length, plain.length - covered, `${JSON.stringify(patch)}: ${plain.length} → ${cut.length}`);
+  }
+});
+
+test("concentric rings gather on an off-centre boundary", () => {
+  const corner = [[150, 150], [190, 150], [190, 190], [150, 190]]; // prettier-ignore
+  const d = doc({ "layout.type": "Radial", "boundary.shape": "Polygon", "boundary.rings": [corner] });
+  const { activeHoles, region } = computePattern(d);
+  assert.ok(activeHoles.length > 10, `${activeHoles.length}`);
+  assert.ok(activeHoles.every(h => region.contains(h.x, h.y)));
+  // The rings are concentric about the polygon's own centre: a hole sits at
+  // every ring's radius from (170, 170), and the innermost ring is complete.
+  const radii = new Set(activeHoles.map(h => Math.round(Math.hypot(h.x - 170, h.y - 170) * 100) / 100));
+  assert.ok(radii.size >= 2, [...radii].join(", "));
+  // The sheet-centred rectangle is unchanged: rings on (100, 100).
+  const plain = place(doc({ "layout.type": "Radial" }));
+  assert.ok(plain.some(h => Math.abs(Math.hypot(h.x - 100, h.y - 100) - 10) < 1e-6));
+});
+
 test("a region that is not the rectangle still makes every mode a pure function of the document", () => {
   for (const type of PATTERN_TYPES) {
     const a = doc({ ...grille, "layout.type": type });

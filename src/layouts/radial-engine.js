@@ -306,10 +306,19 @@ export function generateRadialHoles(options) {
 
   const appendIfInside = hole => {
     let inside;
-    if (region) {
+    if (region && !region.looseCentres) {
       // A region that is not the plain rectangle answers for itself, the
       // circle fill included: it was compiled with that mode.
       inside = region.contains(hole.x, hole.y);
+    } else if (region) {
+      // The sharp rectangle with cutouts: the padded box it always was, less
+      // the cutouts.
+      inside =
+        hole.x >= xMin - boundaryPad &&
+        hole.x <= xMax + boundaryPad &&
+        hole.y >= yMin - boundaryPad &&
+        hole.y <= yMax + boundaryPad &&
+        !region.inCutout(hole.x, hole.y);
     } else if (fillMode === "Circle") {
       inside = Math.hypot(hole.x - cx, hole.y - cy) <= circleRadius + EPS;
     } else if (cornerRadius > 0) {
@@ -336,7 +345,20 @@ export function generateRadialHoles(options) {
     // circumference approximation and every ring starts on the positive x
     // axis. This intentionally keeps the visual rhythm of the pre-engine
     // implementation instead of optimizing phases and projected gaps.
-    const legacyMaxRadius = fillMode === "Circle" ? circleRadius : Math.hypot(perfW, perfH) / 2 + ringSpacing;
+    // The rings reach the frame's farthest corner from wherever the centre
+    // is. For the rectangle the centre is the sheet's and the frame's diagonal
+    // is what the original arithmetic reached — kept to the bit, cutouts or
+    // not.
+    const reach =
+      region && region.kind !== "rect"
+        ? Math.max(
+            Math.hypot(xMin - cx, yMin - cy),
+            Math.hypot(xMax - cx, yMin - cy),
+            Math.hypot(xMin - cx, yMax - cy),
+            Math.hypot(xMax - cx, yMax - cy)
+          )
+        : Math.hypot(perfW, perfH) / 2;
+    const legacyMaxRadius = fillMode === "Circle" ? circleRadius : reach + ringSpacing;
     const ringCount = Math.max(0, Math.floor(legacyMaxRadius / ringSpacing));
     for (let ring = 1; ring <= ringCount; ring++) {
       const radius = ring * ringSpacing;

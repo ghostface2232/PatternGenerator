@@ -360,6 +360,14 @@ export function compileBoundary(sheet, boundary, circleMode = false) {
     // is not passed to the generator at all, so the default document's pattern
     // is produced by exactly the arithmetic that always produced it.
     isPlainRect: kind === "rect" && cutouts.length === 0,
+    // The sharp rectangle with cutouts: the outline is still the one the
+    // layouts have always filled loosely — grid centres overhang it by up to a
+    // hole radius and the sheet clips the rest visually — so a cutout must
+    // only take away what it covers, never tighten the edges of the rectangle
+    // as well. Layouts test `inCutout` alone when this is set, `contains`
+    // otherwise.
+    looseCentres: kind === "rect" && cornerRadius === 0 && !circleMode,
+    inCutout: (x, y) => cutouts.some(c => c.contains(x, y)),
     contains,
     // Whether (x, y) is inside with at least `d` of region all round it.
     containsWithClearance: (x, y, d) => contains(x, y) && !(d > 0 && nearEdge(x, y, d)),
