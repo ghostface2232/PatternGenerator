@@ -1,6 +1,6 @@
 // ASCII R2000, right-handed XY plane. Reflect sheet Y about its bottom edge
 // and negate bulges so exported shapes retain their orientation and handedness.
-import { EXPORT_LAYERS, exportOptions, exportScale, manufacturingProfiles } from "./profiles.js";
+import { EXPORT_LAYERS, exportOptions, exportScale, extendExportBounds, manufacturingProfiles } from "./profiles.js";
 const pair = (code, value) => `${code}\n${typeof value === "number" ? Number(value.toFixed(9)) : value}\n`;
 
 export function roundedRectVertices(p) {
@@ -45,25 +45,8 @@ export function generateDXFParts(holes, params, region = null, input = {}) {
   const id = () => pair(5, (handle++).toString(16).toUpperCase());
   const table = (name, count) =>
     pair(0, "TABLE") + pair(2, name) + id() + pair(100, "AcDbSymbolTable") + pair(70, count);
-  const parts = [
-    pair(0, "SECTION") +
-      pair(2, "HEADER") +
-      pair(9, "$ACADVER") +
-      pair(1, "AC1015") +
-      pair(9, "$INSUNITS") +
-      pair(70, options.units === "inch" ? 1 : 4) +
-      pair(9, "$MEASUREMENT") +
-      pair(70, options.units === "inch" ? 0 : 1) +
-      pair(9, "$EXTMIN") +
-      pair(10, 0) +
-      pair(20, 0) +
-      pair(30, 0) +
-      pair(9, "$EXTMAX") +
-      pair(10, params.sheetW * scale) +
-      pair(20, params.sheetH * scale) +
-      pair(30, 0) +
-      pair(0, "ENDSEC"),
-  ];
+  const frame = { left: 0, top: 0, right: params.sheetW, bottom: params.sheetH };
+  const parts = [""];
   parts.push(
     pair(0, "SECTION") +
       pair(2, "TABLES") +
@@ -95,6 +78,7 @@ export function generateDXFParts(holes, params, region = null, input = {}) {
   parts.push(pair(0, "ENDTAB") + pair(0, "ENDSEC") + pair(0, "SECTION") + pair(2, "ENTITIES"));
   const entity = (kind, layer) => pair(0, kind) + id() + pair(100, "AcDbEntity") + pair(8, layer);
   for (const p of manufacturingProfiles(holes, params, region, options)) {
+    extendExportBounds(frame, p);
     if (p.kind === "circle")
       parts.push(
         entity("CIRCLE", p.layer) +
@@ -114,6 +98,24 @@ export function generateDXFParts(holes, params, region = null, input = {}) {
       }
   }
   parts.push(pair(0, "ENDSEC") + pair(0, "EOF"));
+  parts[0] =
+    pair(0, "SECTION") +
+    pair(2, "HEADER") +
+    pair(9, "$ACADVER") +
+    pair(1, "AC1015") +
+    pair(9, "$INSUNITS") +
+    pair(70, options.units === "inch" ? 1 : 4) +
+    pair(9, "$MEASUREMENT") +
+    pair(70, options.units === "inch" ? 0 : 1) +
+    pair(9, "$EXTMIN") +
+    pair(10, frame.left * scale) +
+    pair(20, (params.sheetH - frame.bottom) * scale) +
+    pair(30, 0) +
+    pair(9, "$EXTMAX") +
+    pair(10, frame.right * scale) +
+    pair(20, (params.sheetH - frame.top) * scale) +
+    pair(30, 0) +
+    pair(0, "ENDSEC");
   return parts;
 }
 export const generateDXFString = (...args) => generateDXFParts(...args).join("");

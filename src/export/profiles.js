@@ -45,11 +45,17 @@ export function offsetPolygons(polygons, distance) {
           }
         capsules.push([cap]);
       }
-  // Fail visibly on invalid geometry; silently returning the original would
-  // produce an uncompensated toolpath labelled as compensated.
-  return fromClipping(
-    distance > 0 ? polygonClipping.union(polygons, ...capsules) : polygonClipping.difference(polygons, ...capsules)
-  );
+  const operation = distance > 0 ? polygonClipping.union : polygonClipping.difference;
+  try {
+    return fromClipping(operation(polygons, ...capsules));
+  } catch {
+    // Coincident capsule tangencies can confuse the sweep at floating-point
+    // precision. Retry on a micron-fraction grid, far below the 0.02 mm curve
+    // tolerance, instead of dropping a hole or returning uncompensated geometry.
+    const snap = multi =>
+      multi.map(poly => poly.map(ring => ring.map(([x, y]) => [Math.round(x * 1e8) / 1e8, Math.round(y * 1e8) / 1e8])));
+    return fromClipping(operation(snap(polygons), ...capsules.map(poly => snap([poly])[0])));
+  }
 }
 
 export function profileSVG(p) {
@@ -87,14 +93,10 @@ function holeProfile(hole, shape, small) {
   };
 }
 
-function clippedProfile(profile, bounds, distance) {
-  const rings = profile.kind === "rings" ? profile.rings : svgRings(profileSVG(profile));
-  if (!rings.length) return null;
-  // Circle and rotated rectangle boxes must enclose the exact curve, not its
-  // inscribed approximation, or a near-edge arc could escape clipping.
-  let box = ringsBBox(rings);
+// Exact bounding boxes for retained primitives, polygon bounds otherwise.
+export function profileBounds(profile) {
   if (profile.kind === "circle")
-    box = {
+    return {
       left: profile.x - profile.r,
       right: profile.x + profile.r,
       top: profile.y - profile.r,
@@ -103,10 +105,25 @@ function clippedProfile(profile, bounds, distance) {
   if (profile.kind === "rect") {
     const c = Math.abs(Math.cos(profile.angle)),
       s = Math.abs(Math.sin(profile.angle));
-    const dx = (c * profile.w + s * profile.h) / 2,
-      dy = (s * profile.w + c * profile.h) / 2;
-    box = { left: profile.x - dx, right: profile.x + dx, top: profile.y - dy, bottom: profile.y + dy };
+    const dx = c * (profile.w / 2 - profile.r) + s * (profile.h / 2 - profile.r) + profile.r;
+    const dy = s * (profile.w / 2 - profile.r) + c * (profile.h / 2 - profile.r) + profile.r;
+    return { left: profile.x - dx, right: profile.x + dx, top: profile.y - dy, bottom: profile.y + dy };
   }
+  return ringsBBox(profile.rings);
+}
+export function extendExportBounds(frame, profile, padding = 0) {
+  if (profile.kind === "rings" && !profile.rings.length) return;
+  const box = profileBounds(profile);
+  frame.left = Math.min(frame.left, box.left - padding);
+  frame.top = Math.min(frame.top, box.top - padding);
+  frame.right = Math.max(frame.right, box.right + padding);
+  frame.bottom = Math.max(frame.bottom, box.bottom + padding);
+}
+
+function clippedProfile(profile, bounds, distance) {
+  const rings = profile.kind === "rings" ? profile.rings : svgRings(profileSVG(profile));
+  if (!rings.length) return null;
+  const box = profileBounds(profile);
   const where = bounds.classifyBox(box.left, box.top, box.right, box.bottom);
   if (where === "outside") return null;
   if (where === "inside" && !distance) return profile;

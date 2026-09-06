@@ -64,3 +64,33 @@ test("dialog traps focus, Escape restores focus, and remains within the viewport
   await expect(modal).toHaveCount(0);
   await expect(trigger).toBeFocused();
 });
+
+test("dropping a document onto the export modal cannot replace the current document", async ({ page }) => {
+  await page.getByRole("button", { name: "Export pattern", exact: true }).click();
+  const prevented = await page.getByRole("dialog").evaluate(el => {
+    const dt = new DataTransfer();
+    dt.items.add(
+      new File(
+        [
+          JSON.stringify({
+            schemaVersion: 1,
+            name: "Wrong document",
+            sheet: { w: 100, h: 100 },
+            hole: { shape: "Circle", diameter: 5 },
+          }),
+        ],
+        "wrong.perf.json",
+        { type: "application/json" }
+      )
+    );
+    const event = new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt });
+    el.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(prevented).toBe(true);
+  await expect(page.getByRole("dialog")).toContainText("739 holes");
+  await expect(page.getByLabel("Export filename")).toHaveValue("Untitled");
+  await page.getByRole("button", { name: "Close export dialog" }).click();
+  await expect(page.getByTestId("doc-name")).toHaveText("Untitled");
+  await expect(page.getByRole("button", { name: "Undo (Ctrl+Z)", exact: true })).toBeDisabled();
+});

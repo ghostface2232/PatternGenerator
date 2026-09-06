@@ -85,3 +85,17 @@ test("every supported shape and layout produces finite closed CAD entities", () 
     for (const e of es) if (e.type === "LWPOLYLINE") assert.equal(value(e, 70), "1");
   }
 });
+
+test("DXF extents include compensated profiles outside the sheet", () => {
+  for (const units of ["mm", "inch"]) {
+    const scale = units === "inch" ? 1 / 25.4 : 1;
+    const text = generateDXFString(
+      [{ x: 0, y: 10, w: 4, h: 4 }],
+      { sheetW: 20, sheetH: 20, holeShape: "Circle" },
+      null,
+      { kerf: 1, kerfDirection: "outward", units }
+    );
+    const minX = Number(text.match(/\$EXTMIN\n10\n([^\n]+)/)[1]);
+    assert.ok(Math.abs(minX + 0.5 * scale) < 1e-8);
+  }
+});

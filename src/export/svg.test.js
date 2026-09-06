@@ -48,3 +48,21 @@ test("cut SVG uses physical clipping, layer filtering and inch dimensions", () =
   assert.match(svg, /fill="none"/);
   assert.match(svg, /inkscape:label="HOLES"/);
 });
+
+test("cut SVG includes outward kerf and stroke in its physical page without rescaling mm", () => {
+  const svg = generateSVGString([{ x: 0, y: 10, w: 4, h: 4 }], { sheetW: 20, sheetH: 20, holeShape: "Circle" }, null, {
+    mode: "cut",
+    kerf: 1,
+    kerfDirection: "outward",
+    layers: ["HOLES"],
+  });
+  const view = svg
+    .match(/viewBox="([^"]+)"/)[1]
+    .split(" ")
+    .map(Number);
+  assert.ok(view[0] <= -0.575 + 1e-9);
+  assert.match(svg, /stroke-linejoin="round"/);
+  const width = Number(svg.match(/width="([^"]+)mm"/)[1]);
+  assert.equal(width, view[2]);
+  assert.ok(view[0] + view[2] >= 20);
+});

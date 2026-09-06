@@ -8,7 +8,7 @@
 // from the chunks has no such limit; generateSVGString joins them for callers
 // that want the text (tests, and any small document).
 import { holeExitOutline, holeOutline, holeSVGElement } from "../geometry/shapes.js";
-import { exportOptions, exportScale, manufacturingProfiles, profileSVG } from "./profiles.js";
+import { exportOptions, exportScale, extendExportBounds, manufacturingProfiles, profileSVG } from "./profiles.js";
 import { regionFromParams } from "../geometry/boundary.js";
 
 // `region` is the compiled boundary (geometry/boundary.js); absent, the params'
@@ -117,9 +117,8 @@ export function generateSVGString(holes, params, region = null, options = {}) {
 function manufacturingSVGParts(holes, params, region, options) {
   const scale = exportScale(options.units),
     unit = options.units === "inch" ? "in" : "mm";
-  const parts = [
-    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="${params.sheetW * scale}${unit}" height="${params.sheetH * scale}${unit}" viewBox="0 0 ${params.sheetW * scale} ${params.sheetH * scale}">\n<g transform="scale(${scale})">\n`,
-  ];
+  const frame = { left: 0, top: 0, right: params.sheetW, bottom: params.sheetH };
+  const parts = [""];
   const cut = options.mode === "cut";
   if (!cut)
     parts.push(
@@ -134,12 +133,16 @@ function manufacturingSVGParts(holes, params, region, options) {
       layer = profile.layer;
       const filled = !cut && layer === "HOLES";
       parts.push(
-        `<g id="${layer}" inkscape:label="${layer}" inkscape:groupmode="layer" fill="${filled ? params.holeColor || "#000000" : "none"}" stroke="${filled ? "none" : "#666"}" stroke-width="0.15">\n`
+        `<g id="${layer}" inkscape:label="${layer}" inkscape:groupmode="layer" fill="${filled ? params.holeColor || "#000000" : "none"}" stroke="${filled ? "none" : "#666"}" stroke-width="0.15" stroke-linejoin="round">\n`
       );
     }
+    extendExportBounds(frame, profile, cut || profile.layer !== "HOLES" ? 0.075 : 0);
     parts.push(profileSVG(profile) + "\n");
   }
   if (layer) parts.push(`</g>\n`);
   parts.push(`</g></svg>`);
+  const w = (frame.right - frame.left) * scale,
+    h = (frame.bottom - frame.top) * scale;
+  parts[0] = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="${w}${unit}" height="${h}${unit}" viewBox="${frame.left * scale} ${frame.top * scale} ${w} ${h}">\n<g transform="scale(${scale})">\n`;
   return parts;
 }

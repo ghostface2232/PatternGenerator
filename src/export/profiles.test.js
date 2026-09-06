@@ -61,3 +61,25 @@ test("signed offsets preserve counters and shrink them when expanding holes", ()
 test("invalid kerf fails explicitly", () => {
   assert.throws(() => holes(circle, { kerf: NaN }), /Kerf/);
 });
+
+test("large kerf offsets remain stable at coincident capsule tangencies", async () => {
+  const { createDocument, patchIn } = await import("../core/document.js");
+  const { computePattern } = await import("../core/pipeline.js");
+  for (const shape of ["Diamond", "Plus", "Cross", "Teardrop"]) {
+    const p = computePattern(patchIn(createDocument(), { "sheet.w": 40, "sheet.h": 40, "hole.shape": shape }));
+    for (const direction of ["inward", "outward"]) {
+      const out = [
+        ...manufacturingProfiles(p.activeHoles, p.params, p.region, {
+          layers: ["HOLES"],
+          kerf: 5,
+          kerfDirection: direction,
+        }),
+      ];
+      if (direction === "inward") assert.equal(out.length, 0, shape + " collapses");
+      else {
+        assert.equal(out.length, p.activeHoles.length, shape);
+        assert.ok(out.every(profile => ringsArea(profile.rings) > 0));
+      }
+    }
+  }
+});

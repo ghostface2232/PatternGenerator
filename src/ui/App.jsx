@@ -1071,6 +1071,8 @@ export default function App() {
       if (!e.dataTransfer?.types?.includes("Files")) return;
       // Always swallow a file drop: letting it through navigates the tab away from the app.
       e.preventDefault();
+      // A modal's export/edit snapshot must not switch documents underneath it.
+      if (exportOpen || shapeEditorOpen) return;
       const files = [...(e.dataTransfer.files || [])];
       const document = files.find(f => /\.json$/i.test(f.name));
       if (document) {
@@ -1098,7 +1100,7 @@ export default function App() {
       window.removeEventListener("dragover", onDragOver);
       window.removeEventListener("drop", onDrop);
     };
-  }, [openFile, actions]);
+  }, [openFile, actions, exportOpen, shapeEditorOpen]);
 
   const ui = {
     dark,
