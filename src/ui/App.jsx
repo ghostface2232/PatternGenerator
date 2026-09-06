@@ -189,6 +189,8 @@ export default function App() {
   const selectedPath = Math.max(0, Math.min(selectedPathIndex, layout.path.paths.length - 1));
   // Resolved rather than trusted: undo or a removal can take the cutout away
   // under the selection, and then the first one stands in.
+  // Deletion, reset, and undo can all remove the last editable boundary handle.
+  if (boundaryEditMode && boundary.shape !== "Polygon" && boundary.cutouts.length === 0) setBoundaryEditMode(false);
   const selectedCutout = boundary.cutouts.find(c => c.id === selectedCutoutId) ?? boundary.cutouts[0] ?? null;
   const patternDoc = useMemo(() => ({ hole, layout, sheet, boundary, taper }), [hole, layout, sheet, boundary, taper]);
   const geometry = useMemo(() => deriveGeometry(patternDoc), [patternDoc]);
@@ -482,8 +484,7 @@ export default function App() {
       history.commit(current => ({ ...current, enabled }));
       if (!enabled) setVariationEditMode(false);
     };
-    const toggleVariationEditMode = () => {
-      const next = !variationEditMode;
+    const enterVariationEditMode = next => {
       setVariationEditMode(next);
       if (next) {
         setHoleRemovalMode(false);
@@ -494,6 +495,7 @@ export default function App() {
         if (!history.ref.current.enabled) history.commit(current => ({ ...current, enabled: true }));
       }
     };
+    const toggleVariationEditMode = () => enterVariationEditMode(!variationEditMode);
     const updateSelectedLayer = (patch, record = false) => {
       const apply = current => ({
         ...current,
@@ -518,8 +520,7 @@ export default function App() {
           layers: [{ ...baseLayer, ...preset.layer, enabled: true }],
         };
       });
-      setVariationEditMode(true);
-      setFieldEditMode(false);
+      enterVariationEditMode(true);
     };
     const addVariationLayer = () => {
       if (history.ref.current.layers.length >= MAX_VARIATION_LAYERS) return;
@@ -541,8 +542,7 @@ export default function App() {
         enabled: true,
         layers: current.layers.map(layer => randomizeVariationLayer(layer)),
       }));
-      setVariationEditMode(true);
-      setFieldEditMode(false);
+      enterVariationEditMode(true);
     };
     // ─── Field controllers ─────────────────────────────────────────
     // Every edit goes through api.update so it lands on the one global undo

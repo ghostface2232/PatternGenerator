@@ -322,13 +322,15 @@ export function generateRadialHoles(options) {
         hole.y <= yMax + boundaryPad;
     }
     if (inside) holes.push({ x: hole.x, y: hole.y, angle: hole.angle });
+    return inside;
   };
 
   let previous = null;
   if (centerHole) {
     const centerAngle = shape === "Diamond" && diamondOrient === "Flat up" ? diamondFlatAngle(w, h) : 0;
-    holes.push({ x: cx, y: cy, angle: centerAngle });
-    previous = { radius: 0, count: 1, phase: 0, centerAngle };
+    if (appendIfInside({ x: cx, y: cy, angle: centerAngle })) {
+      previous = { radius: 0, count: 1, phase: 0, centerAngle };
+    }
   }
 
   if (layout === "Concentric") {
@@ -357,7 +359,7 @@ export function generateRadialHoles(options) {
     const minimumCenterDistance = outerRadius * 2 + requestedGap;
     // A centre hole makes n=0 -> n=1 the limiting pair. Without it, the
     // tighter n=1 -> n=4 Fermat pair determines the scale.
-    const spiralScale = minimumCenterDistance / (centerHole ? 1 : FERMAT_SAFE_SEPARATION);
+    const spiralScale = minimumCenterDistance / (previous ? 1 : FERMAT_SAFE_SEPARATION);
     for (let n = 1; ; n++) {
       const radius = spiralScale * Math.sqrt(n);
       if (radius > maxRadius + EPS) break;

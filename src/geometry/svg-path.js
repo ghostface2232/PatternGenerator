@@ -430,12 +430,17 @@ export function parseSVGOutline(text, tolerance = 0.05) {
           .map(sub => closeTo(sub.points, sub.closed))
           .filter(Boolean);
       } else {
+        // The largest singular value bounds how far the composed transform
+        // can stretch any flattening error, including skew and nonuniform scale.
+        const [a, b, c, d] = transform;
+        const stretch = (Math.hypot(a + d, b - c) + Math.hypot(a - d, b + c)) / 2;
+        const localTolerance = tolerance / (stretch || 1);
         let pts = null;
-        if (tag === "rect") pts = rectPoints(attrs, tolerance);
+        if (tag === "rect") pts = rectPoints(attrs, localTolerance);
         else if (tag === "circle")
-          pts = ellipsePoints(num(attrs.cx), num(attrs.cy), num(attrs.r), num(attrs.r), tolerance); // prettier-ignore
+          pts = ellipsePoints(num(attrs.cx), num(attrs.cy), num(attrs.r), num(attrs.r), localTolerance); // prettier-ignore
         else if (tag === "ellipse")
-          pts = ellipsePoints(num(attrs.cx), num(attrs.cy), num(attrs.rx), num(attrs.ry), tolerance); // prettier-ignore
+          pts = ellipsePoints(num(attrs.cx), num(attrs.cy), num(attrs.rx), num(attrs.ry), localTolerance); // prettier-ignore
         else if (tag === "polygon") pts = pointList(attrs.points);
         else if (tag === "polyline") pts = closeTo(pointList(attrs.points), false);
         if (pts && pts.length >= 3) rings = [pts.map(([px, py]) => applyTransform(transform, px, py))];

@@ -57,3 +57,17 @@ test("the composed stack becomes a Custom hole that the registry draws and measu
   assert.equal(isPointInsideHole(50, 53, { x: 50, y: 50, w: 20, h: 10, rings: custom.rings, holeRadius: 0 }, "Custom"), true); // prettier-ignore
   assert.equal(layersToUnitShape([]).rings.length, 0);
 });
+
+test("reordering a cut and a later addition changes the restored solid", () => {
+  const base = { ...createShapeLayer("Rectangle"), ratio: 0 };
+  const cut = { ...base, id: "cut", role: "subtract", w: 6, h: 6 };
+  const restore = { ...base, id: "restore", w: 2, h: 2 };
+  const restored = composeLayers([base, cut, restore]).flat();
+  near(ringsArea(restored), 100 - 36 + 4);
+  assert.equal(ringsContains(restored, 0, 0), true);
+  assert.equal(ringsContains(restored, 2, 0), false);
+  const cutLast = composeLayers([base, restore, cut]).flat();
+  near(ringsArea(cutLast), 100 - 36);
+  assert.equal(ringsContains(cutLast, 0, 0), false);
+  near(ringsArea(composeLayers([cut, base]).flat()), 100);
+});

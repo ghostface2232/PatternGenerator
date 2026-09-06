@@ -36,6 +36,8 @@ function probeVertex(ring, other) {
   return ring[0];
 }
 
+// Expects non-intersecting loops; imported overlaps are resolved by
+// resolveEvenOddRings before reaching this winding-only helper.
 // Rings wound as described above: outer rings positive, rings inside an odd
 // number of others negative. Degenerate rings (fewer than three vertices, or no
 // area) are dropped.

@@ -112,19 +112,16 @@ export function createShapeLayer(shape, existing = []) {
   return layer;
 }
 
-// The stack composed: every union layer added in order, every subtract layer
-// then taken away, as polygons in design millimetres — [outer, …holes] each.
+// Compose in displayed order, so an addition can restore an earlier cut.
+// Each result is a list of polygons in design millimetres — [outer, …holes].
 export function composeLayers(layers) {
-  const adds = [],
-    cuts = [];
+  let result = [];
   for (const layer of layers) {
     const rings = layerRings(layer);
     if (!rings.length) continue;
-    (layer.role === "subtract" ? cuts : adds).push(rings);
+    result = layer.role === "subtract" ? differencePolygons(result, [rings]) : unionPolygons([...result, rings]);
   }
-  if (!adds.length) return [];
-  const union = unionPolygons(adds);
-  return cuts.length ? differencePolygons(union, cuts) : union;
+  return result;
 }
 
 // The composed stack as the Custom hole's outline: the rings of every piece,
