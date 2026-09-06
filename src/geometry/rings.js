@@ -15,7 +15,7 @@
 // hole — the other way. Two things depend on that and nothing else does: the
 // signed areas then simply add up, and the canvas's default non-zero fill rule
 // paints the holes as holes without being told to.
-import { distPointSeg, isConvexPoly, isInsidePoly, polyGap, segmentsIntersect, signedPolyArea } from "./polygon.js";
+import { distPointSeg, isConvexPoly, isInsidePoly, polyGap, segmentsCross, signedPolyArea } from "./polygon.js";
 
 const f3 = n => n.toFixed(3);
 
@@ -37,13 +37,19 @@ function probeVertex(ring, other) {
 }
 
 // Rings wound as described above: outer rings positive, rings inside an odd
-// number of others negative. Degenerate rings (fewer than three vertices, or no
-// area) are dropped.
+// number of others negative. Degenerate rings (fewer than three vertices, or
+// no extent) are dropped. A ring with extent but no signed area is kept: a
+// figure of eight whose lobes cancel is still an outline under the even-odd
+// rule, and dropping it would make a boundary drawn that way silently the
+// rectangle.
 export function normalizeRings(rings) {
   const clean = (Array.isArray(rings) ? rings : [])
     .filter(ring => Array.isArray(ring) && ring.length >= 3)
     .map(ring => ring.map(([x, y]) => [x, y]))
-    .filter(ring => Math.abs(signedPolyArea(ring)) > 1e-12);
+    .filter(ring => {
+      const box = ringsBBox([ring]);
+      return box.right - box.left > 1e-9 || box.bottom - box.top > 1e-9;
+    });
   return clean.map((ring, i) => {
     let depth = 0;
     for (let j = 0; j < clean.length; j++) {
@@ -126,7 +132,20 @@ export function ringsGap(A, B) {
   // One plain ring each is the common case, and the polygon clearance handles
   // it — exactly for convex pairs, and with the same rules as below otherwise.
   if (A.length === 1 && B.length === 1) return polyGap(A[0], B[0]);
-  const inside = (P, Q) => P.some(ring => ring.some(([x, y]) => ringsContains(Q, x, y)));
+  // Strictly inside: a vertex on the other's edge is touching, not overlap.
+  const edgeDistance = (Q, x, y) => {
+    let d = Infinity;
+    for (const rq of Q) {
+      for (let i = 0; i < rq.length; i++) {
+        const a = rq[i],
+          b = rq[(i + 1) % rq.length];
+        d = Math.min(d, distPointSeg(x, y, a[0], a[1], b[0], b[1]));
+      }
+    }
+    return d;
+  };
+  const inside = (P, Q) =>
+    P.some(ring => ring.some(([x, y]) => ringsContains(Q, x, y) && edgeDistance(Q, x, y) > 1e-9));
   let crossed = false;
   for (const ra of A) {
     for (const rb of B) {
@@ -134,7 +153,7 @@ export function ringsGap(A, B) {
         const a = ra[i],
           b = ra[(i + 1) % ra.length];
         for (let j = 0; j < rb.length; j++) {
-          if (segmentsIntersect(a, b, rb[j], rb[(j + 1) % rb.length])) {
+          if (segmentsCross(a, b, rb[j], rb[(j + 1) % rb.length])) {
             crossed = true;
             break;
           }

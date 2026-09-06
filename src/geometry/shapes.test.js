@@ -134,6 +134,14 @@ test("every preset shape scales its unit outline by the hole's width and height"
     const box = ringsBBox(rings);
     near(Math.max(box.right - box.left, box.bottom - box.top), 1, 1e-9);
     assert.ok(box.left < 0 && box.right > 0 && box.top < 0 && box.bottom > 0, `${name}: the origin is inside the box`);
+    // And on the outline itself, at either end of the parameter's range: a
+    // hole whose centre is not on the hole misses every test of the centre.
+    // The Ring and the Hex Nut have a bore in the middle by design.
+    if (name !== "Ring" && name !== "Hex Nut") {
+      for (const ratio of [0, 0.5, 1]) {
+        assert.equal(ringsContains(presetRings(name, ratio, preset.count?.default), 0, 0), true, `${name} at ${ratio}`);
+      }
+    }
     // Its SVG element is one path per hole, and its hit test reads the outline
     // rather than the box: the middle of a ring is metal.
     const h = hole(10, 10, 6, 3, { rings });

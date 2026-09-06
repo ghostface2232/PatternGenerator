@@ -104,6 +104,13 @@ test("a polygon boundary reads its rings by the even-odd rule and ends at the sh
   const bare = compileBoundary(sheet, block({ shape: "Polygon" }));
   assert.equal(bare.kind, "rect");
   assert.equal(bare.isPlainRect, true);
+  // A figure of eight whose lobes cancel is still an outline — two triangles
+  // under the even-odd rule — not a reason to fall back to the rectangle.
+  const bowTie = compileBoundary(sheet, block({ shape: "Polygon", rings: [[[10, 10], [90, 90], [90, 10], [10, 90]]] })); // prettier-ignore
+  assert.equal(bowTie.kind, "polygon");
+  assert.equal(bowTie.contains(30, 50), true, "in the left lobe");
+  assert.equal(bowTie.contains(50, 30), false, "in the pinch");
+  near(bowTie.area, 3200, 1);
 });
 
 test("cutouts are taken out of the region, and the area says so", () => {

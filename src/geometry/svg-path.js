@@ -171,8 +171,10 @@ export function pathToPolylines(d, transform = IDENTITY, tolerance = 0.05) {
     y = startY = py;
   };
   const lineTo = (px, py) => {
-    if (!current) begin(px, py);
-    else current.points.push(point(px, py));
+    // A line with no subpath open — after a Z, before any M — starts a new
+    // one at the current point, which Z put back at the last subpath's start.
+    if (!current) begin(x, y);
+    current.points.push(point(px, py));
     x = px;
     y = py;
   };
@@ -371,20 +373,28 @@ function pointList(text) {
   return pts;
 }
 
-// Physical size of one user unit, in millimetres, from the root's width and
-// viewBox — or null when the file gives no physical unit (px, or none), which
-// is the case the caller has to ask the user about.
+// Physical size of one user unit, in millimetres, from the root's width,
+// height and viewBox — or null when the file gives no physical unit (px, or
+// none), which is the case the caller has to ask the user about. With a
+// viewBox the default preserveAspectRatio (xMidYMid meet) fits the box
+// inside the viewport, so the scale is the smaller of the two ratios.
 const UNIT_MM = { mm: 1, cm: 10, in: 25.4, pt: 25.4 / 72, pc: 25.4 / 6, m: 1000 };
+function physicalMm(text) {
+  const m = /^\s*([-+]?[\d.]+(?:e[-+]?\d+)?)\s*([a-z%]*)\s*$/i.exec(text || "");
+  if (!m) return null;
+  const mm = UNIT_MM[m[2].toLowerCase()];
+  return mm ? { value: Number(m[1]), mm: Number(m[1]) * mm } : null;
+}
 function unitScale(attrs) {
-  const width = /^\s*([-+]?[\d.]+(?:e[-+]?\d+)?)\s*([a-z%]*)\s*$/i.exec(attrs.width || "");
   const viewBox = numbers(attrs.viewBox || "");
-  const boxW = viewBox.length === 4 && viewBox[2] > 0 ? viewBox[2] : null;
-  if (!width) return { scale: null, viewBox: viewBox.length === 4 ? viewBox : null };
-  const unit = width[2].toLowerCase();
-  const mm = UNIT_MM[unit];
-  if (!mm) return { scale: null, viewBox: viewBox.length === 4 ? viewBox : null };
-  const widthMm = Number(width[1]) * mm;
-  return { scale: widthMm / (boxW ?? Number(width[1])), viewBox: viewBox.length === 4 ? viewBox : null };
+  const box = viewBox.length === 4 ? viewBox : null;
+  const width = physicalMm(attrs.width),
+    height = physicalMm(attrs.height);
+  if (!width && !height) return { scale: null, viewBox: box };
+  const ratios = [];
+  if (width) ratios.push(width.mm / (box && box[2] > 0 ? box[2] : width.value));
+  if (height) ratios.push(height.mm / (box && box[3] > 0 ? box[3] : height.value));
+  return { scale: Math.min(...ratios), viewBox: box };
 }
 
 // Every closed outline in the file, in document order, one entry per element:

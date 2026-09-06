@@ -26,6 +26,13 @@ export function orient2d(a, b, c) {
   return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
 }
 
+// True only when the segments cross properly — each strictly straddles the
+// other's line. Two outlines that merely touch at a vertex or along an edge do
+// not cross: they are a gap of exactly zero, not an overlap.
+export function segmentsCross(a, b, c, d) {
+  return orient2d(a, b, c) * orient2d(a, b, d) < 0 && orient2d(c, d, a) * orient2d(c, d, b) < 0;
+}
+
 export function segmentsIntersect(a, b, c, d) {
   const abC = orient2d(a, b, c),
     abD = orient2d(a, b, d);
@@ -371,8 +378,10 @@ export function holePolyVerts(shape, x, y, w, h, angle) {
 // Signed clearance between two simple polygons of any shape. Convex pairs take
 // the exact SAT route below; anything else is settled by the two facts that hold
 // for every simple polygon — disjoint outlines are as far apart as their closest
-// vertex-to-edge pair, and overlapping ones either cross an edge or have one
-// entirely inside the other. The overlap depth is then only estimated (the
+// vertex-to-edge pair, and overlapping ones either cross an edge properly or
+// have one entirely inside the other. Touching — a vertex on the other's edge,
+// two edges along each other — is neither, and reads as a gap of zero, as it
+// does for convex pairs. The overlap depth is then only estimated (the
 // deepest a vertex of one sits inside the other), and never above −MIN_OVERLAP:
 // nothing downstream reads the depth beyond its sign, but a crossing whose
 // vertices all lie outside would otherwise report a depth of exactly zero and
@@ -390,7 +399,7 @@ function simplePolyGap(A, B) {
     const a = A[i],
       b = A[(i + 1) % A.length];
     for (let j = 0; j < B.length; j++) {
-      if (segmentsIntersect(a, b, B[j], B[(j + 1) % B.length])) {
+      if (segmentsCross(a, b, B[j], B[(j + 1) % B.length])) {
         crossed = true;
         break;
       }

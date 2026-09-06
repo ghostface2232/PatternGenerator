@@ -123,9 +123,13 @@ export const SHAPE_PRESETS = {
     ratio: { label: "Thickness", min: 0.1, max: 0.9, default: 0.45 },
     rings(thickness) {
       // A disc with a second disc bitten out of it, the bite's centre sliding
-      // out along the axis as the crescent thickens.
-      const disc = circleRing(0, 0, 0.5, SEGMENTS);
-      const bite = circleRing(lerp(0.12, 0.62, thickness), 0, 0.46, SEGMENTS);
+      // out along the axis as the crescent thickens. Placed so the origin sits
+      // in the middle of the crescent's thick part — the bite would otherwise
+      // cover it, and a hole whose centre is not on the hole misses every
+      // test that reads the centre.
+      const c = lerp(0.12, 0.62, thickness);
+      const disc = circleRing((0.96 - c) / 2, 0, 0.5, SEGMENTS);
+      const bite = circleRing((0.96 + c) / 2, 0, 0.46, SEGMENTS);
       return differencePolygons([[disc]], [[bite]]).flat();
     },
   },

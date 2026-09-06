@@ -20,6 +20,11 @@ test("path commands: absolute, relative, shorthand, and closing", () => {
   // Numbers glued together, exponents and leading dots all tokenize.
   const [glued] = pathToPolylines("M0-1L.5e1 2.5-3 4Z");
   assert.deepEqual(glued.points, [[0, -1], [5, 2.5], [-3, 4]]); // prettier-ignore
+  // A subpath begun by a line after Z starts where the last one started.
+  const afterZ = pathToPolylines("M0 0 L10 0 L10 10 Z L0 10 L-10 0 Z");
+  assert.equal(afterZ.length, 2);
+  assert.deepEqual(afterZ[1].points, [[0, 0], [0, 10], [-10, 0]]); // prettier-ignore
+  assert.equal(afterZ[1].closed, true);
 });
 
 test("curves are flattened within the tolerance, tighter at a finer one", () => {
@@ -127,6 +132,12 @@ test("a file with no physical unit reports no scale, and a non-SVG file reports 
   near(inches.scale, 0.508);
   const noBox = parseSVGOutline('<svg width="30mm"><rect width="10" height="10"/></svg>');
   near(noBox.scale, 1);
+  // A viewBox taller than the viewport is fitted inside it (xMidYMid meet),
+  // so the height decides; a height alone decides too.
+  const tall = parseSVGOutline('<svg width="100mm" height="100mm" viewBox="0 0 50 200"><rect width="10" height="10"/></svg>'); // prettier-ignore
+  near(tall.scale, 0.5);
+  const heightOnly = parseSVGOutline('<svg height="4cm" viewBox="0 0 80 80"><rect width="10" height="10"/></svg>');
+  near(heightOnly.scale, 0.5);
   const text = parseSVGOutline("just some text");
   assert.equal(text.isSVG, false);
   assert.equal(text.shapes.length, 0);

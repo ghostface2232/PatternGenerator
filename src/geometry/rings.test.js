@@ -95,6 +95,16 @@ test("the general polygon clearance agrees with the convex one and handles notch
   ];
   assert.ok(polyGap(cross(0, 0), cross(3, 3)) < -0.001);
   near(polyGap(cross(0, 0), cross(12, 0)), 2);
+  // Touching is a gap of zero, not an overlap — as it is for convex pairs:
+  // arm tip against arm tip, and an arm laid along another's side.
+  near(polyGap(cross(0, 0), cross(10, 0)), 0);
+  near(polyGap(cross(0, 0), cross(2, 10)), 0);
+  near(polyGap(square(0, 0, 10), square(10, 0, 10)), 0);
+  // The same through the ring clearance, bores and all.
+  const washer = cx => [square(cx, 0, 10), square(cx + 3, 3, 4).reverse()];
+  near(ringsGap(washer(0), washer(10)), 0);
+  near(ringsGap(washer(0), [cross(15, 5)]), 0);
+  assert.ok(ringsGap(washer(0), [cross(14, 5)]) < -0.001);
 });
 
 test("corner rounding on a concave outline adds at the notch and removes at the corners", () => {
