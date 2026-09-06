@@ -100,6 +100,12 @@ export function ProjectPanel() {
           )}
         </button>
       </div>
+      {project.shareIsLong && (
+        <div style={{ fontSize: 9, color: theme.textSecondary, marginBottom: 10, lineHeight: 1.6 }}>
+          The boundary and hole outlines travel inside a share link, and this document&apos;s run to a link some chat
+          and mail clients cut short. Save the {project.fileExtension} file to be sure.
+        </div>
+      )}
       {project.shareDropsImages && (
         <div style={{ fontSize: 9, color: theme.textSecondary, marginBottom: 10, lineHeight: 1.6 }}>
           A share link and the recent list leave out the controller images — they would not fit in a URL, and ten of

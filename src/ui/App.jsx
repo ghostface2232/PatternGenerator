@@ -21,7 +21,9 @@ import {
   fileStem,
   hasAssets,
   newAssetId,
+  outlineVertexCount,
   pruneAssets,
+  SHARE_OUTLINE_WARN_POINTS,
   STORAGE_KEY_CURRENT,
   loadCurrent,
   loadRecent,
@@ -1004,6 +1006,7 @@ export default function App() {
       // the .perf.json file. The panel says so rather than letting the recipient
       // wonder why their halftone is flat.
       shareDropsImages: documentHasAssets,
+      shareIsLong: outlineVertexCount(doc) > SHARE_OUTLINE_WARN_POINTS,
       shareLink: async () => {
         const url = `${window.location.origin}${window.location.pathname}${encodeShareHash(api.ref.current)}`;
         try {
@@ -1015,7 +1018,7 @@ export default function App() {
         }
       },
     }),
-    [saveStatus, recent, loadDocument, openFile, api, documentHasAssets]
+    [saveStatus, recent, loadDocument, openFile, api, documentHasAssets, doc]
   );
 
   // Keyboard shortcuts: undo / redo / save. Text fields keep their own undo.

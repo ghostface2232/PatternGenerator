@@ -603,6 +603,24 @@ export function stripAssets(doc) {
 
 export const hasAssets = doc => Object.keys(doc?.assets || {}).length > 0;
 
+// How many outline vertices the document carries — the polygon boundary, its
+// polygon cutouts, the custom hole's rings and the shape editor's polygon
+// layers. Images are stripped from a share link; outlines travel in it, and a
+// logo traced at every vertex the file had can make a link no chat or mail
+// client passes on whole. The panel says so past SHARE_OUTLINE_WARN_POINTS.
+export const SHARE_OUTLINE_WARN_POINTS = 1500;
+export function outlineVertexCount(doc) {
+  const count = rings => (Array.isArray(rings) ? rings.reduce((n, ring) => n + (Array.isArray(ring) ? ring.length : 0), 0) : 0); // prettier-ignore
+  const boundary = doc?.boundary || {},
+    custom = doc?.hole?.custom || {};
+  return (
+    (boundary.shape === "Polygon" ? count(boundary.rings) : 0) +
+    count((boundary.cutouts || []).map(c => c?.points)) +
+    count(custom.rings) +
+    count((custom.layers || []).map(l => l?.points))
+  );
+}
+
 // Drop images no image controller points at any more. Called whenever a
 // controller is deleted or given a different picture, so an editing session does
 // not accumulate megabytes of base64 nothing can reach. Returns the same object

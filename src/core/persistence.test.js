@@ -13,7 +13,9 @@ import {
   loadCurrent,
   loadRecent,
   migrateDocument,
+  outlineVertexCount,
   saveCurrent,
+  SHARE_OUTLINE_WARN_POINTS,
   serializeDocument,
   STORAGE_KEY_RECENT,
   stripAssets,
@@ -604,4 +606,10 @@ test("a boundary, its cutouts, a custom hole and the trim flag survive a share l
   assert.equal(b.activeHoles.length, a.activeHoles.length);
   assert.equal(b.stats.displayOAR, a.stats.displayOAR);
   assert.equal(b.stats.grossArea, a.stats.grossArea);
+  // The outlines are what makes a link long: this one is short of the warning,
+  // a traced logo is past it.
+  assert.equal(outlineVertexCount(d), 4 + 4 + 4 + 4);
+  assert.ok(outlineVertexCount(d) < SHARE_OUTLINE_WARN_POINTS);
+  const traced = Array.from({ length: 8 }, (_, k) => Array.from({ length: 300 }, (_, i) => [k * 20 + 5 + 4 * Math.cos(i), 50 + 4 * Math.sin(i)])); // prettier-ignore
+  assert.ok(outlineVertexCount(patchIn(d, { "boundary.rings": traced })) > SHARE_OUTLINE_WARN_POINTS);
 });
