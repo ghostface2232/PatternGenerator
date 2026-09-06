@@ -499,24 +499,18 @@ export default function App() {
       history.commit(current => ({ ...current, enabled }));
       if (!enabled) setVariationEditMode(false);
     };
-    // Entering variation editing leaves every other canvas mode, whichever
-    // control brought it on: the toggle, a preset or Randomize.
-    const enterVariationEditMode = () => {
-      setVariationEditMode(true);
-      setHoleRemovalMode(false);
-      setPathEditMode(false);
-      setBoundaryEditMode(false);
-      setFieldEditMode(false);
-      setFieldTool(null);
-    };
-    const toggleVariationEditMode = () => {
-      if (variationEditMode) {
-        setVariationEditMode(false);
-        return;
+    const enterVariationEditMode = next => {
+      setVariationEditMode(next);
+      if (next) {
+        setHoleRemovalMode(false);
+        setPathEditMode(false);
+        setBoundaryEditMode(false);
+        setFieldEditMode(false);
+        setFieldTool(null);
+        if (!history.ref.current.enabled) history.commit(current => ({ ...current, enabled: true }));
       }
-      enterVariationEditMode();
-      if (!history.ref.current.enabled) history.commit(current => ({ ...current, enabled: true }));
     };
+    const toggleVariationEditMode = () => enterVariationEditMode(!variationEditMode);
     const updateSelectedLayer = (patch, record = false) => {
       const apply = current => ({
         ...current,
@@ -541,7 +535,7 @@ export default function App() {
           layers: [{ ...baseLayer, ...preset.layer, enabled: true }],
         };
       });
-      enterVariationEditMode();
+      enterVariationEditMode(true);
     };
     const addVariationLayer = () => {
       if (history.ref.current.layers.length >= MAX_VARIATION_LAYERS) return;
@@ -563,7 +557,7 @@ export default function App() {
         enabled: true,
         layers: current.layers.map(layer => randomizeVariationLayer(layer)),
       }));
-      enterVariationEditMode();
+      enterVariationEditMode(true);
     };
     // ─── Field controllers ─────────────────────────────────────────
     // Every edit goes through api.update so it lands on the one global undo

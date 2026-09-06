@@ -27,7 +27,7 @@ async function download(page, button) {
 async function sheetToCanvas(page, x, y, sheetW = 200, sheetH = 200) {
   const box = await page.locator("canvas").boundingBox();
   const scale = Math.min((box.width - 80) / sheetW, (box.height - 80) / sheetH);
-  return { x: box.x + box.width / 2 + (x - sheetW / 2) * scale, y: box.y + box.height / 2 + (y - sheetH / 2) * scale };
+  return { x: box.width / 2 + (x - sheetW / 2) * scale, y: box.height / 2 + (y - sheetH / 2) * scale };
 }
 
 test.beforeEach(async ({ page }) => {
@@ -69,9 +69,9 @@ test("a cutout is a keep-out, edited on the canvas, and one undo step", async ({
   // corner, where it takes fewer holes since much of it is off the sheet.
   const from = await sheetToCanvas(page, 100, 100);
   const to = await sheetToCanvas(page, 10, 10);
-  await page.mouse.move(from.x, from.y);
+  await page.locator("canvas").hover({ position: from });
   await page.mouse.down();
-  await page.mouse.move(to.x, to.y, { steps: 8 });
+  await page.locator("canvas").hover({ position: to });
   await page.mouse.up();
   await expect(page.getByLabel("Cutout X", { exact: true })).not.toHaveValue("100");
   // Removing it restores every hole, and undo brings it back.
@@ -93,13 +93,14 @@ test("a polygon boundary starts as an octagon, gains a vertex on double-click, a
   // The octagon's top edge runs along the top of the sheet; a double-click on
   // its middle puts a vertex there.
   const top = await sheetToCanvas(page, 100, 0);
-  await page.mouse.dblclick(top.x, top.y);
+  await page.locator("canvas").dblclick({ position: top });
   await expect(page.getByText("1 outline · 9 vertices")).toBeVisible();
   // Dragging that vertex down pulls the outline in and takes holes with it.
-  await page.mouse.move(top.x, top.y);
+  const vertex = await sheetToCanvas(page, 100, 0);
+  await page.locator("canvas").hover({ position: vertex });
   await page.mouse.down();
   const down = await sheetToCanvas(page, 100, 60);
-  await page.mouse.move(down.x, down.y, { steps: 8 });
+  await page.locator("canvas").hover({ position: down });
   await page.mouse.up();
   const notched = await holes(page);
   expect(notched).toBeLessThan(octagon);
@@ -250,3 +251,35 @@ test("the shape editor stacks shapes that add to or cut from the hole", async ({
   await page.getByTitle("Undo (Ctrl+Z)").click();
   await expect(stat(page, "stat-oar")).toHaveText("35.4");
 });
+
+for (const boundaryShape of ["Rectangle", "Ellipse", "Polygon"]) {
+  test(`deleting the final cutout leaves ${boundaryShape} editing usable`, async ({ page }) => {
+    await shape(page, boundaryShape);
+    await page.getByRole("button", { name: "Add circle cutout", exact: true }).click();
+    await expect(page.getByText(/EDIT BOUNDARY/)).toBeVisible();
+    await page.getByRole("button", { name: "Remove cutout 1", exact: true }).click();
+    if (boundaryShape === "Polygon") {
+      await expect(page.getByText(/EDIT BOUNDARY/)).toBeVisible();
+      await page.getByRole("button", { name: "Edit the boundary on the canvas", exact: true }).click();
+    }
+    await expect(page.getByText(/EDIT BOUNDARY/)).toHaveCount(0);
+  });
+}
+
+for (const shortcut of ["preset", "randomize"]) {
+  test(`variation ${shortcut} exits boundary editing`, async ({ page }) => {
+    await shape(page, "Polygon");
+    const editBoundary = page.getByRole("button", { name: "Edit the boundary on the canvas", exact: true });
+    await editBoundary.click();
+    await expect(page.getByText(/EDIT BOUNDARY/)).toBeVisible();
+    if (shortcut === "preset") {
+      await page.getByRole("button", { name: "Field preset", exact: true }).click();
+      await page.getByRole("button", { name: "Center Bloom", exact: true }).click();
+    } else {
+      await page.getByRole("button", { name: "Randomize", exact: true }).click();
+    }
+    await expect(page.getByText(/EDIT VARIATION/)).toBeVisible();
+    await expect(page.getByText(/EDIT BOUNDARY/)).toHaveCount(0);
+    await expect(editBoundary).toHaveAttribute("aria-pressed", "false");
+  });
+}

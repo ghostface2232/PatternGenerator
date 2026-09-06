@@ -3,8 +3,9 @@
 // the document's caps. Pure; the file reading and the question to the user
 // about an unknown scale are the UI's.
 import { MAX_BOUNDARY_POINTS, MAX_BOUNDARY_RINGS, MAX_CUSTOM_POINTS, MAX_CUSTOM_RINGS } from "../core/constants.js";
-import { normalizeRings, ringsBBox, simplifyRing, unitRings } from "./rings.js";
+import { ringsBBox, simplifyRing, unitRings } from "./rings.js";
 import { parseSVGOutline } from "./svg-path.js";
+import { resolveEvenOddRings } from "./offset.js";
 import { signedPolyArea } from "./polygon.js";
 
 export const IMPORT_TOLERANCE = 0.05;
@@ -31,7 +32,7 @@ export function fitRings(
   rings,
   { maxRings = MAX_BOUNDARY_RINGS, maxPoints = MAX_BOUNDARY_POINTS, tolerance = IMPORT_TOLERANCE } = {}
 ) {
-  let kept = normalizeRings(rings);
+  let kept = resolveEvenOddRings(rings);
   if (kept.length > maxRings) {
     kept = kept
       .map((ring, i) => ({ ring, i, area: Math.abs(signedPolyArea(ring)) }))

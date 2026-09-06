@@ -116,3 +116,11 @@ export function differencePolygons(a, subtract) {
     return a;
   }
 }
+
+// Imported loops use even-odd filling. Resolve intersections by XOR before
+// winding normalization, so area, non-zero canvas fill, and hit tests agree.
+export function resolveEvenOddRings(rings) {
+  const polygons = rings.filter(ring => ring.length >= 3).map(ring => [ring]);
+  if (!polygons.length) return [];
+  return fromClipping(polygonClipping.xor(...polygons)).flat();
+}

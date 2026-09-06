@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { applyTransform, multiplyTransform, parseSVGOutline, parseTransform, pathToPolylines } from "./svg-path.js";
+import { distPointSeg } from "./polygon.js";
 import { normalizeRings, ringsArea, ringsBBox } from "./rings.js";
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`);
@@ -144,4 +145,34 @@ test("a file with no physical unit reports no scale, and a non-SVG file reports 
   // Quoting either way, and a rounded rectangle's corners are arcs.
   const single = parseSVGOutline("<svg width='10mm' viewBox='0 0 10 10'><rect x='0' y='0' width='10' height='10' rx='2'/></svg>", 0.001); // prettier-ignore
   near(ringsArea(single.shapes[0].rings), 100 - 4 * 4 + Math.PI * 4, 0.05);
+});
+
+test("transformed primitive chords respect tolerance after nested scale and skew", () => {
+  const tolerance = 0.05;
+  for (const transform of ["scale(100)", "matrix(100 30 150 20 7 9)", "rotate(35) scale(200 5)"]) {
+    for (const [element, point] of [
+      ['<circle r="1"/>', t => [Math.cos(t), Math.sin(t)]],
+      ['<ellipse rx="2" ry="1"/>', t => [2 * Math.cos(t), Math.sin(t)]],
+      ['<rect x="-2" y="-1" width="4" height="2" rx="0.5"/>', t => [1.5 + 0.5 * Math.cos(t), 0.5 + 0.5 * Math.sin(t)]],
+    ]) {
+      const outer = "translate(10 20) scale(2)";
+      const matrix = multiplyTransform(parseTransform(outer), parseTransform(transform));
+      const { shapes } = parseSVGOutline(
+        `<svg><g transform="${outer}"><g transform="${transform}">${element}</g></g></svg>`,
+        tolerance
+      );
+      const ring = shapes[0].rings[0];
+      const sweep = element.startsWith("<rect") ? Math.PI / 2 : 2 * Math.PI;
+      for (let i = 0; i <= 1000; i++) {
+        const [x, y] = applyTransform(matrix, ...point((sweep * i) / 1000));
+        const distance = Math.min(
+          ...ring.map((a, j) => {
+            const b = ring[(j + 1) % ring.length];
+            return distPointSeg(x, y, a[0], a[1], b[0], b[1]);
+          })
+        );
+        assert.ok(distance <= tolerance + 1e-8, `${element} ${transform}: ${distance}`);
+      }
+    }
+  }
 });
