@@ -26,11 +26,36 @@ export const PATTERN_TYPES = [
 // two more — `Polygon`, the cell Voronoi imposes, and `Stroke`, the slot Flow
 // Lines imposes — which are deliberately not here: no document may name them,
 // because no document decides them. See effectiveHoleShape in core/pipeline.js.
-export const HOLE_SHAPES = ["Circle", "Rectangle", "Pill", "Hexagon", "Diamond", "Triangle", "Superellipse"];
-export const CUSTOM_SIZE_SHAPES = ["Rectangle", "Pill", "Diamond", "Triangle", "Superellipse"];
+// The nine after Superellipse are the Phase 4 presets (geometry/shape-presets.js):
+// ring outlines in unit space, each with one `hole.ratio` parameter and some
+// with a `hole.count`. `Custom` is the outline read from an SVG file or built
+// in the shape editor, held in `hole.custom`.
+export const PRESET_HOLE_SHAPES = ["Star", "Plus", "Cross", "Ring", "Hex Nut", "Crescent", "Slots", "Teardrop", "Heart"]; // prettier-ignore
+export const CUSTOM_SHAPE = "Custom";
+export const HOLE_SHAPES = ["Circle", "Rectangle", "Pill", "Hexagon", "Diamond", "Triangle", "Superellipse", ...PRESET_HOLE_SHAPES, CUSTOM_SHAPE]; // prettier-ignore
+export const CUSTOM_SIZE_SHAPES = ["Rectangle", "Pill", "Diamond", "Triangle", "Superellipse", ...PRESET_HOLE_SHAPES, CUSTOM_SHAPE]; // prettier-ignore
+// Custom outlines: how many rings and vertices one may carry, and how many
+// layers the shape editor stacks.
+export const MAX_CUSTOM_RINGS = 32;
+export const MAX_CUSTOM_POINTS = 400;
+export const MAX_SHAPE_LAYERS = 12;
 // The one shape whose outline the `shape` field channel can morph per hole.
 export const MORPH_SHAPE = "Superellipse";
 export const DIAMOND_ORIENTATIONS = ["Point up", "Flat up"];
+// The perforation boundary's outline (Phase 4). Rectangle and Ellipse fill the
+// margin-inset rectangle; Polygon is any closed outline — drawn on the canvas or
+// read out of an SVG file — held as rings under the even-odd rule, so a logo
+// keeps its counters. Like the pattern types these are part of the file format.
+export const BOUNDARY_SHAPES = ["Rectangle", "Ellipse", "Polygon"];
+// Keep-out regions inside the boundary: a screw hole, a badge, a slot.
+export const CUTOUT_SHAPES = ["Circle", "Rectangle", "Polygon"];
+export const MAX_CUTOUTS = 32;
+// A polygon boundary's rings and the vertices of each. Both are what the canvas
+// can show handles for and what a containment query can afford per hole, not a
+// limit the geometry needs: an import that arrives finer is simplified to fit.
+export const MAX_BOUNDARY_RINGS = 16;
+export const MAX_BOUNDARY_POINTS = 400;
+export const MAX_CUTOUT_POINTS = 200;
 export const RADIAL_LAYOUTS = ["Concentric", "Sunflower", "6k Rosette"];
 export const RADIAL_MODES = ["Full", "Circle"];
 export const TAPER_DIRECTIONS = ["Top larger", "Bottom larger"];
@@ -72,6 +97,11 @@ export const MAX_PATH_POINTS = 48;
 // 1 M-char per-image cap failed at exactly that job: eight of them is 8 MB, so
 // validation would happily accept a document the autosave could then never
 // write, and it would retry the failure on every keystroke thereafter.
+// An SVG file read for an outline is parsed by regular expressions in one
+// go, so a size the parser cannot chew through in a moment is turned away
+// before it is read. A logo or a letter is kilobytes; two megabytes is a
+// drawing that was never an outline.
+export const MAX_SVG_FILE_BYTES = 2_000_000;
 export const MAX_ASSETS = 8;
 export const MAX_ASSET_DATA_URL_CHARS = 300_000;
 export const MAX_ASSET_TOTAL_CHARS = 1_200_000;
@@ -83,6 +113,13 @@ export const DOC_LIMITS = {
   "sheet.h": [10, 1000],
   "boundary.margins": [0, 50],
   "boundary.cornerRadius": [0, 500],
+  // A polygon boundary's vertices and a cutout's geometry live in sheet
+  // millimetres and may be dragged off the sheet, so like a controller's they
+  // are bounded by the largest sheet rather than by the current one.
+  "boundary.coord": [-2000, 2000],
+  "cutout.size": [0.5, 2000],
+  "cutout.rotation": [-180, 180],
+  "cutout.cornerRadius": [0, 1000],
   "hole.diameter": [0.5, 20],
   "hole.w": [0.5, 30],
   "hole.h": [0.5, 30],
@@ -126,6 +163,17 @@ export const DOC_LIMITS = {
   "layer.jitter": [0, 0.5],
   "layer.seed": [0, 99999],
   "hole.shapeMix": [0, 1],
+  // The preset shapes' one parameter, and the count for those that have one;
+  // each preset reads them across its own range (geometry/shape-presets.js).
+  "hole.ratio": [0, 1],
+  "hole.count": [2, 12],
+  // A custom outline's vertices, in its own unit space.
+  "custom.coord": [-1, 1],
+  "custom.aspect": [0.05, 20],
+  // The shape editor's layers, in millimetres of the design.
+  "layer.coord": [-100, 100],
+  "layer.size": [0.1, 200],
+  "layer.rotation": [-180, 180],
   // Controllers live in sheet millimetres and may sit off the sheet, so their
   // coordinates are bounded by the largest sheet rather than by the current one.
   "controller.coord": [-2000, 2000],

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_PATHS, MAX_VARIATION_LAYERS } from "../core/constants.js";
+import { CUSTOM_SHAPE, CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_CUTOUTS, MAX_PATHS, MAX_SVG_FILE_BYTES, MAX_VARIATION_LAYERS } from "../core/constants.js"; // prettier-ignore
 import { cloneVariation, createDocument } from "../core/document.js";
 import {
   buildParams,
@@ -10,6 +10,7 @@ import {
   decorateHoles,
   deriveGeometry,
   filterActive,
+  lockedCustomHeight,
 } from "../core/pipeline.js";
 import {
   FILE_EXTENSION,
@@ -20,7 +21,9 @@ import {
   fileStem,
   hasAssets,
   newAssetId,
+  outlineVertexCount,
   pruneAssets,
+  SHARE_OUTLINE_WARN_POINTS,
   STORAGE_KEY_CURRENT,
   loadCurrent,
   loadRecent,
@@ -31,6 +34,10 @@ import {
 } from "../core/persistence.js";
 import { generateHoles, layoutPlacementChannels } from "../layouts/index.js";
 import { addPathVertex, newPath, removePathVertex } from "../layouts/path-gizmo.js";
+import { createCutout } from "../geometry/boundary.js";
+import { defaultBoundaryRings, insertBoundaryVertex, nearestBoundaryEdge, removeBoundaryVertex } from "../geometry/boundary-gizmo.js"; // prettier-ignore
+import { inspectSVG, svgToRings, svgToUnitShape } from "../geometry/svg-import.js";
+import { layersToUnitShape } from "../geometry/custom-shape.js";
 import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
 import { EDITABLE_CHANNELS, MAX_CONTROLLERS, createController, imageChannels } from "../fields/controllers.js";
@@ -45,6 +52,7 @@ import { GlobalStyles } from "./GlobalStyles.jsx";
 import { TopBar } from "./TopBar.jsx";
 import { CanvasView } from "./canvas/CanvasView.jsx";
 import { Sidebar } from "./Sidebar.jsx";
+import { ShapeEditor } from "./ShapeEditor.jsx";
 
 const AUTOSAVE_MS = 300;
 
@@ -135,6 +143,14 @@ export default function App() {
   const [variationHud, setVariationHud] = useState(null);
   const [fieldEditMode, setFieldEditMode] = useState(false);
   const [pathEditModeOn, setPathEditMode] = useState(false);
+  // Editing the boundary on the canvas: polygon vertices and cutout handles.
+  // The fourth canvas mode, and like the other three exclusive of them.
+  const [boundaryEditModeOn, setBoundaryEditMode] = useState(false);
+  // Which cutout the panel's inspector shows and the canvas highlights. UI
+  // state, like every other selection here.
+  const [selectedCutoutId, setSelectedCutoutId] = useState(null);
+  // The boolean shape editor's modal. Its stack is its own state until Apply.
+  const [shapeEditorOpen, setShapeEditorOpen] = useState(false);
   const [activeChannel, setActiveChannel] = useState(EDITABLE_CHANNELS[0]);
   const [fieldTool, setFieldTool] = useState(null); // armed kind for click-to-add on the canvas
   // Which controller the inspector is showing. UI state, like every other
@@ -173,7 +189,16 @@ export default function App() {
   // since the re-render happens after it.
   if (pathEditModeOn && layout.type !== "Path") setPathEditMode(false);
   const pathEditMode = pathEditModeOn && layout.type === "Path";
+  // Boundary editing, for the same reason: undo, "Back to the rectangle" or
+  // removing the last cutout can leave nothing on the canvas to edit, and the
+  // panel shows no control to leave the mode by when there is nothing.
+  const boundaryEditable = boundary.shape === "Polygon" || boundary.cutouts.length > 0;
+  if (boundaryEditModeOn && !boundaryEditable) setBoundaryEditMode(false);
+  const boundaryEditMode = boundaryEditModeOn && boundaryEditable;
   const selectedPath = Math.max(0, Math.min(selectedPathIndex, layout.path.paths.length - 1));
+  // Resolved rather than trusted: undo or a removal can take the cutout away
+  // under the selection, and then the first one stands in.
+  const selectedCutout = boundary.cutouts.find(c => c.id === selectedCutoutId) ?? boundary.cutouts[0] ?? null;
   const patternDoc = useMemo(() => ({ hole, layout, sheet, boundary, taper }), [hole, layout, sheet, boundary, taper]);
   const geometry = useMemo(() => deriveGeometry(patternDoc), [patternDoc]);
   const params = useMemo(() => buildParams(patternDoc, geometry), [patternDoc, geometry]);
@@ -224,8 +249,8 @@ export default function App() {
   const selectedControllerId = selectedController?.id ?? null;
   // Where a new controller is placed, and the frame the panel reports in.
   const perfArea = useMemo(
-    () => ({ x: params.marginLeft, y: params.marginTop, w: geometry.perfW, h: geometry.perfH }),
-    [params.marginLeft, params.marginTop, geometry.perfW, geometry.perfH]
+    () => ({ x: geometry.perfX, y: geometry.perfY, w: geometry.perfW, h: geometry.perfH }),
+    [geometry.perfX, geometry.perfY, geometry.perfW, geometry.perfH]
   );
 
   // ─── Autosave (localStorage) ──────────────────────────────────────
@@ -335,7 +360,52 @@ export default function App() {
         patch["hole.w"] = shape === "Pill" ? hole.diameter * 2 : hole.diameter;
         patch["hole.h"] = shape === "Triangle" ? (hole.diameter * Math.sqrt(3)) / 2 : hole.diameter;
       }
+      // A custom outline arrives with proportions of its own: its height
+      // follows its width until the lock is released.
+      if (shape === CUSTOM_SHAPE && hole.custom.lockAspect) {
+        patch["hole.h"] = lockedCustomHeight(patch["hole.w"] ?? hole.w, hole.custom);
+      }
       api.patch(patch);
+    };
+    // Both SVG importers read the file through this: a file the parser could
+    // not chew through in a moment is refused before it is read.
+    const readSVGFile = async file => {
+      if (file.size > MAX_SVG_FILE_BYTES) {
+        throw new Error(`the file is ${(file.size / 1e6).toFixed(1)} MB; outlines up to ${MAX_SVG_FILE_BYTES / 1e6} MB are read`); // prettier-ignore
+      }
+      return file.text();
+    };
+    // An SVG file as the hole: its outlines fitted to the unit square become
+    // the Custom shape, with the hole's height following its width at the
+    // outline's own proportions until the lock is released.
+    const importHoleSVG = async file => {
+      const text = await readSVGFile(file);
+      const info = inspectSVG(text);
+      if (!info.isSVG) throw new Error("that is not an SVG file");
+      if (!info.hasOutline) throw new Error("the file has no closed outline (a path, rect, circle, ellipse or polygon)");
+      const custom = svgToUnitShape(text, file.name);
+      if (!custom.rings.length) throw new Error("the file's outline is too small to keep");
+      const current = api.ref.current.hole;
+      const w = CUSTOM_SIZE_SHAPES.includes(current.shape) ? current.w : current.diameter;
+      api.patch({ "hole.shape": CUSTOM_SHAPE, "hole.custom": custom, "hole.w": w, "hole.h": lockedCustomHeight(w, custom) }); // prettier-ignore
+      return true;
+    };
+    // The shape editor's stack, composed into the Custom hole: the layers and
+    // the rings they compose to go into the document together, one undo step.
+    const applyShapeLayers = layers => {
+      const custom = layersToUnitShape(layers, "shape editor");
+      if (!custom.rings.length) return false;
+      const current = api.ref.current.hole;
+      const lockAspect = current.custom.lockAspect;
+      const w = CUSTOM_SIZE_SHAPES.includes(current.shape) ? current.w : current.diameter;
+      api.patch({
+        "hole.shape": CUSTOM_SHAPE,
+        "hole.custom": { ...custom, lockAspect },
+        "hole.w": w,
+        ...(lockAspect ? { "hole.h": lockedCustomHeight(w, custom) } : null),
+      });
+      setShapeEditorOpen(false);
+      return true;
     };
     const setEdgeGapX = v =>
       api.patch(
@@ -429,17 +499,18 @@ export default function App() {
       history.commit(current => ({ ...current, enabled }));
       if (!enabled) setVariationEditMode(false);
     };
-    const toggleVariationEditMode = () => {
-      const next = !variationEditMode;
+    const enterVariationEditMode = next => {
       setVariationEditMode(next);
       if (next) {
         setHoleRemovalMode(false);
         setPathEditMode(false);
+        setBoundaryEditMode(false);
         setFieldEditMode(false);
         setFieldTool(null);
         if (!history.ref.current.enabled) history.commit(current => ({ ...current, enabled: true }));
       }
     };
+    const toggleVariationEditMode = () => enterVariationEditMode(!variationEditMode);
     const updateSelectedLayer = (patch, record = false) => {
       const apply = current => ({
         ...current,
@@ -464,8 +535,7 @@ export default function App() {
           layers: [{ ...baseLayer, ...preset.layer, enabled: true }],
         };
       });
-      setVariationEditMode(true);
-      setFieldEditMode(false);
+      enterVariationEditMode(true);
     };
     const addVariationLayer = () => {
       if (history.ref.current.layers.length >= MAX_VARIATION_LAYERS) return;
@@ -487,8 +557,7 @@ export default function App() {
         enabled: true,
         layers: current.layers.map(layer => randomizeVariationLayer(layer)),
       }));
-      setVariationEditMode(true);
-      setFieldEditMode(false);
+      enterVariationEditMode(true);
     };
     // ─── Field controllers ─────────────────────────────────────────
     // Every edit goes through api.update so it lands on the one global undo
@@ -522,6 +591,7 @@ export default function App() {
         setHoleRemovalMode(false);
         setVariationEditMode(false);
         setPathEditMode(false);
+        setBoundaryEditMode(false);
         if (!api.ref.current.fields.enabled) api.set("fields.enabled", true);
       } else {
         setFieldTool(null);
@@ -636,6 +706,7 @@ export default function App() {
       if (on) {
         setVariationEditMode(false);
         setPathEditMode(false);
+        setBoundaryEditMode(false);
         enterFieldEditMode(false);
       }
     };
@@ -650,6 +721,7 @@ export default function App() {
       if (next) {
         setVariationEditMode(false);
         setHoleRemovalMode(false);
+        setBoundaryEditMode(false);
         enterFieldEditMode(false);
         // Editing needs something to edit: the layout draws a default curve
         // when the list is empty, and this makes that same curve real rather
@@ -693,8 +765,104 @@ export default function App() {
       setPan({ x: 0, y: 0 });
     };
 
+    // ─── Boundary ──────────────────────────────────────────────────
+    // The outline and the cutouts live in the document, so every edit is an
+    // undo step and a handle drag coalesces into one, like a path vertex.
+    const liveBoundary = () => api.ref.current.boundary;
+    const patchBoundary = (patch, live = false) =>
+      api.update(
+        d => ({ ...d, boundary: { ...d.boundary, ...patch } }),
+        live ? { merge: `boundary.${Object.keys(patch).sort().join(",")}` } : {}
+      );
+    const enterBoundaryEditMode = on => {
+      setBoundaryEditMode(on);
+      if (on) {
+        setVariationEditMode(false);
+        setHoleRemovalMode(false);
+        setPathEditMode(false);
+        enterFieldEditMode(false);
+      }
+    };
+    const toggleBoundaryEditMode = () => enterBoundaryEditMode(!boundaryEditMode);
+    // Switching to Polygon with nothing drawn seeds an octagon in the frame,
+    // so there is an outline to take hold of rather than a rectangle that
+    // says "Polygon" and has no vertices.
+    const setBoundaryShape = shape => {
+      const current = liveBoundary();
+      const patch = { shape };
+      if (shape === "Polygon" && current.rings.length === 0) patch.rings = defaultBoundaryRings(geometry.region.frame);
+      patchBoundary(patch);
+    };
+    const resetBoundaryOutline = () => patchBoundary({ shape: "Rectangle", rings: [] });
+    const setBoundaryRings = (rings, live = false) => patchBoundary({ rings }, live);
+    const addCutout = shape => {
+      const current = liveBoundary();
+      if (current.cutouts.length >= MAX_CUTOUTS) return;
+      const { frame } = geometry.region;
+      const size = Math.max(1, Math.round(Math.min(frame.xMax - frame.xMin, frame.yMax - frame.yMin) / 5));
+      const cutout = createCutout(shape, (frame.xMin + frame.xMax) / 2, (frame.yMin + frame.yMax) / 2, size, current.cutouts); // prettier-ignore
+      patchBoundary({ cutouts: [...current.cutouts, cutout] });
+      setSelectedCutoutId(cutout.id);
+      enterBoundaryEditMode(true);
+    };
+    const removeCutout = id => {
+      const rest = liveBoundary().cutouts.filter(c => c.id !== id);
+      patchBoundary({ cutouts: rest });
+      if (id === selectedCutoutId) setSelectedCutoutId(rest[0]?.id ?? null);
+    };
+    const updateCutout = (id, patch, live = false) =>
+      api.update(
+        d => {
+          const cutouts = d.boundary.cutouts.map(c => (c.id === id ? { ...c, ...patch } : c));
+          return cutouts.every((c, i) => c === d.boundary.cutouts[i]) ? d : { ...d, boundary: { ...d.boundary, cutouts } };
+        },
+        live ? { merge: `boundary.cutout.${id}.${Object.keys(patch).sort().join(",")}` } : {}
+      );
+    const selectCutout = setSelectedCutoutId;
+    // A double-click on an edge of the outline (or of a polygon cutout) puts a
+    // vertex there; on a vertex, takes it away.
+    const addBoundaryVertexAt = (x, y, tolerance) => {
+      const current = liveBoundary();
+      const edge = nearestBoundaryEdge(current, x, y);
+      if (!edge || edge.distance > tolerance) return false;
+      const patch = insertBoundaryVertex(current, edge, x, y);
+      if (patch) patchBoundary(patch);
+      return !!patch;
+    };
+    const removeBoundaryVertexAt = handle => {
+      const patch = removeBoundaryVertex(liveBoundary(), handle);
+      if (patch) patchBoundary(patch);
+      return !!patch;
+    };
+    // An SVG file as the outline. The file's own units where it states them;
+    // otherwise the width the user wants, asked for once. Centred on the
+    // sheet at that size — the region clips whatever runs past the sheet.
+    const importBoundarySVG = async file => {
+      const text = await readSVGFile(file);
+      const info = inspectSVG(text);
+      if (!info.isSVG) throw new Error("that is not an SVG file");
+      if (!info.hasOutline) throw new Error("the file has no closed outline (a path, rect, circle, ellipse or polygon)");
+      let scale = info.scale;
+      if (scale === null) {
+        const sheet = api.ref.current.sheet;
+        const suggested = Math.round(Math.min(sheet.w, sheet.h) * 0.8);
+        const answer = window.prompt("The file states no physical size. How wide should the outline be, in mm?", String(suggested)); // prettier-ignore
+        if (answer === null) return false;
+        const width = parseFloat(answer);
+        if (!(width > 0)) throw new Error("the width must be a number of millimetres");
+        scale = width / Math.max(1e-9, info.width);
+      }
+      const sheet = api.ref.current.sheet;
+      const rings = svgToRings(text, { scale, centre: { x: sheet.w / 2, y: sheet.h / 2 } });
+      if (!rings.length) throw new Error("the file's outline is too small to keep");
+      patchBoundary({ shape: "Polygon", rings });
+      return true;
+    };
+
     return {
       setShape,
+      importHoleSVG,
+      applyShapeLayers,
       setEdgeGapX,
       setEdgeGapY,
       toggleGapLinked,
@@ -738,8 +906,20 @@ export default function App() {
       togglePathClosed,
       selectPath: setSelectedPath,
       resetView,
+      toggleBoundaryEditMode,
+      setBoundaryShape,
+      resetBoundaryOutline,
+      setBoundaryRings,
+      patchBoundary,
+      addCutout,
+      removeCutout,
+      updateCutout,
+      selectCutout,
+      addBoundaryVertexAt,
+      removeBoundaryVertexAt,
+      importBoundarySVG,
     };
-  }, [doc, api, history, variationEditMode, fieldEditMode, pathEditModeOn, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
+  }, [doc, api, history, variationEditMode, fieldEditMode, pathEditModeOn, boundaryEditMode, selectedCutoutId, geometry.region, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
@@ -749,7 +929,7 @@ export default function App() {
     try {
       // Blob from the chunks, never one joined string: a multi-million-hole
       // document overruns the maximum string length.
-      const parts = generateSVGParts(activeHoles, { ...params, holeColor, bgColor });
+      const parts = generateSVGParts(activeHoles, { ...params, holeColor, bgColor }, geometry.region, { trim: doc.boundary.trim }); // prettier-ignore
       downloadBlob(new Blob(parts, { type: "image/svg+xml" }), `${fileStem(doc)}.svg`);
     } catch (err) {
       console.error("SVG export failed:", err);
@@ -757,9 +937,9 @@ export default function App() {
         `Could not export this pattern as SVG (${activeHoles.length.toLocaleString()} holes): ${err.message}`
       );
     }
-  }, [activeHoles, params, holeColor, bgColor, doc]);
+  }, [activeHoles, params, holeColor, bgColor, doc, geometry.region]);
   const exportPNG = useCallback(() => {
-    renderPNGBlob({ activeHoles, params, holeColor, bgColor, dark })
+    renderPNGBlob({ activeHoles, params, region: geometry.region, trim: doc.boundary.trim, holeColor, bgColor, dark })
       .then(blob => {
         if (!blob) throw new Error("the image could not be rendered at this size");
         downloadBlob(blob, `${fileStem(doc)}.png`);
@@ -768,7 +948,7 @@ export default function App() {
         console.error("PNG export failed:", err);
         window.alert(`Could not export this pattern as PNG: ${err.message}`);
       });
-  }, [activeHoles, params, holeColor, bgColor, dark, doc]);
+  }, [activeHoles, params, holeColor, bgColor, dark, doc, geometry.region]);
 
   // ─── Project: new / open / save / share / recent ──────────────────
   const loadDocument = useCallback(
@@ -779,6 +959,9 @@ export default function App() {
       setHoleRemovalMode(false);
       setFieldEditMode(false);
       setPathEditMode(false);
+      setBoundaryEditMode(false);
+      setSelectedCutoutId(null);
+      setShapeEditorOpen(false); // its stack described the outgoing document
       setFieldTool(null);
       setSelectedId(null);
       setSelectedPath(0);
@@ -817,6 +1000,7 @@ export default function App() {
       // the .perf.json file. The panel says so rather than letting the recipient
       // wonder why their halftone is flat.
       shareDropsImages: documentHasAssets,
+      shareIsLong: outlineVertexCount(doc) > SHARE_OUTLINE_WARN_POINTS,
       shareLink: async () => {
         const url = `${window.location.origin}${window.location.pathname}${encodeShareHash(api.ref.current)}`;
         try {
@@ -828,12 +1012,19 @@ export default function App() {
         }
       },
     }),
-    [saveStatus, recent, loadDocument, openFile, api, documentHasAssets]
+    [saveStatus, recent, loadDocument, openFile, api, documentHasAssets, doc]
   );
 
   // Keyboard shortcuts: undo / redo / save. Text fields keep their own undo.
   useEffect(() => {
     const onKey = e => {
+      // The shape editor is modal: its stack is a snapshot of the document,
+      // and undoing the document beneath it would have Apply write stale
+      // layers over a change the user never saw.
+      if (shapeEditorOpen) {
+        if (e.key === "Escape") setShapeEditorOpen(false);
+        return;
+      }
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
       // Only text-editing fields keep the browser's own undo; sliders and buttons pass it through.
@@ -856,7 +1047,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [api, project]);
+  }, [api, project, shapeEditorOpen]);
 
   // Drop a document file anywhere on the page to open it — or an image, which
   // goes to an image controller instead of being turned away.
@@ -874,12 +1065,20 @@ export default function App() {
         openFile(document);
         return;
       }
-      const image = files.find(f => /^image\//i.test(f.type || "") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name));
+      const image = files.find(
+        f => /^image\/(?!svg)/i.test(f.type || "") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name)
+      );
       if (image) {
         actions.dropImage(image).catch(err => window.alert(`Could not use ${image.name}: ${err.message}`));
         return;
       }
-      if (files.length) window.alert(`Drop a ${FILE_EXTENSION} document to open it, or an image to drive a field.`);
+      // An SVG is an outline, not a picture: it becomes the boundary.
+      const svg = files.find(f => /\.svg$/i.test(f.name) || /svg/i.test(f.type || ""));
+      if (svg) {
+        actions.importBoundarySVG(svg).catch(err => window.alert(`Could not use ${svg.name}: ${err.message}`));
+        return;
+      }
+      if (files.length) window.alert(`Drop a ${FILE_EXTENSION} document to open it, an image to drive a field, or an SVG outline for the boundary.`); // prettier-ignore
     };
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("drop", onDrop);
@@ -902,6 +1101,10 @@ export default function App() {
     setVariationHud,
     fieldEditMode,
     pathEditMode,
+    boundaryEditMode,
+    selectedCutoutId: selectedCutout?.id ?? null,
+    shapeEditorOpen,
+    setShapeEditorOpen,
     selectedPath,
     activeChannel,
     fieldTool,
@@ -928,6 +1131,7 @@ export default function App() {
     selectedVariationLayer,
     field,
     selectedController,
+    selectedCutout,
     perfArea,
     imageElements,
     actions,
@@ -961,6 +1165,7 @@ export default function App() {
           <CanvasView />
           <Sidebar />
         </div>
+        {shapeEditorOpen && <ShapeEditor />}
       </div>
     </EditorContext.Provider>
   );

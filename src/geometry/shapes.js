@@ -36,6 +36,8 @@ import {
   tracePolyPath,
   unitToward,
 } from "./polygon.js";
+import { ringsArea, ringsContains, ringsGap, ringsSVGPath, ringsTrace, transformRings } from "./rings.js";
+import { PRESET_HOLE_SHAPES, CUSTOM_SHAPE } from "../core/constants.js";
 import { hexEdgeReach, hexVertices } from "./hexagon.js";
 import { strokeArea, strokeContains, strokeGap, strokeOutline, strokeSegments, strokeVisibleArea } from "./stroke.js"; // prettier-ignore
 import { isInsideRoundedRect } from "./rounded-rect.js";
@@ -298,40 +300,62 @@ const polyShape = name => ({
 // the search grid in ligament.js, the sampling box in boundary.js, the size
 // floor the variation cull reads — needs some measure of how big a hole is.
 //
-// Convex by construction (a Voronoi cell clipped by half-planes is), which is
-// what lets it borrow the same containment and clearance code the Diamond and
-// Triangle use. A concave outline would silently read as its convex hull here.
+// The outline is one ring — `[[x, y], …]` — or, where a boundary or a cutout
+// has cut the cell into something a single ring cannot describe, a list of
+// rings `[[[x, y], …], …]` read by the even-odd rule (a cutout wholly inside
+// a cell leaves it with a bore). A single ring may be concave (a cell clipped
+// by a notch in the boundary) and every operation reads it as it is: the
+// polygon helpers settle containment by the even-odd rule and clearance by
+// crossings, and take the SAT shortcut only where both outlines are convex.
+// The corner radius applies to a single ring only.
 const NO_POLY = [];
-const outlineOf = value => (Array.isArray(value) && value.length >= 3 ? value : NO_POLY);
+const isRingList = value => Array.isArray(value) && value.length > 0 && Array.isArray(value[0]) && Array.isArray(value[0][0]); // prettier-ignore
+const outlineOf = value => (Array.isArray(value) && value.length >= 3 && !isRingList(value) ? value : NO_POLY);
+const ringsOf = value => (isRingList(value) ? value : NO_POLY);
 const absolutePoly = (verts, hole) => verts.map(([x, y]) => [hole.x + x, hole.y + y]);
 
 const Polygon = {
   area(w, h, holeRadius, poly) {
+    const rings = ringsOf(poly);
+    if (rings.length) return ringsArea(rings);
     const verts = outlineOf(poly);
     return verts.length ? roundedPolyArea(verts, holeRadius) : 0;
   },
   trace(ctx, cx, cy, w, h, holeRadius, poly) {
+    const rings = ringsOf(poly);
+    if (rings.length) return ringsTrace(ctx, rings, cx, cy);
     const verts = outlineOf(poly);
     if (verts.length) tracePolyPath(ctx, cx, cy, verts, holeRadius);
   },
   svg(x, y, w, h, holeRadius, poly) {
+    const rings = ringsOf(poly);
+    if (rings.length) return `<path d="${ringsSVGPath(rings, x, y)}" fill-rule="evenodd"`;
     const verts = outlineOf(poly);
     return `<path d="${verts.length ? roundedPolySVGPath(x, y, verts, holeRadius) : ""}"`;
   },
   contains(x, y, w, h, holeRadius, poly) {
+    const rings = ringsOf(poly);
+    if (rings.length) return ringsContains(rings, x, y);
     const verts = outlineOf(poly);
     return verts.length > 0 && isInsideRoundedPoly(x, y, verts, holeRadius);
   },
   gap(h1, h2) {
-    const a = outlineOf(h1.poly),
-      b = outlineOf(h2.poly);
+    const a = ringsOf(h1.poly).length ? ringsOf(h1.poly) : outlineOf(h1.poly).length ? [outlineOf(h1.poly)] : NO_POLY; // prettier-ignore
+    const b = ringsOf(h2.poly).length ? ringsOf(h2.poly) : outlineOf(h2.poly).length ? [outlineOf(h2.poly)] : NO_POLY; // prettier-ignore
     // No outline is not "these two touch": a hole with nothing to draw cannot
     // be the narrowest bridge on the sheet, and Infinity is what leaves the
     // minimum to the pairs that do have one.
     if (!a.length || !b.length) return Infinity;
-    return convexPolyGap(absolutePoly(a, h1), absolutePoly(b, h2));
+    return ringsGap(
+      a.map(ring => absolutePoly(ring, h1)),
+      b.map(ring => absolutePoly(ring, h2))
+    );
   },
-  verts: (hole, w, h, poly) => absolutePoly(outlineOf(poly), hole),
+  verts: (hole, w, h, poly) => {
+    const rings = ringsOf(poly);
+    if (rings.length) return rings.flatMap(ring => absolutePoly(ring, hole));
+    return absolutePoly(outlineOf(poly), hole);
+  },
   rotates: false,
   polygon: true,
 };
@@ -445,6 +469,54 @@ const Stroke = {
   rotates: false,
 };
 
+// ─── Unit-space outlines: the presets and the Custom shape ────────────
+// One entry serves them all. The per-hole outline argument is the shape's
+// rings in unit space — the preset's for its ratio and count, the document's
+// own for Custom — which the pipeline attaches to every hole as `hole.rings`;
+// the hole's w and h scale it, so the area is `unitArea × w × h` exactly, and
+// its rotation turns it like any other shape. The corner radius does not
+// apply. See geometry/shape-presets.js and geometry/rings.js.
+const NO_RINGS = [];
+const unitOutline = value => (Array.isArray(value) && value.length ? value : NO_RINGS);
+const unitAreas = new WeakMap();
+const unitArea = rings => {
+  let area = unitAreas.get(rings);
+  if (area === undefined) {
+    area = ringsArea(rings);
+    unitAreas.set(rings, area);
+  }
+  return area;
+};
+
+const UnitShape = {
+  area(w, h, holeRadius, rings) {
+    const outline = unitOutline(rings);
+    return outline.length ? unitArea(outline) * w * h : 0;
+  },
+  trace(ctx, cx, cy, w, h, holeRadius, rings) {
+    ringsTrace(ctx, unitOutline(rings), cx, cy, w, h);
+  },
+  svg(x, y, w, h, holeRadius, rings) {
+    return `<path d="${ringsSVGPath(unitOutline(rings), x, y, w, h)}" fill-rule="evenodd"`;
+  },
+  contains(x, y, w, h, holeRadius, rings) {
+    return ringsContains(unitOutline(rings), x / w, y / h);
+  },
+  gap(h1, h2) {
+    const a = unitOutline(h1.rings),
+      b = unitOutline(h2.rings);
+    if (!a.length || !b.length) return Infinity;
+    return ringsGap(
+      transformRings(a, h1.x, h1.y, h1.w, h1.h, h1.angle || 0),
+      transformRings(b, h2.x, h2.y, h2.w, h2.h, h2.angle || 0)
+    );
+  },
+  verts: (hole, w, h, rings) => transformRings(unitOutline(rings), hole.x, hole.y, w, h, hole.angle || 0).flat(),
+  rotates: true,
+  polygon: true,
+  unit: true,
+};
+
 export const SHAPES = {
   Circle,
   Rectangle,
@@ -453,6 +525,7 @@ export const SHAPES = {
   Diamond: polyShape("Diamond"),
   Triangle: polyShape("Triangle"),
   Superellipse,
+  ...Object.fromEntries([...PRESET_HOLE_SHAPES, CUSTOM_SHAPE].map(name => [name, UnitShape])),
   Polygon,
   Stroke,
 };
@@ -462,8 +535,8 @@ export const getShape = name => SHAPES[name] || SHAPES.Circle;
 // The per-hole outline parameter, entry profile and exit profile. One accessor
 // each, so every drawing, hit-testing and export path hands the shape whatever
 // that shape reads without knowing which one it has.
-export const holeOutline = hole => hole.poly ?? hole.stroke ?? hole.superN;
-export const holeExitOutline = hole => hole.exitPoly ?? hole.exitStroke ?? hole.superN;
+export const holeOutline = hole => hole.poly ?? hole.stroke ?? hole.rings ?? hole.superN;
+export const holeExitOutline = hole => hole.exitPoly ?? hole.exitStroke ?? hole.rings ?? hole.superN;
 
 // Absolute outline vertices of a polygon-shaped hole, or null for the shapes
 // that are not polygons. Callers use it to bound a hole exactly rather than

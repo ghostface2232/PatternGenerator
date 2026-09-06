@@ -3,7 +3,7 @@
 // Bump DOC_SCHEMA_VERSION and add a migration in persistence when the shape changes.
 import { DEFAULT_VARIATION } from "../fields/variation-engine.js";
 
-export const DOC_SCHEMA_VERSION = 5;
+export const DOC_SCHEMA_VERSION = 6;
 
 export const cloneVariation = variation => ({
   ...variation,
@@ -23,10 +23,28 @@ export function createDocument() {
     units: "mm",
     name: "Untitled",
     sheet: { w: 200, h: 200 },
+    // The perforation boundary: which part of the sheet receives holes. The
+    // sheet is the material; the boundary is the region inside it, and `trim`
+    // says the sheet is cut to the boundary's outline as well.
     boundary: {
       margins: { top: 0, bottom: 0, left: 0, right: 0 },
       marginLinked: true,
       cornerRadius: 0,
+      // "Rectangle" | "Ellipse" | "Polygon" (BOUNDARY_SHAPES). The first two
+      // fill the margin-inset rectangle; a Polygon is its own outline and the
+      // margins do not apply to it.
+      shape: "Rectangle",
+      // The polygon boundary's rings, in sheet millimetres: [[[x, y], …], …],
+      // read by the even-odd rule so an imported logo keeps its counters. Empty
+      // until one is drawn or imported, and then the Polygon shape behaves as
+      // the Rectangle would.
+      rings: [],
+      // Keep-out regions, subtracted from whichever outline is above:
+      // { id, shape, x, y, w, h, rotation, cornerRadius, points }, with x, y the
+      // centre, w and h the size (a Circle reads w as its diameter), and
+      // `points` the absolute ring of a Polygon cutout.
+      cutouts: [],
+      trim: false,
     },
     hole: {
       shape: "Circle",
@@ -37,6 +55,16 @@ export function createDocument() {
       diamondOrient: "Point up",
       triEquilateral: true, // Triangle: lock H = W·√3/2
       shapeMix: 0.5, // Superellipse only: 0 diamond · 0.5 ellipse · 1 near-square
+      // The preset shapes' parameter (0…1, read across each preset's own
+      // range) and count (a star's points, a row's slots).
+      ratio: 0.5,
+      count: 5,
+      // The Custom shape: an outline in unit space (its bounding box the unit
+      // square), read from an SVG file (`kind: "svg"`) or built in the shape
+      // editor (`kind: "layers"`, with the editable stack in `layers` and the
+      // composed result in `rings`). `aspect` is the outline's own height over
+      // width, and `lockAspect` keeps H at W × aspect.
+      custom: { kind: "none", name: "", rings: [], aspect: 1, lockAspect: true, layers: [] },
     },
     layout: {
       type: "Staggered 60°",

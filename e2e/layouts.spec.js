@@ -126,8 +126,10 @@ test("two shuffles are two undo steps", async ({ page }) => {
   const shuffle = page.getByRole("button", { name: "Shuffle the scatter seed", exact: true });
   await shuffle.focus();
   await page.keyboard.press("Enter");
+  await expect(seed).not.toHaveValue("1");
   const first = await seed.inputValue();
   await page.keyboard.press("Enter");
+  await expect(seed).not.toHaveValue(first);
   const second = await seed.inputValue();
   expect(second).not.toBe(first);
 
@@ -361,7 +363,9 @@ test("voronoi and scatter share one seed, so switching modes keeps the arrangeme
   await choose(page, "Type", "Scatter");
   const points = await holes(page);
   await page.getByRole("button", { name: "Shuffle the scatter seed", exact: true }).click();
-  const shuffled = await page.getByLabel("Scatter Seed", { exact: true }).inputValue();
+  const seed = page.getByLabel("Scatter Seed", { exact: true });
+  await expect(seed).not.toHaveValue("1");
+  const shuffled = await seed.inputValue();
   const reshuffled = await holes(page);
 
   await choose(page, "Type", "Voronoi");

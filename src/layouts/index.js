@@ -12,10 +12,12 @@
 //   params     a flat record of PRIMITIVES describing the sheet, the hole and
 //              the mode. Signed field by field, each with its type.
 //   placement  the placement inputs that are not primitives — the compiled
-//              spacing field (a sampler) and the Path layout's curves (a nested
-//              list). Built by `compilePlacement` in core/pipeline.js, which
-//              hands back one signature covering all of it, so nothing has to be
-//              smuggled through a record of primitives to be signed.
+//              spacing field (a sampler), the Path layout's curves (a nested
+//              list) and the boundary region where it is not the plain
+//              rectangle the params describe. Built by `compilePlacement` in
+//              core/pipeline.js, which hands back one signature covering all of
+//              it, so nothing has to be smuggled through a record of primitives
+//              to be signed.
 import { isInsideRoundedRect } from "../geometry/rounded-rect.js";
 import { forEachLatticePoint } from "./lattice.js";
 import { diamondLatticeBasis, generateGridHoles } from "./grid.js";
@@ -149,17 +151,29 @@ export function generateHoles(params, placement = null) {
   const hw = (holeW || diameter) / 2,
     hh = (holeH || diameter) / 2;
   const pad = Math.max(hw, hh);
-  const xMin = marginLeft,
-    xMax = sheetW - marginRight;
-  const yMin = marginTop,
-    yMax = sheetH - marginBottom;
+  // The region every layout fills. Absent — the plain margin-inset rectangle —
+  // it is the rectangle the margins describe, and the centre clip below is
+  // the rounded corner test it always was. Present, the region's frame is the
+  // rectangle and its containment test is the clip: an ellipse, a polygon, a
+  // cutout.
+  const region = placement?.boundary ?? null;
+  const xMin = region ? region.frame.xMin : marginLeft,
+    xMax = region ? region.frame.xMax : sheetW - marginRight;
+  const yMin = region ? region.frame.yMin : marginTop,
+    yMax = region ? region.frame.yMax : sheetH - marginBottom;
   const bounds = { xMin, xMax, yMin, yMax };
   if (xMin >= xMax || yMin >= yMax) return [];
 
   // Diamond "Flat up" = canonical point-up rhombus rotated onto one of its edges.
   const flatTheta = holeShape === "Diamond" && diamondOrient === "Flat up" ? diamondFlatAngle(hw * 2, hh * 2) : 0;
-  const clipToBoundary = pts =>
-    cornerRadius > 0 ? pts.filter(p => isInsideRoundedRect(p.x, p.y, xMin, yMin, xMax, yMax, cornerRadius)) : pts;
+  // A sharp rectangle with cutouts keeps the loose edges the rectangle always
+  // had: only the cutouts take centres away (see looseCentres).
+  const clipToBoundary = region
+    ? region.looseCentres
+      ? pts => pts.filter(p => !region.inCutout(p.x, p.y))
+      : pts => pts.filter(p => region.contains(p.x, p.y))
+    : pts =>
+        cornerRadius > 0 ? pts.filter(p => isInsideRoundedRect(p.x, p.y, xMin, yMin, xMax, yMax, cornerRadius)) : pts;
 
   if (patternType === "Radial") {
     // The radial engine walks its own rings and applies its own boundary test,
@@ -175,10 +189,20 @@ export function generateHoles(params, placement = null) {
       layout: radialLayout,
       ringSpacing,
       circumSpacing,
-      center: radialLayout === "Concentric" ? { x: sheetW / 2, y: sheetH / 2 } : undefined,
+      // Concentric rings have always been centred on the sheet, which is the
+      // frame's centre for the rectangle they were written for. An ellipse or
+      // a polygon boundary has a centre of its own — a logo in the corner of
+      // the sheet — so the rings gather on that.
+      center:
+        radialLayout === "Concentric"
+          ? region && region.kind !== "rect"
+            ? { x: region.cx, y: region.cy }
+            : { x: sheetW / 2, y: sheetH / 2 }
+          : undefined,
       centerHole,
       cornerRadius,
       diamondOrient,
+      region,
     });
   }
 
@@ -271,6 +295,7 @@ export function generateHoles(params, placement = null) {
     return generateVoronoiHoles({
       bounds,
       cornerRadius,
+      region,
       minDist: freeSpacingX,
       gap: cellGap,
       seed: scatterSeed,
@@ -285,6 +310,7 @@ export function generateHoles(params, placement = null) {
     return generateFlowLines({
       bounds,
       cornerRadius,
+      region,
       width: hw * 2,
       separation: pitchX,
       baseAngle: flowAngle,

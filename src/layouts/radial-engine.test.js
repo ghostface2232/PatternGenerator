@@ -301,3 +301,24 @@ test("shapeReach is the centre distance at which two holes are the gap apart", (
     for (const deg of [0, 17, 45, 80, 130])
       assert.ok(shapeReach(shape, 9, 4, 0.3, rad(deg), 2) <= shapeExtent(shape, 9, 4, 0.3, rad(deg)) + 2 + 1e-9, `${shape} ${deg}°`); // prettier-ignore
 });
+
+test("an excluded center hole does not affect any radial layout's placement", () => {
+  for (const layout of ["Concentric", "Sunflower", "6k Rosette"]) {
+    for (const contains of [(x, y) => Math.hypot(x - 100, y - 100) > 15, (x, y) => x < 90 || y < 90]) {
+      const options = {
+        shape: "Rectangle",
+        w: 12,
+        h: 5,
+        bounds: { xMin: 0, xMax: 200, yMin: 0, yMax: 200 },
+        radialGap: 3,
+        circumGap: 3,
+        layout,
+        region: { contains },
+      };
+      const holes = generateRadialHoles({ ...options, centerHole: true });
+      assert.ok(holes.length > 0);
+      assert.ok(holes.every(hole => contains(hole.x, hole.y)));
+      assert.deepEqual(holes, generateRadialHoles({ ...options, centerHole: false }), layout);
+    }
+  }
+});

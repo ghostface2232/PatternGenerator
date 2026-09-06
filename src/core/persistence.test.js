@@ -13,7 +13,9 @@ import {
   loadCurrent,
   loadRecent,
   migrateDocument,
+  outlineVertexCount,
   saveCurrent,
+  SHARE_OUTLINE_WARN_POINTS,
   serializeDocument,
   STORAGE_KEY_RECENT,
   stripAssets,
@@ -304,7 +306,13 @@ test("a v1 document upgrades to the current schema with every later block inert"
   delete v1.layout.scatter;
   delete v1.layout.path;
   const upgraded = migrateDocument(v1);
-  assert.equal(upgraded.schemaVersion, 5);
+  assert.equal(upgraded.schemaVersion, 6);
+  // Phase 4's boundary fields default to the rectangle the document already
+  // described, with nothing taken out of it.
+  assert.equal(upgraded.boundary.shape, "Rectangle");
+  assert.deepEqual(upgraded.boundary.rings, []);
+  assert.deepEqual(upgraded.boundary.cutouts, []);
+  assert.equal(upgraded.boundary.trim, false);
   assert.deepEqual(upgraded.fields, { enabled: false, controllers: [] });
   assert.deepEqual(upgraded.assets, {});
   assert.equal(upgraded.hole.shapeMix, fresh.hole.shapeMix);
@@ -435,4 +443,173 @@ test("share links and the recent list travel without the images", () => {
   // The autosave, which a reload reads back, keeps them.
   saveCurrent(storage, doc);
   assert.deepEqual(loadCurrent(storage).assets, doc.assets);
+});
+
+test("the boundary's shape, rings, cutouts and trim flag are validated field by field", () => {
+  const doc = validateDocument({
+    boundary: {
+      shape: "Blob",
+      rings: [
+        [[0, 0], [100, 0], [100, 100]], // prettier-ignore
+        [
+          [0, 0],
+          [1, 1],
+        ], // two vertices: not a ring
+        [
+          [0, 0],
+          ["x", 0],
+          [1, 1],
+        ], // a vertex that is not a number: dropped whole
+        [
+          { x: 5, y: 5 },
+          { x: 50, y: 5 },
+          { x: 50, y: 50 },
+        ], // objects are read as pairs
+        "nonsense",
+      ],
+      cutouts: [
+        { id: "a", shape: "Circle", x: 50, y: 50, w: 9000, h: -1 },
+        { id: "a", shape: "Rectangle", x: "20", y: 20, w: 10, h: 5, rotation: 400, cornerRadius: -2 },
+        {
+          shape: "Polygon",
+          points: [
+            [0, 0],
+            [10, 0],
+          ],
+        }, // not a ring
+        {
+          shape: "Polygon",
+          points: [
+            [0, 0],
+            [10, 0],
+            [10, 10],
+          ],
+        },
+        { shape: "Hexagon", x: 0, y: 0 },
+        null,
+      ],
+      trim: "yes",
+    },
+  });
+  assert.equal(doc.boundary.shape, "Rectangle");
+  assert.deepEqual(doc.boundary.rings, [
+    [[0, 0], [100, 0], [100, 100]], // prettier-ignore
+    [[5, 5], [50, 5], [50, 50]], // prettier-ignore
+  ]);
+  assert.equal(doc.boundary.cutouts.length, 3);
+  const [circle, rect, poly] = doc.boundary.cutouts;
+  assert.equal(circle.id, "a");
+  assert.equal(circle.w, DOC_LIMITS["cutout.size"][1]);
+  assert.equal(circle.h, DOC_LIMITS["cutout.size"][0]);
+  assert.equal(rect.id, "a-2", "a duplicate id is made unique");
+  assert.equal(rect.x, 20, "a numeric string is read");
+  assert.equal(rect.rotation, DOC_LIMITS["cutout.rotation"][1]);
+  assert.equal(rect.cornerRadius, 0);
+  assert.equal(poly.shape, "Polygon");
+  assert.deepEqual(poly.points, [[0, 0], [10, 0], [10, 10]]); // prettier-ignore
+  assert.equal(doc.boundary.trim, false);
+  // The whole block survives a file round trip, and the pattern with it.
+  const grille = patchIn(createDocument(), {
+    "boundary.shape": "Ellipse",
+    "boundary.trim": true,
+    "boundary.cutouts": [{ id: "cut-1", shape: "Circle", x: 100, y: 100, w: 40, h: 40, rotation: 0, cornerRadius: 0, points: [] }], // prettier-ignore
+  });
+  const back = deserializeDocument(serializeDocument(grille));
+  assert.deepEqual(back, grille);
+  assert.equal(computePattern(back).activeHoles.length, computePattern(grille).activeHoles.length);
+  assert.ok(computePattern(back).activeHoles.length < 739, "the ellipse and the cutout took holes away");
+});
+
+test("the hole's preset parameters and custom outline are validated and round-trip", () => {
+  const doc = validateDocument({
+    hole: {
+      shape: "Custom",
+      ratio: 7,
+      count: "9",
+      custom: {
+        kind: "svg",
+        name: 42,
+        rings: [
+          [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]], // prettier-ignore
+          [
+            [-0.1, -0.1],
+            [0.1, "x"],
+            [0.1, 0.1],
+          ], // a bad vertex: dropped whole
+          [
+            [0, 0],
+            [1, 1],
+          ], // two vertices: not a ring
+        ],
+        aspect: 0,
+        lockAspect: "no",
+        layers: [{ shape: "Circle", role: "cut", x: 1e9, w: -3 }, { shape: "Blob" }, null],
+      },
+    },
+  });
+  assert.equal(doc.hole.shape, "Custom");
+  assert.equal(doc.hole.ratio, 1);
+  assert.equal(doc.hole.count, 9);
+  assert.equal(doc.hole.custom.kind, "svg");
+  assert.equal(doc.hole.custom.name, "");
+  assert.equal(doc.hole.custom.rings.length, 1);
+  assert.equal(doc.hole.custom.aspect, DOC_LIMITS["custom.aspect"][0]);
+  assert.equal(doc.hole.custom.lockAspect, true);
+  assert.equal(doc.hole.custom.layers.length, 1);
+  assert.equal(doc.hole.custom.layers[0].role, "union");
+  assert.equal(doc.hole.custom.layers[0].x, DOC_LIMITS["layer.coord"][1]);
+  assert.equal(doc.hole.custom.layers[0].w, DOC_LIMITS["layer.size"][0]);
+  // Rings that do not survive leave the shape with nothing: kind falls to none.
+  assert.equal(validateDocument({ hole: { custom: { kind: "svg", rings: [] } } }).hole.custom.kind, "none");
+  // And a document with a real outline round-trips, pattern and all.
+  const star = patchIn(createDocument(), { "hole.shape": "Star", "hole.ratio": 0.3, "hole.count": 7 });
+  assert.deepEqual(deserializeDocument(serializeDocument(star)), star);
+  assert.equal(computePattern(deserializeDocument(serializeDocument(star))).activeHoles.length, computePattern(star).activeHoles.length); // prettier-ignore
+  // No outline, no proportions: a stale aspect does not stretch the placeholder.
+  assert.equal(validateDocument({ hole: { custom: { kind: "svg", rings: [], aspect: 3 } } }).hole.custom.aspect, 1);
+  // A polygon layer's vertices are design coordinates, bounded like the rest of the layer.
+  const far = validateDocument({ hole: { custom: { layers: [{ shape: "Polygon", points: [[0, 0], [1500, 0], [0, 1500]] }] } } }); // prettier-ignore
+  assert.equal(far.hole.custom.layers[0].points[1][0], DOC_LIMITS["layer.coord"][1]);
+});
+
+test("a hand-edited custom outline is wound the way the app winds its own", () => {
+  // A washer whose bore is wound like its outer: the canvas would paint the
+  // bore solid and the area would count it twice. Loaded, it is a washer.
+  const outer = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]]; // prettier-ignore
+  const bore = [[-0.25, -0.25], [0.25, -0.25], [0.25, 0.25], [-0.25, 0.25]]; // prettier-ignore
+  const d = validateDocument({
+    hole: { shape: "Custom", w: 10, h: 10, custom: { kind: "svg", rings: [outer, bore], aspect: 1, lockAspect: true } },
+  });
+  const [o, b] = d.hole.custom.rings;
+  const signed = ring => ring.reduce((s, [x, y], i) => s + (x * ring[(i + 1) % ring.length][1] - ring[(i + 1) % ring.length][0] * y), 0); // prettier-ignore
+  assert.ok(signed(o) * signed(b) < 0, "the bore is wound against the outer");
+  const { holes } = computePattern(d);
+  assert.ok(Math.abs(holes[0].area - 75) < 1e-6, `${holes[0].area}`);
+});
+
+test("a boundary, its cutouts, a custom hole and the trim flag survive a share link", () => {
+  const letter = [[20, 20], [180, 20], [180, 180], [20, 180]]; // prettier-ignore
+  const counter = [[80, 80], [120, 80], [120, 120], [80, 120]]; // prettier-ignore
+  const d = patchIn(createDocument(), {
+    "boundary.shape": "Polygon",
+    "boundary.rings": [letter, counter],
+    "boundary.cutouts": [{ id: "cut-1", shape: "Rectangle", x: 40, y: 150, w: 30, h: 12, rotation: 15, cornerRadius: 2, points: [] }], // prettier-ignore
+    "boundary.trim": true,
+    "hole.shape": "Custom",
+    "hole.custom": { kind: "svg", name: "ring", rings: [[[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]], [[-0.2, 0.2], [0.2, 0.2], [0.2, -0.2], [-0.2, -0.2]]], aspect: 1, lockAspect: true, layers: [] }, // prettier-ignore
+  });
+  const back = decodeShareHash(encodeShareHash(d));
+  assert.deepEqual({ ...back, id: null }, { ...d, id: null });
+  const a = computePattern(d),
+    b = computePattern(back);
+  assert.ok(a.activeHoles.length > 10);
+  assert.equal(b.activeHoles.length, a.activeHoles.length);
+  assert.equal(b.stats.displayOAR, a.stats.displayOAR);
+  assert.equal(b.stats.grossArea, a.stats.grossArea);
+  // The outlines are what makes a link long: this one is short of the warning,
+  // a traced logo is past it.
+  assert.equal(outlineVertexCount(d), 4 + 4 + 4 + 4);
+  assert.ok(outlineVertexCount(d) < SHARE_OUTLINE_WARN_POINTS);
+  const traced = Array.from({ length: 8 }, (_, k) => Array.from({ length: 300 }, (_, i) => [k * 20 + 5 + 4 * Math.cos(i), 50 + 4 * Math.sin(i)])); // prettier-ignore
+  assert.ok(outlineVertexCount(patchIn(d, { "boundary.rings": traced })) > SHARE_OUTLINE_WARN_POINTS);
 });

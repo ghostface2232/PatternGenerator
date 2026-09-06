@@ -82,6 +82,9 @@ export function getRadialShapeOuterRadius(shape, w, h) {
   if (shape === "Rectangle" || shape === "Superellipse") return Math.hypot(w, h) / 2;
   if (shape === "Pill") return Math.max(w, h) / 2;
   const vertices = shapeVertices(shape, w, h);
+  // A shape this file does not know (a preset or custom outline) is read as
+  // its box, which only ever spaces the rings further apart.
+  if (!vertices) return Math.hypot(w, h) / 2;
   return Math.max(...vertices.map(([x, y]) => Math.hypot(x, y)));
 }
 
@@ -275,6 +278,7 @@ export function generateRadialHoles(options) {
     ringSpacing: legacyRingSpacing,
     circumSpacing: legacyCircumSpacing,
     center,
+    region = null,
   } = options;
   const { xMin, xMax, yMin, yMax } = bounds;
   if (!(xMax > xMin) || !(yMax > yMin)) return [];
@@ -302,7 +306,20 @@ export function generateRadialHoles(options) {
 
   const appendIfInside = hole => {
     let inside;
-    if (fillMode === "Circle") {
+    if (region && !region.looseCentres) {
+      // A region that is not the plain rectangle answers for itself, the
+      // circle fill included: it was compiled with that mode.
+      inside = region.contains(hole.x, hole.y);
+    } else if (region) {
+      // The sharp rectangle with cutouts: the padded box it always was, less
+      // the cutouts.
+      inside =
+        hole.x >= xMin - boundaryPad &&
+        hole.x <= xMax + boundaryPad &&
+        hole.y >= yMin - boundaryPad &&
+        hole.y <= yMax + boundaryPad &&
+        !region.inCutout(hole.x, hole.y);
+    } else if (fillMode === "Circle") {
       inside = Math.hypot(hole.x - cx, hole.y - cy) <= circleRadius + EPS;
     } else if (cornerRadius > 0) {
       inside = isInsideRoundedRect(hole.x, hole.y, bounds, cornerRadius);
@@ -314,13 +331,15 @@ export function generateRadialHoles(options) {
         hole.y <= yMax + boundaryPad;
     }
     if (inside) holes.push({ x: hole.x, y: hole.y, angle: hole.angle });
+    return inside;
   };
 
   let previous = null;
   if (centerHole) {
     const centerAngle = shape === "Diamond" && diamondOrient === "Flat up" ? diamondFlatAngle(w, h) : 0;
-    holes.push({ x: cx, y: cy, angle: centerAngle });
-    previous = { radius: 0, count: 1, phase: 0, centerAngle };
+    if (appendIfInside({ x: cx, y: cy, angle: centerAngle })) {
+      previous = { radius: 0, count: 1, phase: 0, centerAngle };
+    }
   }
 
   if (layout === "Concentric") {
@@ -328,7 +347,20 @@ export function generateRadialHoles(options) {
     // circumference approximation and every ring starts on the positive x
     // axis. This intentionally keeps the visual rhythm of the pre-engine
     // implementation instead of optimizing phases and projected gaps.
-    const legacyMaxRadius = fillMode === "Circle" ? circleRadius : Math.hypot(perfW, perfH) / 2 + ringSpacing;
+    // The rings reach the frame's farthest corner from wherever the centre
+    // is. For the rectangle the centre is the sheet's and the frame's diagonal
+    // is what the original arithmetic reached — kept to the bit, cutouts or
+    // not.
+    const reach =
+      region && region.kind !== "rect"
+        ? Math.max(
+            Math.hypot(xMin - cx, yMin - cy),
+            Math.hypot(xMax - cx, yMin - cy),
+            Math.hypot(xMin - cx, yMax - cy),
+            Math.hypot(xMax - cx, yMax - cy)
+          )
+        : Math.hypot(perfW, perfH) / 2;
+    const legacyMaxRadius = fillMode === "Circle" ? circleRadius : reach + ringSpacing;
     const ringCount = Math.max(0, Math.floor(legacyMaxRadius / ringSpacing));
     for (let ring = 1; ring <= ringCount; ring++) {
       const radius = ring * ringSpacing;
@@ -349,7 +381,7 @@ export function generateRadialHoles(options) {
     const minimumCenterDistance = outerRadius * 2 + requestedGap;
     // A centre hole makes n=0 -> n=1 the limiting pair. Without it, the
     // tighter n=1 -> n=4 Fermat pair determines the scale.
-    const spiralScale = minimumCenterDistance / (centerHole ? 1 : FERMAT_SAFE_SEPARATION);
+    const spiralScale = minimumCenterDistance / (previous ? 1 : FERMAT_SAFE_SEPARATION);
     for (let n = 1; ; n++) {
       const radius = spiralScale * Math.sqrt(n);
       if (radius > maxRadius + EPS) break;

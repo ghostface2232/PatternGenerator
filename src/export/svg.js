@@ -8,20 +8,29 @@
 // from the chunks has no such limit; generateSVGString joins them for callers
 // that want the text (tests, and any small document).
 import { holeExitOutline, holeOutline, holeSVGElement } from "../geometry/shapes.js";
-import { perfBoundarySVG } from "../geometry/boundary.js";
+import { regionFromParams } from "../geometry/boundary.js";
 
-export function generateSVGParts(holes, params) {
+// `region` is the compiled boundary (geometry/boundary.js); absent, the params'
+// own rectangle stands in, which is what every document before Phase 4 had.
+// `options.trim` writes the region as the material — the background becomes
+// its outline and an `outline` group carries the cut path — and cutouts go out
+// as a `keepout` group of stroked outlines either way.
+export function generateSVGParts(holes, params, region = null, options = {}) {
   const { sheetW, sheetH, thickness, taperAngle, taperDirection, holeShape } = params;
   const shape = holeShape || "Circle";
   const taperActive = thickness > 0 && taperAngle > 0;
   const bgColor = params.bgColor || "#c0c0c0";
   const holeColor = params.holeColor || "#000000";
   const holeFill = `fill="${holeColor}"`;
+  const bounds = region ?? regionFromParams(params);
+  const trim = options.trim === true;
 
   const parts = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${sheetW}mm" height="${sheetH}mm" viewBox="0 0 ${sheetW} ${sheetH}">\n`,
-    `  <rect width="${sheetW}" height="${sheetH}" fill="${bgColor}" />\n`,
-    `  <defs><clipPath id="perf-boundary">${perfBoundarySVG(params)}</clipPath></defs>\n`,
+    trim
+      ? `  ${bounds.svg(`fill="${bgColor}"`)}\n`
+      : `  <rect width="${sheetW}" height="${sheetH}" fill="${bgColor}" />\n`,
+    `  <defs><clipPath id="perf-boundary">${bounds.svg()}</clipPath></defs>\n`,
     `  <g clip-path="url(#perf-boundary)">\n`,
   ];
 
@@ -72,10 +81,20 @@ export function generateSVGParts(holes, params) {
       parts.push(holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, holeFill, "", pt.angle, pt.holeRadius, holeOutline(pt)));
     });
   }
-  parts.push(`  </g>\n</svg>`);
+  // One closing chunk, whatever it carries: the cut outline of a trimmed
+  // sheet and the keep-outs are a few paths, not a pattern's worth.
+  let tail = `  </g>\n`;
+  if (trim) tail += `  <g id="outline">${bounds.svg('fill="none" stroke="#666" stroke-width="0.15"')}</g>\n`;
+  const keepouts = bounds.svgCutouts();
+  if (keepouts.length) {
+    tail += `  <g id="keepout" fill="none" stroke="#666" stroke-width="0.15" stroke-dasharray="1 1">\n`;
+    for (const d of keepouts) tail += `    <path d="${d}" />\n`;
+    tail += `  </g>\n`;
+  }
+  parts.push(`${tail}</svg>`);
   return parts;
 }
 
-export function generateSVGString(holes, params) {
-  return generateSVGParts(holes, params).join("");
+export function generateSVGString(holes, params, region = null, options = {}) {
+  return generateSVGParts(holes, params, region, options).join("");
 }

@@ -4,10 +4,19 @@
 import LZString from "lz-string";
 import { DOC_SCHEMA_VERSION, createDocument, newDocumentId } from "./document.js";
 import {
+  BOUNDARY_SHAPES,
+  CUTOUT_SHAPES,
   DIAMOND_ORIENTATIONS,
   DIN_PRESETS,
   DOC_LIMITS,
   HOLE_SHAPES,
+  MAX_BOUNDARY_POINTS,
+  MAX_BOUNDARY_RINGS,
+  MAX_CUSTOM_POINTS,
+  MAX_CUSTOM_RINGS,
+  MAX_CUTOUT_POINTS,
+  MAX_CUTOUTS,
+  MAX_SHAPE_LAYERS,
   MAX_ASSET_DATA_URL_CHARS,
   MAX_ASSET_TOTAL_CHARS,
   MAX_ASSETS,
@@ -29,6 +38,8 @@ import {
   MAX_CONTROLLERS,
   ONE_SIDED_VALUES,
 } from "../fields/controllers.js";
+import { LAYER_ROLES, LAYER_SHAPES } from "../geometry/custom-shape.js";
+import { normalizeRings } from "../geometry/rings.js";
 
 export const FILE_EXTENSION = ".perf.json";
 export const FILE_MIME = "application/json";
@@ -67,6 +78,12 @@ const MIGRATIONS = {
   // validateDocument filling the block from the default reads its pattern back
   // unchanged.
   4: doc => ({ ...doc, schemaVersion: 5 }),
+  // 5 → 6: Phase 4 gives the boundary a shape (Rectangle, Ellipse, Polygon),
+  // its polygon rings, a list of cutouts and the trim flag. A v5 document has
+  // none of them and validateDocument fills all four from createDocument()'s
+  // defaults — a Rectangle with no cutouts, not trimmed — which is exactly the
+  // margin-inset rectangle it was saved with.
+  5: doc => ({ ...doc, schemaVersion: 6 }),
 };
 
 // ─── Validation ───────────────────────────────────────────────────────
@@ -295,6 +312,134 @@ function validatePaths(raw) {
   return paths;
 }
 
+// ─── Boundary ─────────────────────────────────────────────────────────
+// A ring is a list of [x, y] pairs in sheet millimetres. One vertex that is not
+// a number would poison every containment test the region answers, so a ring
+// that cannot be repaired is dropped whole, like a controller's geometry; a
+// ring longer than the cap is cut at it rather than dropped, since an outline
+// with its last vertices missing is still nearly the outline.
+function validateRing(raw, cap, limit = "boundary.coord") {
+  if (!Array.isArray(raw)) return null;
+  const ring = [];
+  for (const p of raw.slice(0, cap)) {
+    const pair = Array.isArray(p) ? p : p && typeof p === "object" ? [p.x, p.y] : null;
+    if (!pair) return null;
+    const x = num(pair[0], NaN, limit);
+    const y = num(pair[1], NaN, limit);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    ring.push([x, y]);
+  }
+  return ring.length >= 3 ? ring : null;
+}
+
+function validateRings(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .slice(0, MAX_BOUNDARY_RINGS)
+    .map(ring => validateRing(ring, MAX_BOUNDARY_POINTS))
+    .filter(Boolean);
+}
+
+function validateCutouts(raw) {
+  if (!Array.isArray(raw)) return [];
+  const cutouts = [];
+  const takenIds = new Set();
+  for (const [index, entry] of raw.slice(0, MAX_CUTOUTS).entries()) {
+    const c = obj(entry);
+    const shape = pick(c.shape, CUTOUT_SHAPES, null);
+    if (!shape) continue;
+    const points = shape === "Polygon" ? validateRing(c.points, MAX_CUTOUT_POINTS) : [];
+    if (shape === "Polygon" && !points) continue;
+    let id = typeof c.id === "string" && c.id ? c.id.slice(0, 64) : `cut-${index + 1}`;
+    while (takenIds.has(id)) id = `${id}-${index + 1}`;
+    takenIds.add(id);
+    cutouts.push({
+      id,
+      shape,
+      x: num(c.x, 0, "boundary.coord"),
+      y: num(c.y, 0, "boundary.coord"),
+      w: num(c.w, 10, "cutout.size"),
+      h: num(c.h, 10, "cutout.size"),
+      rotation: num(c.rotation, 0, "cutout.rotation"),
+      cornerRadius: num(c.cornerRadius, 0, "cutout.cornerRadius"),
+      points: points || [],
+    });
+  }
+  return cutouts;
+}
+
+// ─── The Custom hole shape ────────────────────────────────────────────
+// An outline in unit space: rings of [x, y] pairs within the unit square (a
+// little slack for a vertex that rounding pushed over), read by the even-odd
+// rule. A ring that cannot be repaired is dropped, like a boundary ring.
+const CUSTOM_KINDS = ["none", "svg", "layers"];
+
+function validateUnitRing(raw) {
+  if (!Array.isArray(raw)) return null;
+  const ring = [];
+  for (const p of raw.slice(0, MAX_CUSTOM_POINTS)) {
+    const pair = Array.isArray(p) ? p : null;
+    if (!pair) return null;
+    const x = num(pair[0], NaN, "custom.coord");
+    const y = num(pair[1], NaN, "custom.coord");
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    ring.push([x, y]);
+  }
+  return ring.length >= 3 ? ring : null;
+}
+
+function validateShapeLayers(raw) {
+  if (!Array.isArray(raw)) return [];
+  const layers = [];
+  const takenIds = new Set();
+  for (const [index, entry] of raw.slice(0, MAX_SHAPE_LAYERS).entries()) {
+    const l = obj(entry);
+    const shape = pick(l.shape, LAYER_SHAPES, null);
+    if (!shape) continue;
+    let id = typeof l.id === "string" && l.id ? l.id.slice(0, 64) : `layer-${index + 1}`;
+    while (takenIds.has(id)) id = `${id}-${index + 1}`;
+    takenIds.add(id);
+    const points = shape === "Polygon" ? validateRing(l.points, MAX_CUSTOM_POINTS, "layer.coord") : [];
+    if (shape === "Polygon" && !points) continue;
+    layers.push({
+      id,
+      shape,
+      role: pick(l.role, LAYER_ROLES, "union"),
+      x: num(l.x, 0, "layer.coord"),
+      y: num(l.y, 0, "layer.coord"),
+      w: num(l.w, 10, "layer.size"),
+      h: num(l.h, 10, "layer.size"),
+      rotation: num(l.rotation, 0, "layer.rotation"),
+      // The preset-like parameters a Star or Rectangle layer reads.
+      ratio: num(l.ratio, 0.5, "hole.ratio"),
+      count: int(l.count, 5, "hole.count"),
+      points: points || [],
+    });
+  }
+  return layers;
+}
+
+function validateCustomShape(raw, fallback) {
+  const c = obj(raw);
+  // Wound the way every ring the app makes is wound — outers one way, holes
+  // the other — since the canvas paints the outline by the non-zero rule and
+  // the area reads the signed sum: a hand-edited bore wound like its outer
+  // would otherwise fill in on screen and count as metal removed twice.
+  const rings = Array.isArray(c.rings)
+    ? normalizeRings(c.rings.slice(0, MAX_CUSTOM_RINGS).map(validateUnitRing).filter(Boolean))
+    : [];
+  const kind = pick(c.kind, CUSTOM_KINDS, fallback.kind);
+  return {
+    kind: rings.length ? kind : "none",
+    name: typeof c.name === "string" ? c.name.trim().slice(0, 60) : fallback.name,
+    rings,
+    // Without an outline there are no proportions to keep.
+    aspect: rings.length ? num(c.aspect, fallback.aspect, "custom.aspect") : 1,
+    lockAspect: bool(c.lockAspect, fallback.lockAspect),
+    layers: validateShapeLayers(c.layers),
+  };
+}
+
 function validateRemovedHoles(raw) {
   if (!Array.isArray(raw)) return [];
   const seen = new Set();
@@ -337,6 +482,10 @@ export function validateDocument(raw) {
       margins: { top: margin("top"), bottom: margin("bottom"), left: margin("left"), right: margin("right") },
       marginLinked: bool(obj(r.boundary).marginLinked, d.boundary.marginLinked),
       cornerRadius: num(obj(r.boundary).cornerRadius, d.boundary.cornerRadius, "boundary.cornerRadius"),
+      shape: pick(obj(r.boundary).shape, BOUNDARY_SHAPES, d.boundary.shape),
+      rings: validateRings(obj(r.boundary).rings),
+      cutouts: validateCutouts(obj(r.boundary).cutouts),
+      trim: bool(obj(r.boundary).trim, d.boundary.trim),
     },
     hole: {
       shape: pick(hole.shape, HOLE_SHAPES, d.hole.shape),
@@ -347,6 +496,9 @@ export function validateDocument(raw) {
       diamondOrient: pick(hole.diamondOrient, DIAMOND_ORIENTATIONS, d.hole.diamondOrient),
       triEquilateral: bool(hole.triEquilateral, d.hole.triEquilateral),
       shapeMix: num(hole.shapeMix, d.hole.shapeMix, "hole.shapeMix"),
+      ratio: num(hole.ratio, d.hole.ratio, "hole.ratio"),
+      count: int(hole.count, d.hole.count, "hole.count"),
+      custom: validateCustomShape(hole.custom, d.hole.custom),
     },
     layout: {
       type: pick(layout.type, PATTERN_TYPES, d.layout.type),
@@ -450,6 +602,24 @@ export function stripAssets(doc) {
 }
 
 export const hasAssets = doc => Object.keys(doc?.assets || {}).length > 0;
+
+// How many outline vertices the document carries — the polygon boundary, its
+// polygon cutouts, the custom hole's rings and the shape editor's polygon
+// layers. Images are stripped from a share link; outlines travel in it, and a
+// logo traced at every vertex the file had can make a link no chat or mail
+// client passes on whole. The panel says so past SHARE_OUTLINE_WARN_POINTS.
+export const SHARE_OUTLINE_WARN_POINTS = 1500;
+export function outlineVertexCount(doc) {
+  const count = rings => (Array.isArray(rings) ? rings.reduce((n, ring) => n + (Array.isArray(ring) ? ring.length : 0), 0) : 0); // prettier-ignore
+  const boundary = doc?.boundary || {},
+    custom = doc?.hole?.custom || {};
+  return (
+    (boundary.shape === "Polygon" ? count(boundary.rings) : 0) +
+    count((boundary.cutouts || []).map(c => c?.points)) +
+    count(custom.rings) +
+    count((custom.layers || []).map(l => l?.points))
+  );
+}
 
 // Drop images no image controller points at any more. Called whenever a
 // controller is deleted or given a different picture, so an editing session does
