@@ -4,7 +4,7 @@ Guidance for AI coding agents working on this repository.
 
 ## What this is
 
-A single-page React app that generates perforation patterns (holes in a metal sheet) and exports them as SVG/PNG. No backend, no router. State is one document object driven through a reducer; all geometry is pure, UI-free JavaScript.
+A single-page React app that generates perforation patterns (holes in a metal sheet) and exports them as SVG/DXF/PNG. No backend, no router. State is one document object driven through a reducer; all geometry is pure, UI-free JavaScript.
 
 ## Commands
 
@@ -50,7 +50,7 @@ src/
                field-sampling.js
   fields/      size-variation scalar fields (variation-engine.js) + its gizmo, and the controller system
                (controllers.js, image-map.js, controller-gizmo.js)
-  export/      svg.js, png.js, download.js
+  export/      profiles.js (shared clipping/kerf and bounds), svg.js, dxf.js, png.js, download.js
   render/      canvas-renderer.js (pure drawScene) and view.js (sheet ↔ canvas transform)
   ui/          React: App.jsx (state, pipeline memos, actions, project I/O), EditorContext, TopBar, Sidebar,
                ShapeEditor.jsx (the boolean shape editor's modal), canvas/, panels/ (BoundaryPanel among them),
@@ -192,6 +192,16 @@ Three shape/pattern combos replace the generic grid with an exact tiling where t
 ### Size variation
 
 `fields/variation-engine.js` is pure scalar-field math (spaces × profiles × blending). `fields/gizmo.js` maps the four canvas handles to layer parameters. Edits to the variation block go through the `history` adapter (see History above) so they share the global undo stack.
+
+### Manufacturing exports (Phase 5)
+
+`export/profiles.js` generates physical contours shared by cutting SVG and DXF, in sheet mm. Profile kinds are analytic circle, rotated rounded rectangle, and a ring list. Fully contained primitives keep their exact geometry; other shapes use the registry's SVG outline and the pure parser, flattened at 0.02 mm. Profiles crossing the compiled region are actually intersected before kerf compensation; visualization SVG at zero kerf retains its lightweight clipPath path for large patterns.
+
+Kerf is export-only (0–5 mm), signed inward/outward half-width on hole regions, preserving counters. `offsetPolygons` unions/subtracts edge capsules and retries sweep-line tangency failures with 1e-8 mm coordinate snapping. A second failure propagates to the UI: never silently return an uncompensated profile. `profileBounds`/`extendExportBounds` cover analytic arcs and polygon vertices; DXF headers and cutting SVG pages include the sheet and all output contours (plus SVG stroke padding). Geometry remains millimetres until writer scaling; DXF reflects Y and negates bulges together.
+
+Layers are OUTLINE, HOLES (top), HOLES_EXIT (bottom), KEEPOUT. Top/bottom profile selection must switch dimensions, outline **and corner radius** together under Bottom larger. In cutting SVG/DXF with trim, OUTLINE already contains cutout edges, so KEEPOUT is omitted when OUTLINE is selected. Selection and export options are local to `ExportDialog.jsx`, never document fields; no schema change is needed for an export option. The native dialog owns keyboard focus, and the global drop handler must not modify a document while either modal is open.
+
+Generate interoperability fixtures with `node scripts/export-fixtures.js <directory>` and read them with `scripts/verify-dxf.py` under an optional ezdxf environment. This independent parser audit is separate from the still-pending actual CAD GUI import check documented in README.
 
 ## Gotchas
 
