@@ -555,7 +555,7 @@ function drawBoundaryHandles(ctx, { boundary, region, selectedCutoutId, baseScal
   region.trace(ctx);
   ctx.stroke();
   ctx.setLineDash([]);
-  const selected = region.cutouts.find((c, i) => boundary.cutouts[i]?.id === selectedCutoutId);
+  const selected = selectedCutoutId != null ? region.cutouts.find(c => c.id === selectedCutoutId) : null;
   if (selected) {
     ctx.lineWidth = 1.4 * px;
     ctx.beginPath();

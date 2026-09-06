@@ -97,6 +97,7 @@ export function ShapeEditor() {
   return (
     <div
       role="dialog"
+      aria-modal="true"
       aria-label="Shape editor"
       style={{
         position: "fixed",

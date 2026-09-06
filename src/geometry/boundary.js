@@ -194,8 +194,13 @@ export function compileBoundary(sheet, boundary, circleMode = false) {
   // A Polygon boundary with nothing drawn yet is the rectangle: the panel's
   // shape switch must not empty the sheet before the first vertex exists.
   const kind = boundary?.shape === "Ellipse" ? "ellipse" : polygonRings.length ? "polygon" : "rect";
+  // Each carries its document id, so a consumer can find the one the panel
+  // has selected without counting on every raw cutout having compiled.
   const cutouts = (Array.isArray(boundary?.cutouts) ? boundary.cutouts : [])
-    .map(raw => compileCutout(raw, tolerance))
+    .map(raw => {
+      const compiled = compileCutout(raw, tolerance);
+      return compiled && { id: raw?.id, ...compiled };
+    })
     .filter(Boolean);
 
   let frame = marginFrame;

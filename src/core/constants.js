@@ -97,6 +97,11 @@ export const MAX_PATH_POINTS = 48;
 // 1 M-char per-image cap failed at exactly that job: eight of them is 8 MB, so
 // validation would happily accept a document the autosave could then never
 // write, and it would retry the failure on every keystroke thereafter.
+// An SVG file read for an outline is parsed by regular expressions in one
+// go, so a size the parser cannot chew through in a moment is turned away
+// before it is read. A logo or a letter is kilobytes; two megabytes is a
+// drawing that was never an outline.
+export const MAX_SVG_FILE_BYTES = 2_000_000;
 export const MAX_ASSETS = 8;
 export const MAX_ASSET_DATA_URL_CHARS = 300_000;
 export const MAX_ASSET_TOTAL_CHARS = 1_200_000;

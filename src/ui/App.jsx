@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CUSTOM_SHAPE, CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_CUTOUTS, MAX_PATHS, MAX_VARIATION_LAYERS } from "../core/constants.js"; // prettier-ignore
+import { CUSTOM_SHAPE, CUSTOM_SIZE_SHAPES, DIN_PRESETS, MAX_CUTOUTS, MAX_PATHS, MAX_SVG_FILE_BYTES, MAX_VARIATION_LAYERS } from "../core/constants.js"; // prettier-ignore
 import { cloneVariation, createDocument } from "../core/document.js";
 import {
   buildParams,
@@ -143,7 +143,7 @@ export default function App() {
   const [pathEditModeOn, setPathEditMode] = useState(false);
   // Editing the boundary on the canvas: polygon vertices and cutout handles.
   // The fourth canvas mode, and like the other three exclusive of them.
-  const [boundaryEditMode, setBoundaryEditMode] = useState(false);
+  const [boundaryEditModeOn, setBoundaryEditMode] = useState(false);
   // Which cutout the panel's inspector shows and the canvas highlights. UI
   // state, like every other selection here.
   const [selectedCutoutId, setSelectedCutoutId] = useState(null);
@@ -187,6 +187,12 @@ export default function App() {
   // since the re-render happens after it.
   if (pathEditModeOn && layout.type !== "Path") setPathEditMode(false);
   const pathEditMode = pathEditModeOn && layout.type === "Path";
+  // Boundary editing, for the same reason: undo, "Back to the rectangle" or
+  // removing the last cutout can leave nothing on the canvas to edit, and the
+  // panel shows no control to leave the mode by when there is nothing.
+  const boundaryEditable = boundary.shape === "Polygon" || boundary.cutouts.length > 0;
+  if (boundaryEditModeOn && !boundaryEditable) setBoundaryEditMode(false);
+  const boundaryEditMode = boundaryEditModeOn && boundaryEditable;
   const selectedPath = Math.max(0, Math.min(selectedPathIndex, layout.path.paths.length - 1));
   // Resolved rather than trusted: undo or a removal can take the cutout away
   // under the selection, and then the first one stands in.
@@ -359,11 +365,19 @@ export default function App() {
       }
       api.patch(patch);
     };
+    // Both SVG importers read the file through this: a file the parser could
+    // not chew through in a moment is refused before it is read.
+    const readSVGFile = async file => {
+      if (file.size > MAX_SVG_FILE_BYTES) {
+        throw new Error(`the file is ${(file.size / 1e6).toFixed(1)} MB; outlines up to ${MAX_SVG_FILE_BYTES / 1e6} MB are read`); // prettier-ignore
+      }
+      return file.text();
+    };
     // An SVG file as the hole: its outlines fitted to the unit square become
     // the Custom shape, with the hole's height following its width at the
     // outline's own proportions until the lock is released.
     const importHoleSVG = async file => {
-      const text = await file.text();
+      const text = await readSVGFile(file);
       const info = inspectSVG(text);
       if (!info.isSVG) throw new Error("that is not an SVG file");
       if (!info.hasOutline) throw new Error("the file has no closed outline (a path, rect, circle, ellipse or polygon)");
@@ -483,17 +497,23 @@ export default function App() {
       history.commit(current => ({ ...current, enabled }));
       if (!enabled) setVariationEditMode(false);
     };
+    // Entering variation editing leaves every other canvas mode, whichever
+    // control brought it on: the toggle, a preset or Randomize.
+    const enterVariationEditMode = () => {
+      setVariationEditMode(true);
+      setHoleRemovalMode(false);
+      setPathEditMode(false);
+      setBoundaryEditMode(false);
+      setFieldEditMode(false);
+      setFieldTool(null);
+    };
     const toggleVariationEditMode = () => {
-      const next = !variationEditMode;
-      setVariationEditMode(next);
-      if (next) {
-        setHoleRemovalMode(false);
-        setPathEditMode(false);
-        setBoundaryEditMode(false);
-        setFieldEditMode(false);
-        setFieldTool(null);
-        if (!history.ref.current.enabled) history.commit(current => ({ ...current, enabled: true }));
+      if (variationEditMode) {
+        setVariationEditMode(false);
+        return;
       }
+      enterVariationEditMode();
+      if (!history.ref.current.enabled) history.commit(current => ({ ...current, enabled: true }));
     };
     const updateSelectedLayer = (patch, record = false) => {
       const apply = current => ({
@@ -519,8 +539,7 @@ export default function App() {
           layers: [{ ...baseLayer, ...preset.layer, enabled: true }],
         };
       });
-      setVariationEditMode(true);
-      setFieldEditMode(false);
+      enterVariationEditMode();
     };
     const addVariationLayer = () => {
       if (history.ref.current.layers.length >= MAX_VARIATION_LAYERS) return;
@@ -542,8 +561,7 @@ export default function App() {
         enabled: true,
         layers: current.layers.map(layer => randomizeVariationLayer(layer)),
       }));
-      setVariationEditMode(true);
-      setFieldEditMode(false);
+      enterVariationEditMode();
     };
     // ─── Field controllers ─────────────────────────────────────────
     // Every edit goes through api.update so it lands on the one global undo
@@ -778,7 +796,6 @@ export default function App() {
       const patch = { shape };
       if (shape === "Polygon" && current.rings.length === 0) patch.rings = defaultBoundaryRings(geometry.region.frame);
       patchBoundary(patch);
-      if (shape !== "Polygon" && boundaryEditMode && current.cutouts.length === 0) setBoundaryEditMode(false);
     };
     const resetBoundaryOutline = () => patchBoundary({ shape: "Rectangle", rings: [] });
     const setBoundaryRings = (rings, live = false) => patchBoundary({ rings }, live);
@@ -825,7 +842,7 @@ export default function App() {
     // otherwise the width the user wants, asked for once. Centred on the
     // sheet at that size — the region clips whatever runs past the sheet.
     const importBoundarySVG = async file => {
-      const text = await file.text();
+      const text = await readSVGFile(file);
       const info = inspectSVG(text);
       if (!info.isSVG) throw new Error("that is not an SVG file");
       if (!info.hasOutline) throw new Error("the file has no closed outline (a path, rect, circle, ellipse or polygon)");
@@ -948,6 +965,7 @@ export default function App() {
       setPathEditMode(false);
       setBoundaryEditMode(false);
       setSelectedCutoutId(null);
+      setShapeEditorOpen(false); // its stack described the outgoing document
       setFieldTool(null);
       setSelectedId(null);
       setSelectedPath(0);
@@ -1003,6 +1021,13 @@ export default function App() {
   // Keyboard shortcuts: undo / redo / save. Text fields keep their own undo.
   useEffect(() => {
     const onKey = e => {
+      // The shape editor is modal: its stack is a snapshot of the document,
+      // and undoing the document beneath it would have Apply write stale
+      // layers over a change the user never saw.
+      if (shapeEditorOpen) {
+        if (e.key === "Escape") setShapeEditorOpen(false);
+        return;
+      }
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
       // Only text-editing fields keep the browser's own undo; sliders and buttons pass it through.
@@ -1025,7 +1050,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [api, project]);
+  }, [api, project, shapeEditorOpen]);
 
   // Drop a document file anywhere on the page to open it — or an image, which
   // goes to an image controller instead of being turned away.

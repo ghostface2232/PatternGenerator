@@ -163,6 +163,27 @@ test("the four canvas modes are mutually exclusive", async ({ page }) => {
   await editBoundary.scrollIntoViewIfNeeded();
   await editBoundary.click();
   await expect(removal).toHaveAttribute("aria-checked", "false");
+  // Randomize enters variation editing, which leaves boundary editing too.
+  const randomize = page.getByRole("button", { name: "Randomize", exact: true });
+  await randomize.scrollIntoViewIfNeeded();
+  await randomize.click();
+  await expect(page.getByText(/EDIT VARIATION/)).toHaveCount(1);
+  await expect(page.getByText(/EDIT BOUNDARY/)).toHaveCount(0);
+  await expect(editBoundary).toHaveAttribute("aria-pressed", "false");
+});
+
+test("boundary editing ends when there is nothing left to edit", async ({ page }) => {
+  await shape(page, "Polygon");
+  const editBoundary = page.getByRole("button", { name: "Edit the boundary on the canvas", exact: true });
+  await editBoundary.click();
+  await expect(page.getByText(/EDIT BOUNDARY/)).toHaveCount(1);
+  await page.getByRole("button", { name: "Reset the boundary to the rectangle", exact: true }).click();
+  await expect(page.getByText(/EDIT BOUNDARY/)).toHaveCount(0);
+  await expect(editBoundary).toHaveCount(0);
+  // And undo, which brings the polygon back, does not bring the mode back.
+  await page.keyboard.press("Control+z");
+  await expect(editBoundary).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByText(/EDIT BOUNDARY/)).toHaveCount(0);
 });
 
 test("a preset hole shape has its own parameters, and an SVG file becomes a custom one", async ({ page }) => {
