@@ -42,6 +42,8 @@ import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
 import { EDITABLE_CHANNELS, MAX_CONTROLLERS, createController, imageChannels } from "../fields/controllers.js";
 import { readImageFile, splitImageMaps, useImageMaps } from "./useImageMaps.js";
+import { ExportDialog } from "./ExportDialog.jsx";
+import { generateDXFParts } from "../export/dxf.js";
 import { generateSVGParts } from "../export/svg.js";
 import { renderPNGBlob } from "../export/png.js";
 import { downloadBlob, downloadText } from "../export/download.js";
@@ -118,6 +120,7 @@ function usePlacementField(doc) {
 }
 
 export default function App() {
+  const [exportOpen, setExportOpen] = useState(false);
   const [doc, api] = useDocument(loadInitialDocument);
   const closeHistoryGroup = api.closeGroup;
 
@@ -923,32 +926,41 @@ export default function App() {
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
-  // Both exports can fail on a very large pattern (memory, canvas limits), and a
-  // button that silently does nothing is worse than one that says why.
-  const exportSVG = useCallback(() => {
-    try {
-      // Blob from the chunks, never one joined string: a multi-million-hole
-      // document overruns the maximum string length.
-      const parts = generateSVGParts(activeHoles, { ...params, holeColor, bgColor }, geometry.region, { trim: doc.boundary.trim }); // prettier-ignore
-      downloadBlob(new Blob(parts, { type: "image/svg+xml" }), `${fileStem(doc)}.svg`);
-    } catch (err) {
-      console.error("SVG export failed:", err);
-      window.alert(
-        `Could not export this pattern as SVG (${activeHoles.length.toLocaleString()} holes): ${err.message}`
-      );
-    }
-  }, [activeHoles, params, holeColor, bgColor, doc, geometry.region]);
-  const exportPNG = useCallback(() => {
-    renderPNGBlob({ activeHoles, params, region: geometry.region, trim: doc.boundary.trim, holeColor, bgColor, dark })
-      .then(blob => {
-        if (!blob) throw new Error("the image could not be rendered at this size");
-        downloadBlob(blob, `${fileStem(doc)}.png`);
-      })
-      .catch(err => {
-        console.error("PNG export failed:", err);
-        window.alert(`Could not export this pattern as PNG: ${err.message}`);
-      });
-  }, [activeHoles, params, holeColor, bgColor, dark, doc, geometry.region]);
+  const exportFile = useCallback(
+    async (format, options = {}) => {
+      // eslint-disable-next-line no-control-regex -- filenames cannot contain control characters
+      const filename = (options.filename || fileStem(doc)).replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").trim() || "pattern";
+      const settings = { ...options, trim: doc.boundary.trim };
+      let blob;
+      if (format === "PNG") {
+        blob = await renderPNGBlob({
+          activeHoles,
+          params,
+          region: geometry.region,
+          trim: doc.boundary.trim,
+          holeColor,
+          bgColor,
+          dark,
+        });
+        if (!blob) throw new Error("The image could not be rendered at this size");
+      } else {
+        const writer = format === "DXF" ? generateDXFParts : generateSVGParts;
+        const parts = writer(activeHoles, { ...params, holeColor, bgColor }, geometry.region, settings);
+        blob = new Blob(parts, { type: format === "DXF" ? "application/dxf" : "image/svg+xml" });
+      }
+      downloadBlob(blob, `${filename}.${format.toLowerCase()}`);
+    },
+    [activeHoles, params, holeColor, bgColor, dark, doc, geometry.region]
+  );
+  const quickExport = useCallback(
+    format => {
+      exportFile(format).catch(err => window.alert(`Could not export this pattern as ${format}: ${err.message}`));
+    },
+    [exportFile]
+  );
+  const exportSVG = useCallback(() => quickExport("SVG"), [quickExport]);
+  const exportPNG = useCallback(() => quickExport("PNG"), [quickExport]);
+  const exportDXF = useCallback(() => quickExport("DXF"), [quickExport]);
 
   // ─── Project: new / open / save / share / recent ──────────────────
   const loadDocument = useCallback(
@@ -1138,6 +1150,9 @@ export default function App() {
     project,
     exportSVG,
     exportPNG,
+    exportDXF,
+    exportFile,
+    openExport: () => setExportOpen(true),
   };
 
   return (
@@ -1166,6 +1181,7 @@ export default function App() {
           <Sidebar />
         </div>
         {shapeEditorOpen && <ShapeEditor />}
+        {exportOpen && <ExportDialog onClose={() => setExportOpen(false)} />}
       </div>
     </EditorContext.Provider>
   );

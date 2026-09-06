@@ -4,12 +4,13 @@ import { MONO } from "../theme.js";
 import { Section } from "./Section.jsx";
 
 export function ExportPanel() {
-  const { theme, exportSVG, exportPNG } = useEditor();
+  const { theme, exportSVG, exportPNG, exportDXF } = useEditor();
   return (
     <Section title="Export" theme={theme} last>
       <div style={{ display: "flex", gap: 6 }}>
         {[
           ["SVG", exportSVG],
+          ["DXF", exportDXF],
           ["PNG 2x", exportPNG],
         ].map(([label, fn]) => (
           <button

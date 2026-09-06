@@ -17,7 +17,7 @@ function TopStat({ label, value, color, theme }) {
 }
 
 export function TopBar() {
-  const { doc, api, theme, ui, stats, geometry, actions, project } = useEditor();
+  const { doc, api, theme, ui, stats, geometry, actions, project, openExport } = useEditor();
   const { dark, setDark, showHud, setShowHud } = ui;
   const { taperActive } = geometry;
   const divider = <div style={{ width: 1, alignSelf: "stretch", background: theme.sectionBorder, margin: "10px 0" }} />;
@@ -119,6 +119,9 @@ export function TopBar() {
         </>
       )}
       <div style={{ flex: 1 }} />
+      <button onClick={openExport} aria-label="Export pattern" style={btn()}>
+        Export
+      </button>
       <button onClick={api.undo} disabled={!api.canUndo} title="Undo (Ctrl+Z)" style={historyBtn(api.canUndo)}>
         <Undo2 size={13} />
       </button>
