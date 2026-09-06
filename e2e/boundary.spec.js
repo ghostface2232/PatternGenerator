@@ -146,7 +146,7 @@ test("trimming the sheet to the boundary changes the export, not the pattern", a
   await page.getByRole("switch", { name: "Trim sheet to boundary", exact: true }).click();
   expect(await holes(page)).toBe(count);
   const text = await download(page, "SVG");
-  expect(text).toContain('<g id="outline">');
+  expect(text).toContain('<g id="OUTLINE" inkscape:label="OUTLINE" inkscape:groupmode="layer">');
   expect(text).not.toContain('<rect width="200" height="200"');
   expect(text.match(/<circle /g)).toHaveLength(count);
 });

@@ -8,6 +8,7 @@
 // from the chunks has no such limit; generateSVGString joins them for callers
 // that want the text (tests, and any small document).
 import { holeExitOutline, holeOutline, holeSVGElement } from "../geometry/shapes.js";
+import { exportOptions, exportScale, manufacturingProfiles, profileSVG } from "./profiles.js";
 import { regionFromParams } from "../geometry/boundary.js";
 
 // `region` is the compiled boundary (geometry/boundary.js); absent, the params'
@@ -16,6 +17,11 @@ import { regionFromParams } from "../geometry/boundary.js";
 // its outline and an `outline` group carries the cut path — and cutouts go out
 // as a `keepout` group of stroked outlines either way.
 export function generateSVGParts(holes, params, region = null, options = {}) {
+  options = exportOptions(options);
+  if (options.mode === "cut" || options.kerf > 0) return manufacturingSVGParts(holes, params, region, options);
+  const enabled = name => options.layers.includes(name);
+  const scale = exportScale(options.units);
+  const unit = options.units === "inch" ? "in" : "mm";
   const { sheetW, sheetH, thickness, taperAngle, taperDirection, holeShape } = params;
   const shape = holeShape || "Circle";
   const taperActive = thickness > 0 && taperAngle > 0;
@@ -26,7 +32,8 @@ export function generateSVGParts(holes, params, region = null, options = {}) {
   const trim = options.trim === true;
 
   const parts = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${sheetW}mm" height="${sheetH}mm" viewBox="0 0 ${sheetW} ${sheetH}">\n`,
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="${sheetW * scale}${unit}" height="${sheetH * scale}${unit}" viewBox="0 0 ${sheetW * scale} ${sheetH * scale}">\n`,
+    `<g transform="scale(${scale})">\n`,
     trim
       ? `  ${bounds.svg(`fill="${bgColor}"`)}\n`
       : `  <rect width="${sheetW}" height="${sheetH}" fill="${bgColor}" />\n`,
@@ -35,11 +42,11 @@ export function generateSVGParts(holes, params, region = null, options = {}) {
   ];
 
   if (taperActive) {
-    parts.push(`  <g id="entry-side">\n`);
+    parts.push(`  <g id="HOLES" inkscape:label="HOLES" inkscape:groupmode="layer">\n`);
     holes.forEach(pt => {
       const topW = taperDirection === "Top larger" ? pt.w : pt.exitW;
       const topH = taperDirection === "Top larger" ? pt.h : pt.exitH;
-      if (topW > 0 && topH > 0)
+      if (enabled("HOLES") && topW > 0 && topH > 0)
         parts.push(
           holeSVGElement(
             pt.x,
@@ -50,16 +57,16 @@ export function generateSVGParts(holes, params, region = null, options = {}) {
             holeFill,
             "",
             pt.angle,
-            pt.holeRadius,
+            taperDirection === "Top larger" ? pt.holeRadius : pt.exitHoleRadius,
             topW === pt.w ? holeOutline(pt) : holeExitOutline(pt)
           )
         );
     });
-    parts.push(`  </g>\n  <g id="exit-side">\n`);
+    parts.push(`  </g>\n  <g id="HOLES_EXIT" inkscape:label="HOLES_EXIT" inkscape:groupmode="layer">\n`);
     holes.forEach(pt => {
       const botW = taperDirection === "Top larger" ? pt.exitW : pt.w;
       const botH = taperDirection === "Top larger" ? pt.exitH : pt.h;
-      if (botW > 0 && botH > 0)
+      if (enabled("HOLES_EXIT") && botW > 0 && botH > 0)
         parts.push(
           holeSVGElement(
             pt.x,
@@ -70,31 +77,69 @@ export function generateSVGParts(holes, params, region = null, options = {}) {
             'fill="none"',
             'stroke="#666" stroke-width="0.15"',
             pt.angle,
-            pt.exitHoleRadius,
+            taperDirection === "Top larger" ? pt.exitHoleRadius : pt.holeRadius,
             botW === pt.w ? holeOutline(pt) : holeExitOutline(pt)
           )
         );
     });
     parts.push(`  </g>\n`);
   } else {
-    holes.forEach(pt => {
-      parts.push(holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, holeFill, "", pt.angle, pt.holeRadius, holeOutline(pt)));
-    });
+    parts.push(`<g id="HOLES" inkscape:label="HOLES" inkscape:groupmode="layer">\n`);
+    if (enabled("HOLES"))
+      holes.forEach(pt => {
+        parts.push(
+          holeSVGElement(pt.x, pt.y, shape, pt.w, pt.h, holeFill, "", pt.angle, pt.holeRadius, holeOutline(pt))
+        );
+      });
   }
+  if (!taperActive) parts.push(`</g>\n`);
   // One closing chunk, whatever it carries: the cut outline of a trimmed
   // sheet and the keep-outs are a few paths, not a pattern's worth.
   let tail = `  </g>\n`;
-  if (trim) tail += `  <g id="outline">${bounds.svg('fill="none" stroke="#666" stroke-width="0.15"')}</g>\n`;
+  if (trim && enabled("OUTLINE"))
+    tail += `  <g id="OUTLINE" inkscape:label="OUTLINE" inkscape:groupmode="layer">${bounds.svg('fill="none" stroke="#666" stroke-width="0.15"')}</g>\n`;
   const keepouts = bounds.svgCutouts();
-  if (keepouts.length) {
-    tail += `  <g id="keepout" fill="none" stroke="#666" stroke-width="0.15" stroke-dasharray="1 1">\n`;
+  if (keepouts.length && enabled("KEEPOUT")) {
+    tail += `  <g id="KEEPOUT" inkscape:label="KEEPOUT" inkscape:groupmode="layer" fill="none" stroke="#666" stroke-width="0.15" stroke-dasharray="1 1">\n`;
     for (const d of keepouts) tail += `    <path d="${d}" />\n`;
     tail += `  </g>\n`;
   }
-  parts.push(`${tail}</svg>`);
+  if (!trim && enabled("OUTLINE"))
+    tail += `<g id="OUTLINE" inkscape:label="OUTLINE" inkscape:groupmode="layer"><rect width="${sheetW}" height="${sheetH}" fill="none" stroke="#666" stroke-width="0.15"/></g>\n`;
+  parts.push(`${tail}</g></svg>`);
   return parts;
 }
 
 export function generateSVGString(holes, params, region = null, options = {}) {
   return generateSVGParts(holes, params, region, options).join("");
+}
+
+function manufacturingSVGParts(holes, params, region, options) {
+  const scale = exportScale(options.units),
+    unit = options.units === "inch" ? "in" : "mm";
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="${params.sheetW * scale}${unit}" height="${params.sheetH * scale}${unit}" viewBox="0 0 ${params.sheetW * scale} ${params.sheetH * scale}">\n<g transform="scale(${scale})">\n`,
+  ];
+  const cut = options.mode === "cut";
+  if (!cut)
+    parts.push(
+      options.trim
+        ? (region ?? regionFromParams(params)).svg(`fill="${params.bgColor || "#c0c0c0"}"`)
+        : `<rect width="${params.sheetW}" height="${params.sheetH}" fill="${params.bgColor || "#c0c0c0"}"/>`
+    );
+  let layer = null;
+  for (const profile of manufacturingProfiles(holes, params, region, options)) {
+    if (profile.layer !== layer) {
+      if (layer) parts.push(`</g>\n`);
+      layer = profile.layer;
+      const filled = !cut && layer === "HOLES";
+      parts.push(
+        `<g id="${layer}" inkscape:label="${layer}" inkscape:groupmode="layer" fill="${filled ? params.holeColor || "#000000" : "none"}" stroke="${filled ? "none" : "#666"}" stroke-width="0.15">\n`
+      );
+    }
+    parts.push(profileSVG(profile) + "\n");
+  }
+  if (layer) parts.push(`</g>\n`);
+  parts.push(`</g></svg>`);
+  return parts;
 }

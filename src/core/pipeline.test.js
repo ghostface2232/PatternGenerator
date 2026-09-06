@@ -100,7 +100,7 @@ test("size variation scales holes and can cull below the floor", () => {
 test("SVG export is dimensioned in mm and has one element per active hole", () => {
   const { activeHoles, params } = computePattern(createDocument());
   const svg = generateSVGString(activeHoles, params);
-  assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="200mm" height="200mm"/);
+  assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"[^>]* width="200mm" height="200mm"/);
   assert.equal(svg.match(/<circle /g).length, 739);
 });
 
@@ -985,11 +985,11 @@ test("a speaker grille: an ellipse with a cutout, filled with a scatter and expo
   const svg = generateSVGString(activeHoles, params, region);
   assert.equal(svg.match(/<circle /g).length, activeHoles.length);
   assert.match(svg, /<clipPath id="perf-boundary"><path d="M [^"]+" fill-rule="evenodd" clip-rule="evenodd" \/><\/clipPath>/); // prettier-ignore
-  assert.match(svg, /<g id="keepout"/);
+  assert.match(svg, /<g id="KEEPOUT"/);
   // Trimmed, the region is the material: its outline is the background and
   // goes out as a cut path of its own.
   const trimmed = generateSVGString(activeHoles, params, region, { trim: true });
-  assert.match(trimmed, /<g id="outline">/);
+  assert.match(trimmed, /<g id="OUTLINE" inkscape:label="OUTLINE" inkscape:groupmode="layer">/);
   assert.doesNotMatch(trimmed, /<rect width="200" height="200"/);
 });
 
