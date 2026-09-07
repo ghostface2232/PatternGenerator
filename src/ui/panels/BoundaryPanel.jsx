@@ -3,7 +3,7 @@ import { Circle, Hexagon, RectangleHorizontal, SquarePen, Upload, X } from "luci
 import { BOUNDARY_SHAPES, MAX_BOUNDARY_POINTS, MAX_CUTOUTS } from "../../core/constants.js";
 import { useEditor } from "../EditorContext.jsx";
 import { LinkButton, SegRow, SliderRow, Toggle } from "../controls/index.js";
-import { MONO } from "../theme.js";
+import { actionButtonStyle, chipStyle, ghostButtonStyle, iconButtonStyle, rowLabelStyle } from "../controls/index.js"; // prettier-ignore
 import { Section, groupLabelStyle, hintStyle, noteStyle, subLabelStyle } from "./Section.jsx";
 
 const CUTOUT_ICON = { Circle, Rectangle: RectangleHorizontal, Polygon: Hexagon };
@@ -23,53 +23,12 @@ export function BoundaryPanel() {
   const polygonDrawn = isPolygon && boundary.rings.length > 0;
   const vertices = boundary.rings.reduce((n, ring) => n + ring.length, 0);
   const editButton = (on, onClick, label, text) => (
-    <button
-      onClick={onClick}
-      aria-label={label}
-      aria-pressed={on}
-      style={{
-        flex: 1,
-        height: 31,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 5,
-        border: `1px solid ${on ? theme.accent : theme.border}`,
-        borderRadius: 4,
-        background: on ? theme.accentBg : theme.controlBg,
-        color: on ? theme.accent : theme.textPrimary,
-        fontSize: 10,
-        cursor: "pointer",
-        fontFamily: MONO,
-      }}
-    >
+    <button onClick={onClick} aria-label={label} aria-pressed={on} style={actionButtonStyle(theme, on, { flex: 1 })}>
       {text}
     </button>
   );
-  const chip = (active, extra = {}) => ({
-    border: `1px solid ${active ? theme.accent : theme.border}`,
-    borderRadius: 4,
-    background: active ? theme.accentBg : "transparent",
-    color: active ? theme.accent : theme.textSecondary,
-    fontSize: 9,
-    cursor: "pointer",
-    fontFamily: MONO,
-    padding: "6px 2px",
-    ...extra,
-  });
-  const iconBtn = (extra = {}) => ({
-    width: 28,
-    height: 28,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    border: `1px solid ${theme.border}`,
-    borderRadius: 4,
-    background: theme.controlBg,
-    color: theme.textPrimary,
-    cursor: "pointer",
-    ...extra,
-  });
+  const chip = (active, extra = {}) => chipStyle(theme, active, extra);
+  const iconBtn = (extra = {}) => iconButtonStyle(theme, extra);
 
   const importFile = async file => {
     if (!file) return;
@@ -84,7 +43,7 @@ export function BoundaryPanel() {
   const update = (patch, live = false) => actions.updateCutout(selectedCutout.id, patch, live);
 
   return (
-    <Section title="Sheet & Boundary" theme={theme}>
+    <Section id="boundary" title="Sheet & Boundary" theme={theme}>
       <SliderRow
         label="Panel Width"
         value={sheet.w}
@@ -123,14 +82,15 @@ export function BoundaryPanel() {
               actions.toggleBoundaryEditMode,
               "Edit the boundary on the canvas",
               <>
-                <SquarePen size={11} /> {ui.boundaryEditMode ? "Editing Canvas" : "Edit on Canvas"}
+                <SquarePen size={11} /> {ui.boundaryEditMode ? "Editing Canvas · B" : "Edit on Canvas · B"}
               </>
             )}
             <button
+              className="pg-hover"
               onClick={() => fileInput.current?.click()}
               aria-label="Import an SVG outline as the boundary"
               title="The closed outlines of an SVG file become the boundary"
-              style={{ ...chip(false, { flex: 1, height: 31, padding: "0 6px" }), display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }} // prettier-ignore
+              style={{ ...chip(false, { flex: 1, height: 30, padding: "0 6px" }), display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }} // prettier-ignore
             >
               <Upload size={11} /> Import SVG
             </button>
@@ -156,14 +116,15 @@ export function BoundaryPanel() {
             )}
           </div>
           <div style={hintStyle(theme)}>
-            Drag a vertex on the canvas; double-click an edge to add one, or a vertex to drop it. Read by the even-odd
-            rule, so an outline inside another is a counter. The margins do not apply to a polygon, and the sheet clips
-            whatever runs past it.
+            Drag a vertex on the canvas (Shift squares the edge); double-click an edge to add one, or a vertex to drop
+            it. Read by the even-odd rule, so an outline inside another is a counter. The margins do not apply to a
+            polygon, and the sheet clips whatever runs past it.
           </div>
           <button
+            className="pg-hover"
             onClick={actions.resetBoundaryOutline}
             aria-label="Reset the boundary to the rectangle"
-            style={chip(false, { width: "100%", height: 26, marginBottom: 12 })}
+            style={ghostButtonStyle(theme, { width: "100%", marginBottom: 12 })}
           >
             Back to the rectangle
           </button>
@@ -248,13 +209,14 @@ export function BoundaryPanel() {
                   ? `At most ${MAX_CUTOUTS} cutouts`
                   : `A ${shape.toLowerCase()} keep-out at the centre, then dragged on the canvas`
               }
+              className="pg-hover"
               style={chip(false, {
-                height: 36,
+                height: 40,
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: 2,
+                gap: 3,
                 opacity: full ? 0.4 : 1,
                 cursor: full ? "default" : "pointer",
               })}
@@ -273,7 +235,7 @@ export function BoundaryPanel() {
               actions.toggleBoundaryEditMode,
               "Edit the boundary on the canvas",
               <>
-                <SquarePen size={11} /> {ui.boundaryEditMode ? "Editing Canvas" : "Edit on Canvas"}
+                <SquarePen size={11} /> {ui.boundaryEditMode ? "Editing Canvas · B" : "Edit on Canvas · B"}
               </>
             )}
           <div style={{ display: "flex", flexDirection: "column", gap: 4, margin: "10px 0 12px" }}>
@@ -398,14 +360,15 @@ export function BoundaryPanel() {
           )}
           {selectedCutout?.shape === "Polygon" && (
             <div style={hintStyle(theme)}>
-              A polygon cutout is shaped on the canvas: drag its vertices, double-click an edge to add one.
+              A polygon cutout is shaped on the canvas: drag it by its body, drag its vertices, double-click an edge to
+              add one. Delete removes the selected cutout.
             </div>
           )}
         </>
       )}
 
-      <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
-        <span style={{ fontSize: 11, color: theme.textSecondary }}>Trim sheet to boundary</span>
+      <label style={{ ...rowLabelStyle(theme), marginTop: 4, marginBottom: 0 }}>
+        <span>Trim sheet to boundary</span>
         <Toggle
           value={boundary.trim}
           onChange={trim => api.set("boundary.trim", trim)}
@@ -413,7 +376,7 @@ export function BoundaryPanel() {
           label="Trim sheet to boundary"
         />
       </label>
-      <div style={{ fontSize: 9, color: theme.textFaint, marginTop: 6, lineHeight: 1.4 }}>
+      <div style={{ fontSize: 10, color: theme.textMuted, marginTop: 8, lineHeight: 1.5 }}>
         {boundary.trim
           ? "The boundary is the part's outline: the export writes it as a cut path and the metal outside it is gone."
           : "The sheet stays rectangular; the boundary only says where the holes go."}

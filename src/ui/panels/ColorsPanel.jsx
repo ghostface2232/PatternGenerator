@@ -5,7 +5,7 @@ import { Section } from "./Section.jsx";
 export function ColorsPanel() {
   const { doc, api, theme } = useEditor();
   return (
-    <Section title="Colors" theme={theme}>
+    <Section id="colors" title="Colors" theme={theme}>
       <div style={{ display: "flex", gap: 16 }}>
         <ColorField
           label="Hole Color"

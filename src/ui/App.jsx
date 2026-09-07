@@ -33,14 +33,24 @@ import {
   touchRecent,
 } from "../core/persistence.js";
 import { generateHoles, layoutPlacementChannels } from "../layouts/index.js";
-import { addPathVertex, newPath, removePathVertex } from "../layouts/path-gizmo.js";
+import {
+  addPathVertex,
+  appendPathVertex,
+  insertPathVertexAt,
+  newPath,
+  removePathVertex,
+  removePathVertexAt,
+  startPath,
+  translatePath,
+} from "../layouts/path-gizmo.js";
 import { createCutout } from "../geometry/boundary.js";
 import { defaultBoundaryRings, insertBoundaryVertex, nearestBoundaryEdge, removeBoundaryVertex } from "../geometry/boundary-gizmo.js"; // prettier-ignore
 import { inspectSVG, svgToRings, svgToUnitShape } from "../geometry/svg-import.js";
 import { layersToUnitShape } from "../geometry/custom-shape.js";
 import { findOverlaps } from "../geometry/ligament.js";
 import { VARIATION_PRESETS, createVariationLayer, randomizeVariationLayer } from "../fields/variation-engine.js";
-import { EDITABLE_CHANNELS, MAX_CONTROLLERS, createController, imageChannels } from "../fields/controllers.js";
+import { EDITABLE_CHANNELS, MAX_CONTROLLERS, createController, halftonePreset, imageChannels } from "../fields/controllers.js"; // prettier-ignore
+import { insertPolylinePointAt, removePolylinePointAt, translateController } from "../fields/controller-gizmo.js";
 import { readImageFile, splitImageMaps, useImageMaps } from "./useImageMaps.js";
 import { ExportDialog } from "./ExportDialog.jsx";
 import { generateDXFParts } from "../export/dxf.js";
@@ -53,10 +63,25 @@ import { EditorContext } from "./EditorContext.jsx";
 import { GlobalStyles } from "./GlobalStyles.jsx";
 import { TopBar } from "./TopBar.jsx";
 import { CanvasView } from "./canvas/CanvasView.jsx";
+import { ModeRail } from "./ModeRail.jsx";
 import { Sidebar } from "./Sidebar.jsx";
 import { ShapeEditor } from "./ShapeEditor.jsx";
+import { CommandPalette } from "./CommandPalette.jsx";
 
 const AUTOSAVE_MS = 300;
+// Which inspector sections are folded up. UI preference, kept across reloads
+// but never in the document.
+const STORAGE_KEY_SECTIONS = "perf-pattern:ui.sections";
+
+function loadSectionState() {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY_SECTIONS);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 function storage() {
   try {
@@ -156,6 +181,20 @@ export default function App() {
   const [shapeEditorOpen, setShapeEditorOpen] = useState(false);
   const [activeChannel, setActiveChannel] = useState(EDITABLE_CHANNELS[0]);
   const [fieldTool, setFieldTool] = useState(null); // armed kind for click-to-add on the canvas
+  // The pen: while armed, each canvas click in Path mode appends a vertex to
+  // the selected curve (or starts a new one).
+  const [pathTool, setPathTool] = useState(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  // Which inspector sections are folded. `closed[id] === true` folds it; every
+  // section starts open.
+  const [closedSections, setClosedSections] = useState(loadSectionState);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_KEY_SECTIONS, JSON.stringify(closedSections));
+    } catch {
+      // A full or unavailable store simply forgets the fold state.
+    }
+  }, [closedSections]);
   // Which controller the inspector is showing. UI state, like every other
   // selection and mode here: in the document it would be one undo step per
   // click, and clicking between controllers would evict real edits from a
@@ -192,6 +231,7 @@ export default function App() {
   // since the re-render happens after it.
   if (pathEditModeOn && layout.type !== "Path") setPathEditMode(false);
   const pathEditMode = pathEditModeOn && layout.type === "Path";
+  if (pathTool && !pathEditMode) setPathTool(null);
   // Boundary editing, for the same reason: undo, "Back to the rectangle" or
   // removing the last cutout can leave nothing on the canvas to edit, and the
   // panel shows no control to leave the mode by when there is nothing.
@@ -657,6 +697,39 @@ export default function App() {
         d => mapControllers(d, c => (c.id === id ? { ...c, ...patch } : c)),
         live ? { merge: `fields.${id}.${Object.keys(patch).sort().join(",")}` } : {}
       );
+    // Dragging a controller by its body, and the double-click edits on a
+    // polyline's vertices — the same idiom as the Path curves and the boundary.
+    const moveController = (id, dx, dy, shift) => {
+      const controller = api.ref.current.fields.controllers.find(c => c.id === id);
+      const patch = controller && translateController(controller, dx, dy, shift);
+      if (patch) updateController(id, patch, true);
+    };
+    const insertControllerVertexAt = (id, x, y, tolerance) => {
+      const controller = api.ref.current.fields.controllers.find(c => c.id === id);
+      const patch = controller && insertPolylinePointAt(controller, x, y, tolerance);
+      if (patch) updateController(id, patch);
+      return !!patch;
+    };
+    const removeControllerVertexAt = (id, index) => {
+      const controller = api.ref.current.fields.controllers.find(c => c.id === id);
+      const patch = controller && removePolylinePointAt(controller, index);
+      if (patch) updateController(id, patch);
+      return !!patch;
+    };
+    // The halftone preset: the picture's whole tonal range across the channel,
+    // and its rectangle fitted to the perforation area.
+    const applyHalftonePreset = id => {
+      const controller = api.ref.current.fields.controllers.find(c => c.id === id);
+      if (!controller || controller.kind !== "image") return;
+      const preset = halftonePreset(controller.channel);
+      updateController(id, { target: preset.target, image: { ...controller.image, ...preset.image } });
+    };
+    const fitImageToArea = id => {
+      const controller = api.ref.current.fields.controllers.find(c => c.id === id);
+      if (!controller || controller.kind !== "image") return;
+      const placement = { x: perfArea.x, y: perfArea.y, w: perfArea.w, h: perfArea.h, rotation: 0 };
+      updateController(id, { image: { ...controller.image, placement } });
+    };
     const removeController = id =>
       api.update(d => {
         const controllers = d.fields.controllers.filter(c => c.id !== id);
@@ -763,10 +836,49 @@ export default function App() {
       if (!paths[index]) return;
       setPaths(paths.map((path, i) => (i === index ? { ...path, closed: !path.closed } : path)));
     };
+    // The canvas edits Figma taught everyone: a double-click on the curve puts a
+    // vertex there, on a vertex takes it away, the pen appends one per click.
+    const insertPathVertexAtPoint = (index, x, y, tolerance) => {
+      const paths = livePaths();
+      if (!paths[index]) return false;
+      const next = insertPathVertexAt(paths[index], x, y, api.ref.current.layout.path.smooth !== false, tolerance);
+      if (next) setPaths(paths.map((path, i) => (i === index ? next : path)));
+      return !!next;
+    };
+    const removePathVertexAtIndex = (index, pointIndex) => {
+      const paths = livePaths();
+      if (!paths[index]) return false;
+      const next = removePathVertexAt(paths[index], pointIndex);
+      if (next) setPaths(paths.map((path, i) => (i === index ? next : path)));
+      return !!next;
+    };
+    // A pen click: extends the selected curve, or starts a new one when there
+    // is none yet (or the selected one is already closed). Returns the index of
+    // the curve the vertex went on.
+    const penClick = (x, y, shift) => {
+      const paths = livePaths();
+      const current = paths[selectedPath];
+      if (!current || current.closed) {
+        if (paths.length >= MAX_PATHS) return null;
+        api.set("layout.path.paths", [...paths, startPath(x, y)]);
+        setSelectedPath(paths.length);
+        return paths.length;
+      }
+      const next = appendPathVertex(current, x, y, shift);
+      if (!next) return null;
+      setPaths(paths.map((path, i) => (i === selectedPath ? next : path)));
+      return selectedPath;
+    };
+    const movePath = (index, dx, dy, shift) => {
+      const paths = livePaths();
+      if (!paths[index]) return;
+      setPaths(translatePath(paths, index, dx, dy, shift), true);
+    };
     const resetView = () => {
       setZoom(1);
       setPan({ x: 0, y: 0 });
     };
+    const zoomBy = factor => setZoom(z => Math.min(20, Math.max(0.1, z * factor)));
 
     // ─── Boundary ──────────────────────────────────────────────────
     // The outline and the cutouts live in the document, so every edit is an
@@ -862,7 +974,66 @@ export default function App() {
       return true;
     };
 
+    // ─── Modes, as one switch ──────────────────────────────────────
+    // The canvas modes are mutually exclusive, and each entry point above
+    // clears the others. The rail, the shortcuts and the command palette speak
+    // this one verb instead of five toggles.
+    const setMode = mode => {
+      if (mode === "select") {
+        setHoleRemovalMode(false);
+        setVariationEditMode(false);
+        setPathEditMode(false);
+        setBoundaryEditMode(false);
+        enterFieldEditMode(false);
+        setPathTool(null);
+        return;
+      }
+      if (mode === "fields") enterFieldEditMode(true);
+      else if (mode === "variation") enterVariationEditMode(true);
+      else if (mode === "remove") setHoleRemoval(true);
+      else if (mode === "path") {
+        if (api.ref.current.layout.type !== "Path") api.patch({ "layout.type": "Path", presetIndex: 0 });
+        if (!pathEditModeOn) togglePathEditMode();
+      } else if (mode === "boundary") {
+        // With nothing to edit yet, editing the boundary MEANS drawing one: the
+        // rectangle becomes a polygon (an octagon in the frame) and its
+        // vertices become the thing on the canvas.
+        if (!boundaryEditable) setBoundaryShape("Polygon");
+        enterBoundaryEditMode(true);
+      }
+    };
+    const toggleSection = id => setClosedSections(current => ({ ...current, [id]: !current[id] }));
+    // Unfold a section and bring it into view: what the rail does for the
+    // panel that owns the mode it just entered.
+    const revealSection = id => {
+      setClosedSections(current => (current[id] ? { ...current, [id]: false } : current));
+      window.requestAnimationFrame(() => {
+        document.getElementById(`section-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    };
+    // Delete / Backspace on the canvas: whatever is selected in the current mode.
+    const deleteSelection = () => {
+      if (fieldEditMode && selectedControllerId) removeController(selectedControllerId);
+      else if (boundaryEditMode && selectedCutoutId) removeCutout(selectedCutoutId);
+      else if (pathEditMode && api.ref.current.layout.path.paths.length) removePath(selectedPath);
+    };
+
     return {
+      setMode,
+      toggleSection,
+      revealSection,
+      deleteSelection,
+      setPathTool,
+      penClick,
+      movePath,
+      insertPathVertexAtPoint,
+      removePathVertexAtIndex,
+      moveController,
+      insertControllerVertexAt,
+      removeControllerVertexAt,
+      applyHalftonePreset,
+      fitImageToArea,
+      zoomBy,
       setShape,
       importHoleSVG,
       applyShapeLayers,
@@ -922,7 +1093,7 @@ export default function App() {
       removeBoundaryVertexAt,
       importBoundarySVG,
     };
-  }, [doc, api, history, variationEditMode, fieldEditMode, pathEditModeOn, boundaryEditMode, selectedCutoutId, geometry.region, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
+  }, [doc, api, history, variationEditMode, fieldEditMode, pathEditModeOn, pathEditMode, boundaryEditMode, boundaryEditable, selectedCutoutId, selectedPath, geometry.region, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
@@ -1027,39 +1198,88 @@ export default function App() {
     [saveStatus, recent, loadDocument, openFile, api, documentHasAssets, doc]
   );
 
-  // Keyboard shortcuts: undo / redo / save. Text fields keep their own undo.
+  // The current canvas mode, as one word. The rail, the badge and the
+  // shortcuts read it; `actions.setMode` writes it.
+  const mode = fieldEditMode
+    ? "fields"
+    : variation.enabled && variationEditMode
+      ? "variation"
+      : pathEditMode
+        ? "path"
+        : boundaryEditMode
+          ? "boundary"
+          : holeRemovalMode
+            ? "remove"
+            : "select";
+
+  // Keyboard shortcuts. Modifier chords: undo / redo / save / export / palette.
+  // Bare letters switch modes and tools, the way Figma's do, and never fire
+  // while a text field has the focus.
   useEffect(() => {
     const onKey = e => {
       // The shape editor is modal: its stack is a snapshot of the document,
       // and undoing the document beneath it would have Apply write stale
-      // layers over a change the user never saw.
-      if (shapeEditorOpen) {
-        if (e.key === "Escape") setShapeEditorOpen(false);
-        return;
-      }
+      // layers over a change the user never saw. It handles its own keys.
+      if (shapeEditorOpen || exportOpen) return;
       const mod = e.ctrlKey || e.metaKey;
-      if (!mod) return;
       // Only text-editing fields keep the browser's own undo; sliders and buttons pass it through.
       const t = e.target;
       const inField =
         t?.isContentEditable ||
         t?.tagName === "TEXTAREA" ||
+        t?.tagName === "SELECT" ||
         (t?.tagName === "INPUT" && !/^(range|checkbox|radio|button|file|color)$/.test(t.type));
       const key = e.key.toLowerCase();
-      if (key === "s") {
-        e.preventDefault();
-        project.saveFile();
-      } else if (!inField && key === "z" && !e.shiftKey) {
-        e.preventDefault();
-        api.undo();
-      } else if (!inField && ((key === "z" && e.shiftKey) || key === "y")) {
-        e.preventDefault();
-        api.redo();
+      if (mod) {
+        if (key === "s") {
+          e.preventDefault();
+          project.saveFile();
+        } else if (key === "k") {
+          e.preventDefault();
+          setPaletteOpen(open => !open);
+        } else if (key === "e" && !inField) {
+          e.preventDefault();
+          setExportOpen(true);
+        } else if (!inField && key === "z" && !e.shiftKey) {
+          e.preventDefault();
+          api.undo();
+        } else if (!inField && ((key === "z" && e.shiftKey) || key === "y")) {
+          e.preventDefault();
+          api.redo();
+        }
+        return;
       }
+      if (paletteOpen || inField || e.altKey) return;
+      const layoutIsPath = api.ref.current.layout.type === "Path";
+      if (e.key === "Escape") {
+        // Escape backs out one level: the armed tool first, then the mode.
+        if (fieldTool) setFieldTool(null);
+        else if (pathTool) setPathTool(null);
+        else actions.setMode("select");
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        actions.deleteSelection();
+      } else if (key === "v") actions.setMode("select");
+      else if (key === "f") actions.setMode("fields");
+      else if (key === "g") actions.setMode("variation");
+      else if (key === "b") actions.setMode("boundary");
+      else if (key === "r") actions.setMode("remove");
+      else if (key === "p" && layoutIsPath) {
+        // P in Path mode arms the pen; in any other mode it enters Path editing first.
+        if (mode === "path") setPathTool(tool => (tool === "pen" ? null : "pen"));
+        else actions.setMode("path");
+      } else if (key === "0") actions.resetView();
+      else if (key === "=" || key === "+") actions.zoomBy(1.25);
+      else if (key === "-") actions.zoomBy(0.8);
+      else if (key === "h" && e.shiftKey) setShowHud(v => !v);
+      else if (key === "1" || key === "2" || key === "3" || key === "4") {
+        // The four channels, when editing fields.
+        if (mode === "fields") actions.selectChannel(EDITABLE_CHANNELS[Number(key) - 1]);
+      } else return;
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [api, project, shapeEditorOpen]);
+  }, [api, project, shapeEditorOpen, exportOpen, paletteOpen, actions, fieldTool, pathTool, mode]);
 
   // Drop a document file anywhere on the page to open it — or an image, which
   // goes to an image controller instead of being turned away.
@@ -1107,6 +1327,13 @@ export default function App() {
     setDark,
     showHud,
     setShowHud,
+    mode,
+    pathTool,
+    setPathTool,
+    paletteOpen,
+    setPaletteOpen,
+    closedSections,
+    openExport: () => setExportOpen(true),
     holeRemovalMode,
     variationEditMode,
     variationAdvanced,
@@ -1163,10 +1390,10 @@ export default function App() {
         style={{
           display: "flex",
           flexDirection: "column",
-          gap: 10,
+          gap: 8,
           width: "100vw",
           height: "100vh",
-          padding: 10,
+          padding: 8,
           background: theme.appBg,
           color: theme.textPrimary,
           fontFamily: `${MONO}, -apple-system, sans-serif`,
@@ -1177,13 +1404,17 @@ export default function App() {
       >
         <GlobalStyles theme={theme} />
         <TopBar />
-        {/* Body: floating sidebar (left) + floating canvas (right, via flex order) */}
+        {/* Body: the mode rail on the left, the canvas in the middle, the
+            inspector on the right — the arrangement every CAD and design tool
+            settles on, so the hand knows where things are before the eye does. */}
         <div style={{ display: "flex", flex: 1, minHeight: 0, gap: 10 }}>
+          <ModeRail />
           <CanvasView />
           <Sidebar />
         </div>
         {shapeEditorOpen && <ShapeEditor />}
         {exportOpen && <ExportDialog onClose={() => setExportOpen(false)} />}
+        {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
       </div>
     </EditorContext.Provider>
   );

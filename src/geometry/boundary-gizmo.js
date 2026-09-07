@@ -5,14 +5,21 @@
 import { clamp } from "../core/math.js";
 import { DOC_LIMITS, MAX_BOUNDARY_POINTS, MAX_CUTOUT_POINTS } from "../core/constants.js";
 import { distPointSeg } from "./polygon.js";
+import { SNAP_GRID_MM, lockAngleFrom, snapTo as snap } from "./snap.js";
 
 const COORD = DOC_LIMITS["boundary.coord"];
 const SIZE = DOC_LIMITS["cutout.size"];
 // Everything a drag writes is clamped to the range validateDocument uses, or
 // the editor could not read back its own output after a reload.
 const coord = value => clamp(value, COORD[0], COORD[1]);
-const SNAP_GRID_MM = 1;
-const snap = (value, step) => Math.round(value / step) * step;
+
+// The vertex a ring's vertex is locked against while Shift is held: the
+// previous one, wrapping round the ring, as a pair.
+const ringAnchor = (ring, index) => {
+  if (ring.length < 2) return null;
+  const [x, y] = ring[(index - 1 + ring.length) % ring.length];
+  return { x, y };
+};
 
 // A polygon boundary to start from when the shape switches to Polygon with
 // nothing drawn: an octagon inscribed in the frame, which is recognisably not
@@ -78,17 +85,23 @@ export function hitTestBoundary(boundary, x, y, scale, hitRadiusPx = 14) {
 }
 
 // Dragging a handle → the boundary fields it changes, or null for a handle
-// that belongs to nothing here. Shift snaps a position to the millimetre grid.
+// that belongs to nothing here. Shift snaps a position to the millimetre grid,
+// and locks a vertex to 45° from the one before it, so an edge dragged with
+// Shift comes out level or square.
 export function moveBoundaryHandle(boundary, handle, x, y, shift = false) {
   const px = coord(shift ? snap(x, SNAP_GRID_MM) : x);
   const py = coord(shift ? snap(y, SNAP_GRID_MM) : y);
+  const lockedVertex = ring => {
+    if (!shift) return [px, py];
+    const locked = lockAngleFrom(ringAnchor(ring, handle.index), x, y);
+    return [coord(locked.x), coord(locked.y)];
+  };
   if (handle.role === "vertex" && handle.cutout === undefined) {
     const rings = boundary.rings || [];
     if (!rings[handle.ring]?.[handle.index]) return null;
+    const vertex = lockedVertex(rings[handle.ring]);
     return {
-      rings: rings.map((ring, r) =>
-        r !== handle.ring ? ring : ring.map((p, i) => (i !== handle.index ? p : [px, py]))
-      ),
+      rings: rings.map((ring, r) => (r !== handle.ring ? ring : ring.map((p, i) => (i !== handle.index ? p : vertex)))),
     };
   }
   const cutouts = boundary.cutouts || [];
@@ -97,7 +110,8 @@ export function moveBoundaryHandle(boundary, handle, x, y, shift = false) {
   let next;
   if (handle.role === "vertex") {
     if (!cutout.points?.[handle.index]) return null;
-    next = { ...cutout, points: cutout.points.map((p, i) => (i !== handle.index ? p : [px, py])) };
+    const vertex = lockedVertex(cutout.points);
+    next = { ...cutout, points: cutout.points.map((p, i) => (i !== handle.index ? p : vertex)) };
   } else if (handle.role === "move") {
     next = { ...cutout, x: px, y: py };
   } else if (handle.role === "size") {

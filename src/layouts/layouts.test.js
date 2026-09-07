@@ -19,7 +19,18 @@ import { boundaryPolygon } from "./voronoi.js";
 import { compileControllers, imageChannels } from "../fields/controllers.js";
 import { DOC_LIMITS, MAX_PATHS, MAX_PATH_POINTS } from "../core/constants.js";
 import { patternSignature } from "../core/pipeline.js";
-import { addPathVertex, hitTestPath, movePathVertex, newPath, removePathVertex } from "./path-gizmo.js";
+import {
+  addPathVertex,
+  appendPathVertex,
+  hitTestPath,
+  insertPathVertexAt,
+  movePathVertex,
+  newPath,
+  removePathVertex,
+  removePathVertexAt,
+  startPath,
+  translatePath,
+} from "./path-gizmo.js";
 
 const doc = (patch = {}) => patchIn(createDocument(), patch);
 const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -724,6 +735,29 @@ test("the path gizmo moves, adds and drops vertices within the document's range"
   assert.deepEqual(hitTestPath(paths, 91, 11, 1, 14), { pathIndex: 0, pointIndex: 1 });
   assert.equal(hitTestPath(paths, 50, 50, 1, 14), null);
   assert.equal(hitTestPath(paths, 91, 11, 100, 14), null, "zoomed in, the same click is 1.4 mm off and misses");
+
+  // Shift locks a dragged vertex to 45° from its neighbour: from (10, 10), a
+  // cursor at (88, 13) is level, 78 mm along.
+  const level = movePathVertex(paths, 0, 1, 88, 13, true)[0].points[1];
+  assert.deepEqual(level, { x: 88, y: 10 });
+  // The whole curve moves as one piece, and Shift keeps that move on an axis.
+  assert.deepEqual(translatePath(paths, 0, 5, 5)[0].points[0], { x: 15, y: 15 });
+  assert.deepEqual(translatePath(paths, 0, 10, 0.5, true)[0].points[0].y, 10);
+  // A double-click on the curve puts a vertex on the span under the pointer
+  // (measured on the drawn, unsmoothed line here), and on a vertex takes it away.
+  const inserted = insertPathVertexAt(paths[0], 90, 50, false, 5);
+  assert.equal(inserted.points.length, 4);
+  assert.deepEqual(inserted.points[2], { x: 90, y: 50 });
+  assert.equal(insertPathVertexAt(paths[0], 50, 50, false, 5), null, "too far from the curve");
+  assert.deepEqual(removePathVertexAt(inserted, 2), paths[0]);
+  assert.equal(removePathVertexAt({ points: paths[0].points.slice(0, 2) }, 0), null);
+  // The pen appends after the last vertex, locked to 45° with Shift.
+  const pen = appendPathVertex(paths[0], 91.5, 130, true);
+  assert.deepEqual(pen.points[3], { x: 90, y: 130 });
+  assert.deepEqual(startPath(3, 4), { points: [{ x: 3, y: 4 }], closed: false });
+  let full = paths[0];
+  while (appendPathVertex(full, 0, 0)) full = appendPathVertex(full, 0, 0);
+  assert.equal(full.points.length, MAX_PATH_POINTS);
 });
 
 test("a closed path divides its own loop instead of leaving a seam", () => {

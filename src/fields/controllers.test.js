@@ -364,6 +364,25 @@ test("an image controller maps brightness to the channel inside its rectangle", 
   near(evaluateChannel([point], "size", 0, 50), 3);
   const black = createImageMap(1, 1, Float32Array.from([0]));
   near(evaluateChannel([point, controller], "size", 0, 50, { imageMaps: { img: black } }), 3);
+
+  // The halftone mode is the other reading: the picture SETS the value, `low`
+  // at black and the target at white, wherever it covers — so a dark pixel can
+  // be a small hole, which is what a halftone is.
+  const halftone = { ...controller, image: { ...controller.image, mode: "halftone", low: 0.2 } };
+  near(evaluateChannel([halftone], "size", 0, 50, ctx), 0.2);
+  near(evaluateChannel([halftone], "size", 100, 50, ctx), 3);
+  near(evaluateChannel([halftone], "size", 50, 50, ctx), 1.6);
+  near(evaluateChannel([halftone], "size", 150, 50, ctx), 1); // outside it still reads the base
+  // At full weight it shares the ground with the point rather than yielding it.
+  near(evaluateChannel([point, halftone], "size", 0, 50, { imageMaps: { img: black } }), 1.6);
+  // A halftone whose ends both sit on neutral drives nothing, and says so.
+  const flat = { ...halftone, target: 1, image: { ...halftone.image, low: 1 } };
+  assert.equal(compiledDrivesChannel(compileControllers([flat], ctx), "size"), false);
+  assert.equal(compiledDrivesChannel(compileControllers([{ ...flat, image: { ...flat.image, low: 0.5 } }], ctx), "size"), true); // prettier-ignore
+  // A fresh image controller is a halftone with its dark end on neutral.
+  const fresh = createController({ channel: "size", kind: "image", area: AREA });
+  assert.equal(fresh.image.mode, "halftone");
+  assert.equal(fresh.image.low, 1);
 });
 
 test("new controllers land inside the area they are given, with usable defaults", () => {

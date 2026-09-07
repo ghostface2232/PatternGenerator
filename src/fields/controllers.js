@@ -46,6 +46,19 @@ export const imageChannels = (placementChannels = ["spacing"]) =>
   EDITABLE_CHANNELS.filter(channel => !placementChannels.includes(channel));
 export const CONTROLLER_KINDS = ["point", "line", "curve", "polyline", "image"];
 export const FALLOFFS = ["smooth", "linear", "hard"];
+// How an image reads its pixels into the channel.
+//
+//   halftone  the picture SETS the value: black reads `image.low`, white reads
+//             `target`, a midtone the value between — at full weight wherever
+//             the rectangle covers, which is what turns a photograph into a
+//             halftone of hole sizes. New image controllers start here.
+//   mask      the picture is the WEIGHT: brightness is how hard the controller
+//             pulls toward `target`, a black pixel being no pull at all, the
+//             way a distant point is. This composes with other controllers on
+//             the same ground (an all-black image holds nothing down), and it
+//             is what every image controller did before the halftone mode
+//             existed, so documents from then keep it.
+export const IMAGE_MODES = ["halftone", "mask"];
 // -1 / 0 / +1 — which side of a line, curve or polyline the controller reaches.
 // 0 is both sides; the sign is the side the geometry's own normal points to.
 export const ONE_SIDED_VALUES = [-1, 0, 1];
@@ -230,7 +243,12 @@ export function compileControllers(controllers, ctx = {}) {
       // No decoded bitmap (a share link drops them, and decoding is async) →
       // the controller is inert rather than a hard zero over its rectangle.
       if (!map) continue;
-      entry.image = { map, placement: source.image?.placement, transfer: controller.image };
+      const base = channelBase(controller.channel);
+      const halftone = controller.image?.mode === "halftone";
+      const low = Number.isFinite(controller.image?.low) ? controller.image.low : base;
+      entry.image = { map, placement: source.image?.placement, transfer: controller.image, halftone, low };
+      // A halftone whose two ends both sit on the neutral value sets nothing.
+      if (halftone && low === base && controller.target === base) continue;
     } else {
       const raw = Array.isArray(source.geometry?.points) ? source.geometry.points : [];
       const points = raw.filter(p => p && Number.isFinite(p.x) && Number.isFinite(p.y));
@@ -249,7 +267,9 @@ export function compileControllers(controllers, ctx = {}) {
 // statistics onto the counted-OAR path, which reports a slightly different
 // figure for the same geometry — the reading would move without a hole moving.
 export function compiledDrivesChannel(compiled, channel, base = channelBase(channel)) {
-  return compiled.some(entry => entry.channel === channel && entry.target !== base);
+  return compiled.some(
+    entry => entry.channel === channel && (entry.target !== base || (entry.image?.halftone && entry.image.low !== base))
+  );
 }
 
 // ─── Evaluation ───────────────────────────────────────────────────────
@@ -271,15 +291,23 @@ export function evaluateCompiled(compiled, channel, x, y, base = channelBase(cha
     if (entry.image) {
       const cover = imageWeightAt(entry.image.map, entry.image.placement, entry.image.transfer, x, y);
       if (cover === null) continue;
-      // Brightness IS the weight, so a dark pixel means "no influence" the same
-      // way a distant point does. Blending it as full weight toward the base
-      // instead would let a black image quietly hold down every other
-      // controller over the same ground — measured, an all-black image halved a
-      // point controller's effect. On its own the two forms agree exactly
-      // (base·(1−sc) + sc·t is the same either way); they differ only in
-      // company, and only one of them composes.
-      weight = entry.strength * cover;
-      target = entry.target;
+      if (entry.image.halftone) {
+        // The picture sets the value: `low` at black, `target` at white, at
+        // full weight wherever it covers. A halftone has to be able to make a
+        // dark pixel a SMALL hole, which no blend toward the base can say.
+        weight = entry.strength;
+        target = entry.image.low + (entry.target - entry.image.low) * cover;
+      } else {
+        // Brightness IS the weight, so a dark pixel means "no influence" the
+        // same way a distant point does. Blending it as full weight toward the
+        // base instead would let a black image quietly hold down every other
+        // controller over the same ground — measured, an all-black image halved
+        // a point controller's effect. On its own the two forms agree exactly
+        // (base·(1−sc) + sc·t is the same either way); they differ only in
+        // company, and only one of them composes.
+        weight = entry.strength * cover;
+        target = entry.target;
+      }
     } else {
       weight = polylineWeight(entry.points, x, y, entry.radius, entry.falloff, entry.oneSided) * entry.strength;
       target = entry.target;
@@ -341,6 +369,18 @@ export function defaultGeometry(kind, area) {
   return { points: [] };
 }
 
+// The halftone preset: the picture's full tonal range across the channel's
+// useful range, with the dark end well below neutral so shadows read as small
+// holes. Returned as a patch for `image`, plus the target for the light end.
+export function halftonePreset(channel) {
+  const info = CHANNEL_INFO[channel] || CHANNEL_INFO.size;
+  const span = info.max - info.min;
+  return {
+    target: channel === "size" ? 1.6 : channel === "spacing" ? 1.8 : info.min + span * 0.85,
+    image: { mode: "halftone", low: channel === "size" ? 0.15 : channel === "spacing" ? 0.6 : info.min + span * 0.15 },
+  };
+}
+
 export function createController({ channel, kind, area, existing = [], target }) {
   const info = CHANNEL_INFO[channel] || CHANNEL_INFO.size;
   const controller = {
@@ -361,6 +401,11 @@ export function createController({ channel, kind, area, existing = [], target })
     const size = Math.min(area.w, area.h) * 0.7;
     controller.image = {
       assetId: null,
+      mode: "halftone",
+      // Black reads the neutral value to begin with, so a fresh picture only
+      // ever grows holes where it is bright; the Halftone preset in the
+      // inspector pulls this end down.
+      low: info.base,
       invert: false,
       gamma: 1,
       min: 0,

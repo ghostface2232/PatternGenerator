@@ -62,8 +62,11 @@ export function drawScene(canvas, scene) {
   const cw = rect.width,
     ch = rect.height;
 
-  ctx.fillStyle = dark ? "#0f0f11" : "#e8e8ec";
+  ctx.fillStyle = dark ? "#101013" : "#e9e9ee";
   ctx.fillRect(0, 0, cw, ch);
+  // A faint dot grid on the desk, the way a design tool's canvas has one: it
+  // gives the eye a scale to read the sheet against and makes panning felt.
+  drawDesk(ctx, cw, ch, pan, zoom, dark);
 
   const view = computeView(cw, ch, sheetW, sheetH, pan, zoom);
   const { baseScale, cx, cy } = view;
@@ -312,6 +315,23 @@ export function drawScene(canvas, scene) {
     ctx.fillText(`⚡ Performance mode (${holeCount.toLocaleString()} holes)`, 12, ch - 12);
   }
   return view;
+}
+
+// The desk under the sheet: a dot every 24 screen pixels at zoom 1, moving with
+// the pan and stepping to a coarser grid as the view zooms out, so the dots
+// never crowd. Screen-space, so it costs the same at any sheet size.
+function drawDesk(ctx, cw, ch, pan, zoom, dark) {
+  let step = 24 * zoom;
+  while (step < 14) step *= 2;
+  while (step > 56) step /= 2;
+  const ox = ((cw / 2 + pan.x) % step) - step;
+  const oy = ((ch / 2 + pan.y) % step) - step;
+  ctx.fillStyle = dark ? "rgba(255,255,255,0.055)" : "rgba(0,0,0,0.07)";
+  for (let y = oy; y < ch + step; y += step) {
+    for (let x = ox; x < cw + step; x += step) {
+      ctx.fillRect(x - 0.5, y - 0.5, 1, 1);
+    }
+  }
 }
 
 // The four-handle variation gizmo, drawn in sheet space.
@@ -677,11 +697,43 @@ function drawController(ctx, controller, { source = controller, selected, active
   }
 
   if (!active) return;
-  for (const handle of controllerHandles(controller, source)) {
-    const r = (handle.role === "radius" || handle.role === "rotate" ? 4 : handle.role === "mid" ? 3.4 : 4.6) * px;
-    const hollow = handle.role === "radius" || handle.role === "rotate" || handle.role === "size";
+  // A cubic's two inner points are tangent handles, and read as such only with
+  // the arm drawn from the anchor they belong to — the convention every vector
+  // editor shares. Drawn under the handles, in the controller's colour, thin.
+  const points = source.geometry?.points || [];
+  if (source.kind === "curve" && points.length >= 4 && source === controller) {
+    ctx.strokeStyle = color;
+    ctx.globalAlpha *= 0.7;
+    ctx.lineWidth = 1 * px;
+    ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.arc(handle.x, handle.y, r, 0, Math.PI * 2);
+    ctx.moveTo(points[0].x, points[0].y);
+    ctx.lineTo(points[1].x, points[1].y);
+    ctx.moveTo(points[3].x, points[3].y);
+    ctx.lineTo(points[2].x, points[2].y);
+    ctx.stroke();
+    ctx.globalAlpha /= 0.7;
+  }
+  // The polyline's chord under a smoothed reach band: the vertices are what
+  // the handles move, so the straight line between them is what to read.
+  for (const handle of controllerHandles(controller, source)) {
+    const tangent = source.kind === "curve" && handle.role === "mid";
+    const r = (handle.role === "radius" || handle.role === "rotate" ? 4 : tangent ? 3.2 : handle.role === "mid" ? 3.6 : selected ? 4.8 : 4.4) * px; // prettier-ignore
+    const hollow = handle.role === "radius" || handle.role === "rotate" || handle.role === "size" || tangent;
+    ctx.beginPath();
+    if (handle.role === "size") {
+      // The image's corner handle is a square, as a resize grip is everywhere.
+      ctx.rect(handle.x - r, handle.y - r, 2 * r, 2 * r);
+    } else if (tangent) {
+      // Tangent handles are diamonds, so the anchors stay the round ones.
+      ctx.moveTo(handle.x, handle.y - r * 1.25);
+      ctx.lineTo(handle.x + r * 1.25, handle.y);
+      ctx.lineTo(handle.x, handle.y + r * 1.25);
+      ctx.lineTo(handle.x - r * 1.25, handle.y);
+      ctx.closePath();
+    } else {
+      ctx.arc(handle.x, handle.y, r, 0, Math.PI * 2);
+    }
     ctx.fillStyle = hollow ? ink : color;
     ctx.fill();
     ctx.strokeStyle = hollow ? color : ink;

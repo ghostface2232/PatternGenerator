@@ -3,7 +3,7 @@
 // Bump DOC_SCHEMA_VERSION and add a migration in persistence when the shape changes.
 import { DEFAULT_VARIATION } from "../fields/variation-engine.js";
 
-export const DOC_SCHEMA_VERSION = 6;
+export const DOC_SCHEMA_VERSION = 7;
 
 export const cloneVariation = variation => ({
   ...variation,

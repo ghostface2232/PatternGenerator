@@ -39,9 +39,13 @@ test("polygon vertices and cutouts have handles that hit, move and snap", () => 
   assert.equal(hitTestBoundary(b, 110, 100, 10).role, "size");
   assert.equal(hitTestBoundary(b, 60, 60, 10), null);
 
+  // Shift locks the vertex to 45° from the one before it round the ring —
+  // here (20, 180), so the left edge stays square — at a whole millimetre.
   const moved = moveBoundaryHandle(b, handles[0], 25.4, 21.6, true);
-  assert.deepEqual(moved.rings[0][0], [25, 22], "shift snaps to the millimetre grid");
+  assert.deepEqual(moved.rings[0][0], [20, 22], "shift squares the edge and snaps to the millimetre grid");
   assert.deepEqual(moved.rings[0][1], [180, 20]);
+  // A cutout's centre, with no neighbour, simply lands on the grid.
+  assert.deepEqual([moveBoundaryHandle(b, handles[4], 50.4, 60.6, true).cutouts[0].x, moveBoundaryHandle(b, handles[4], 50.4, 60.6, true).cutouts[0].y], [50, 61]); // prettier-ignore
   const far = moveBoundaryHandle(b, handles[0], 99999, -99999);
   assert.deepEqual(far.rings[0][0], [DOC_LIMITS["boundary.coord"][1], DOC_LIMITS["boundary.coord"][0]]);
 

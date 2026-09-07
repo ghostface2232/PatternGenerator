@@ -306,7 +306,7 @@ test("a v1 document upgrades to the current schema with every later block inert"
   delete v1.layout.scatter;
   delete v1.layout.path;
   const upgraded = migrateDocument(v1);
-  assert.equal(upgraded.schemaVersion, 6);
+  assert.equal(upgraded.schemaVersion, 7);
   // Phase 4's boundary fields default to the rectangle the document already
   // described, with nothing taken out of it.
   assert.equal(upgraded.boundary.shape, "Rectangle");
@@ -379,6 +379,22 @@ test("validation caps, de-duplicates and clamps the controller list", () => {
     },
   });
   assert.equal(long.fields.controllers[0].geometry.points.length, MAX_POLYLINE_POINTS);
+});
+
+test("a v6 image controller keeps reading its picture as a mask", () => {
+  const fresh = createDocument();
+  const image = ctrl({ id: "img", kind: "image", image: { assetId: "a1", invert: false, gamma: 1, min: 0, max: 1 } });
+  const v6 = { ...fresh, schemaVersion: 6, fields: { enabled: true, controllers: [image, ctrl()] } };
+  const upgraded = migrateDocument(v6);
+  assert.equal(upgraded.schemaVersion, 7);
+  assert.equal(upgraded.fields.controllers[0].image.mode, "mask");
+  assert.equal(upgraded.fields.controllers[0].image.low, 1);
+  assert.equal(upgraded.fields.controllers[1].image, null);
+  // A document written now defaults a bare image to the halftone reading, and
+  // clamps the dark end to the channel's own range.
+  const now = validateDocument({ fields: { controllers: [{ ...image, image: { ...image.image, low: -4 } }] } });
+  assert.equal(now.fields.controllers[0].image.mode, "halftone");
+  assert.equal(now.fields.controllers[0].image.low, 0.05);
 });
 
 test("only assets an image controller still points at are kept", () => {

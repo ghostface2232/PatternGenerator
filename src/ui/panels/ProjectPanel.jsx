@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, FilePlus, FolderOpen, Link, Save } from "lucide-react";
 import { useEditor } from "../EditorContext.jsx";
-import { Select, smallLabelStyle } from "../controls/index.js";
+import { Select, actionButtonStyle, smallLabelStyle } from "../controls/index.js";
 import { MONO } from "../theme.js";
 import { Section } from "./Section.jsx";
 
@@ -24,21 +24,7 @@ export function ProjectPanel() {
     if (next !== doc.name) api.set("name", next, { merge: "name" });
   };
 
-  const btn = (extra = {}) => ({
-    height: 30,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 5,
-    border: `1px solid ${theme.border}`,
-    borderRadius: 4,
-    background: theme.controlBg,
-    color: theme.textPrimary,
-    fontSize: 10,
-    cursor: "pointer",
-    fontFamily: MONO,
-    ...extra,
-  });
+  const btn = (extra = {}) => actionButtonStyle(theme, false, { padding: "0 4px", ...extra });
 
   const share = async () => {
     const ok = await project.shareLink();
@@ -49,7 +35,7 @@ export function ProjectPanel() {
   };
 
   return (
-    <Section title="Project" theme={theme}>
+    <Section id="project" title="Project" theme={theme}>
       <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 10 }}>
         <span style={smallLabelStyle(theme)}>Name</span>
         <input
@@ -139,7 +125,7 @@ export function ProjectPanel() {
           />
         </div>
       )}
-      <div style={{ fontSize: 9, color: theme.textFaint, marginTop: 8, lineHeight: 1.4 }}>
+      <div style={{ fontSize: 10, color: theme.textMuted, marginTop: 8, lineHeight: 1.5 }}>
         Autosaved in this browser. Drop a {project.fileExtension} file anywhere to open it.
       </div>
     </Section>

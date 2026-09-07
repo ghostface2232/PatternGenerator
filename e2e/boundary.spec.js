@@ -220,7 +220,7 @@ test("the shape editor stacks shapes that add to or cut from the hole", async ({
   // The stack opens with one disc; a second, cutting, makes a washer with a
   // bite — and the preview says one piece.
   await page.getByRole("button", { name: "Add circle layer", exact: true }).click();
-  await page.getByRole("switch", { name: "Layer cuts from the hole", exact: true }).click();
+  await page.getByRole("button", { name: "Subtract role", exact: true }).click();
   const x = page.getByLabel("Layer X", { exact: true });
   await x.fill("0");
   await x.press("Enter");
