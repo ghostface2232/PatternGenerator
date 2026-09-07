@@ -1,7 +1,7 @@
 import { Download, Settings2 } from "lucide-react";
 import { useEditor } from "../EditorContext.jsx";
 import { actionButtonStyle, ghostButtonStyle } from "../controls/index.js";
-import { Section, hintStyle } from "./Section.jsx";
+import { Section } from "./Section.jsx";
 
 // One-click exports with the defaults (visual SVG, DXF in mm, PNG at 8 px/mm),
 // and the way to the dialog for everything else — units, layers, kerf.
@@ -33,9 +33,6 @@ export function ExportPanel() {
       >
         <Settings2 size={11} /> Units, layers, kerf… · Ctrl E
       </button>
-      <div style={{ ...hintStyle(theme), marginTop: 8, marginBottom: 0 }}>
-        The quick buttons use the defaults. Cutting files and kerf compensation live in the dialog.
-      </div>
     </Section>
   );
 }

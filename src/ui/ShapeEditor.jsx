@@ -395,9 +395,6 @@ export function ShapeEditor() {
           <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>
             Shape editor
           </div>
-          <div style={{ fontSize: 10, color: theme.textSecondary }}>
-            Stack shapes; each adds to the hole, cuts from it, intersects or excludes it.
-          </div>
           <div style={{ flex: 1 }} />
           <button
             onClick={undo}
@@ -783,16 +780,13 @@ export function ShapeEditor() {
                   </>
                 ) : (
                   <div style={{ fontSize: 10, color: theme.textSecondary, lineHeight: 1.6 }}>
-                    A polygon is shaped on the canvas: drag its {selected.points.length} vertices (Shift locks to 45°),
-                    double-click an edge to add one, a vertex to drop it, or drag the shape to move it.
+                    Polygon · {selected.points.length} vertices, edited on the canvas.
                   </div>
                 )}
               </div>
             )}
             {!selected && (
-              <div style={{ fontSize: 10, color: theme.textSecondary, lineHeight: 1.6 }}>
-                Click a shape on the canvas or in the list to edit it. The tools on the left add one.
-              </div>
+              <div style={{ fontSize: 10, color: theme.textSecondary, lineHeight: 1.6 }}>No shape selected.</div>
             )}
           </div>
         </div>

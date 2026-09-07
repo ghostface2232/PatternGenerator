@@ -184,14 +184,14 @@ test("the modes that ignore the spacing channel say why", async ({ page }) => {
   await enableFields(page);
   await chooseChannel(page, "Spacing");
   // The default document is a honeycomb-free circle grid, so the channel is live.
-  await expect(page.getByText(/exact interlocking tiling/)).toHaveCount(0);
+  await expect(page.getByText(/exact tiling and does not read spacing/)).toHaveCount(0);
 
   await choose(page, "Hole Shape", "Hexagon");
-  await expect(page.getByText(/exact interlocking tiling/)).toBeVisible();
+  await expect(page.getByText(/exact tiling and does not read spacing/)).toBeVisible();
 
   await choose(page, "Hole Shape", "Circle");
   await choose(page, "Type", "Radial");
-  await expect(page.getByText(/Radial does not read this channel/)).toBeVisible();
+  await expect(page.getByText(/Radial does not read spacing/)).toBeVisible();
 
   // And a controller they ignore leaves the pattern untouched — read the
   // baseline BEFORE adding it, or the assertion never observes the add.
@@ -292,7 +292,7 @@ test("an image dropped while Spacing is selected lands on a channel it can drive
 test("Path hands over its default curve without moving the pattern", async ({ page }) => {
   await choose(page, "Type", "Path");
   const implicit = await holes(page);
-  await expect(page.getByText(/No path of your own yet/)).toBeVisible();
+  await expect(page.getByText(/No path yet/)).toBeVisible();
 
   // Add Path makes the curve the layout was already drawing editable, so the
   // pattern must not jump when it does.

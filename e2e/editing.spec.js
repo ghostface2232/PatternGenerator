@@ -108,7 +108,7 @@ test("the pen draws a path click by click, and a double-click adds a vertex on t
   await page.keyboard.press("Delete");
   await expect(page.getByRole("button", { name: "Select path 1", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Pen tool", exact: true }).click();
-  await expect(page.getByText(/pen: click to add a vertex/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Pen tool", exact: true })).toHaveAttribute("aria-pressed", "true");
   const canvas = page.locator("canvas");
   // No curve of its own now: the first click starts one, the next two extend it.
   for (const [x, y] of [

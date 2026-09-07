@@ -116,9 +116,7 @@ export function BoundaryPanel() {
             )}
           </div>
           <div style={hintStyle(theme)}>
-            Drag a vertex on the canvas (Shift squares the edge); double-click an edge to add one, or a vertex to drop
-            it. Read by the even-odd rule, so an outline inside another is a counter. The margins do not apply to a
-            polygon, and the sheet clips whatever runs past it.
+            Even-odd rule: an outline inside another is a counter. Margins do not apply; the sheet clips the rest.
           </div>
           <button
             className="pg-hover"
@@ -356,12 +354,6 @@ export function BoundaryPanel() {
                   </div>
                 </>
               )}
-            </div>
-          )}
-          {selectedCutout?.shape === "Polygon" && (
-            <div style={hintStyle(theme)}>
-              A polygon cutout is shaped on the canvas: drag it by its body, drag its vertices, double-click an edge to
-              add one. Delete removes the selected cutout.
             </div>
           )}
         </>

@@ -153,11 +153,6 @@ export function FieldsPanel() {
         <Toggle value={fields.enabled} onChange={actions.setFieldsEnabled} dark={dark} label="Field Controllers" />
       }
     >
-      <div style={hintStyle(theme)}>
-        A point, line, curve, polyline or picture on the sheet drives one channel around it: how big the holes are, how
-        far apart they sit, which way they turn, or what shape they take.
-      </div>
-
       <button
         onClick={actions.toggleFieldEditMode}
         aria-label="Edit field controllers on the canvas"
@@ -211,16 +206,15 @@ export function FieldsPanel() {
 
           {shapeInert && (
             <div style={noticeStyle(theme, true)}>
-              The shape channel morphs the <strong>{MORPH_SHAPE}</strong> hole between a diamond, an ellipse and a
-              square. Pick that hole shape in Pattern to see it.
+              Shape needs the <strong>{MORPH_SHAPE}</strong> hole shape.
             </div>
           )}
 
           {spacingInert && (
             <div style={noticeStyle(theme, true)}>
               {doc.layout.type === "Radial"
-                ? "Radial does not read this channel: two of its three ring layouts place their rings by solving for the gaps they are given, so there is no one pitch to scale. Spiral and Fibonacci are the variable-density radial patterns."
-                : `${shape} on ${doc.layout.type} is an exact interlocking tiling with the same ligament on every edge — a spacing field would be stretching the tiling, not varying its density. Change the hole shape or the pattern type to use this channel.`}
+                ? "Radial does not read spacing."
+                : `${shape} on ${doc.layout.type} is an exact tiling and does not read spacing.`}
             </div>
           )}
 
@@ -259,10 +253,7 @@ export function FieldsPanel() {
           </div>
 
           {channelControllers.length === 0 ? (
-            <div style={hintStyle(theme)}>
-              No {info.label.toLowerCase()} controller yet. Add one above, or pick a tool on the canvas rail and draw it
-              where you want it.
-            </div>
+            <div style={hintStyle(theme)}>No {info.label.toLowerCase()} controller yet.</div>
           ) : (
             <>
               <div style={groupLabel}>{info.label} controllers</div>
@@ -551,9 +542,6 @@ export function FieldsPanel() {
                         {text}
                       </button>
                     ))}
-                  </div>
-                  <div style={hintStyle(theme)}>
-                    On the canvas, double-click the line to add a vertex where you click, and a vertex to drop it.
                   </div>
                 </>
               )}

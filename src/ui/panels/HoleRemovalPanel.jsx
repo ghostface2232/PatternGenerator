@@ -1,6 +1,6 @@
 import { useEditor } from "../EditorContext.jsx";
 import { Toggle, ghostButtonStyle, rowLabelStyle } from "../controls/index.js";
-import { Section, hintStyle } from "./Section.jsx";
+import { Section } from "./Section.jsx";
 
 export function HoleRemovalPanel() {
   const { theme, ui, doc, stats, actions } = useEditor();
@@ -27,11 +27,6 @@ export function HoleRemovalPanel() {
           <span>Click to Remove · R</span>
           <Toggle value={ui.holeRemovalMode} onChange={actions.setHoleRemoval} dark={dark} label="Click to Remove" />
         </label>
-        {ui.holeRemovalMode && (
-          <div style={{ ...hintStyle(theme), marginBottom: 4 }}>
-            Click a hole on the canvas to remove it, and again to restore it. The open area follows.
-          </div>
-        )}
         {doc.removedHoles.length > 0 && (
           <>
             {row("Removed", `${stats.removedHoleCount} holes`, theme.warn, theme.warnBg)}
