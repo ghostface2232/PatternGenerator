@@ -237,7 +237,7 @@ export function ShapeEditor() {
     const hit = hitTestLayers(current, p.x, p.y, 4 * scale);
     if (hit) {
       setSelectedId(hit.id);
-      drag.current = { kind: "move", id: hit.id, last: p, snapshot: current, moved: false };
+      drag.current = { kind: "move", id: hit.id, start: p, snapshot: current, moved: false };
       setDragging(true);
       e.currentTarget.setPointerCapture(e.pointerId);
       return;
@@ -257,20 +257,17 @@ export function ShapeEditor() {
     if (d.kind === "handle") {
       live(current => current.map(l => (l.id === d.id ? moveLayerHandle(l, d.handle, p.x, p.y, e.shiftKey) : l)));
     } else {
-      const dx = p.x - d.last.x,
-        dy = p.y - d.last.y;
-      d.last = p;
       d.moved = true;
-      // Shift measures the constraint from where the drag started, over the whole move.
+      // The move is the whole displacement since the press, re-applied from the
+      // layer as it was then — so Shift's axis lock holds over the gesture and
+      // releasing Shift puts the shape back under the cursor.
+      const dx = p.x - d.start.x,
+        dy = p.y - d.start.y;
       live(current =>
         current.map(l => {
           if (l.id !== d.id) return l;
           const origin = d.snapshot.find(o => o.id === d.id) || l;
-          const moved = translateLayer(l, dx, dy, false);
-          if (!e.shiftKey) return moved;
-          // Recompute from the origin so the lock does not accumulate error.
-          const total = { dx: totalDelta(origin, moved).dx, dy: totalDelta(origin, moved).dy };
-          return translateLayer(origin, total.dx, total.dy, true);
+          return translateLayer(origin, dx, dy, e.shiftKey);
         })
       );
     }
@@ -842,17 +839,6 @@ export function ShapeEditor() {
       </div>
     </div>
   );
-}
-
-// How far a layer has moved from where it was, for re-applying a constrained
-// move from its origin.
-function totalDelta(origin, moved) {
-  if (origin.shape === "Polygon") {
-    const [ox, oy] = origin.points[0] || [0, 0];
-    const [mx, my] = moved.points[0] || [0, 0];
-    return { dx: mx - ox, dy: my - oy };
-  }
-  return { dx: moved.x - origin.x, dy: moved.y - origin.y };
 }
 
 // The selection frame of a parametric layer: its rotated box, four square

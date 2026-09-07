@@ -184,6 +184,9 @@ export default function App() {
   // The pen: while armed, each canvas click in Path mode appends a vertex to
   // the selected curve (or starts a new one).
   const [pathTool, setPathTool] = useState(null);
+  // The pen's first click on a new curve, before there is a second to make a
+  // curve of. UI state: the document only ever holds curves of two or more.
+  const [penStart, setPenStart] = useState(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Which inspector sections are folded. `closed[id] === true` folds it; every
   // section starts open.
@@ -232,6 +235,7 @@ export default function App() {
   if (pathEditModeOn && layout.type !== "Path") setPathEditMode(false);
   const pathEditMode = pathEditModeOn && layout.type === "Path";
   if (pathTool && !pathEditMode) setPathTool(null);
+  if (penStart && pathTool !== "pen") setPenStart(null);
   // Boundary editing, for the same reason: undo, "Back to the rectangle" or
   // removing the last cutout can leave nothing on the canvas to edit, and the
   // panel shows no control to leave the mode by when there is nothing.
@@ -860,7 +864,15 @@ export default function App() {
       const current = paths[selectedPath];
       if (!current || current.closed) {
         if (paths.length >= MAX_PATHS) return null;
-        api.set("layout.path.paths", [...paths, startPath(x, y)]);
+        // The first click of a new curve is held, not written: one vertex is
+        // not a curve, and validateDocument would drop it on reload. The
+        // second click writes the two-vertex curve as one undo step.
+        if (!penStart) {
+          setPenStart({ x, y });
+          return null;
+        }
+        api.set("layout.path.paths", [...paths, startPath(penStart, { x, y })]);
+        setPenStart(null);
         setSelectedPath(paths.length);
         return paths.length;
       }
@@ -996,9 +1008,15 @@ export default function App() {
         if (!pathEditModeOn) togglePathEditMode();
       } else if (mode === "boundary") {
         // With nothing to edit yet, editing the boundary MEANS drawing one: the
-        // rectangle becomes a polygon (an octagon in the frame) and its
-        // vertices become the thing on the canvas.
-        if (!boundaryEditable) setBoundaryShape("Polygon");
+        // plain rectangle becomes a polygon (an octagon in the frame) and its
+        // vertices become the thing on the canvas. An ellipse is a shape the
+        // user chose, and an octagon is not it — so the ellipse is left alone
+        // and the rail only opens its panel, where a cutout or the Polygon
+        // outline can be picked.
+        if (!boundaryEditable) {
+          if (api.ref.current.boundary.shape !== "Rectangle") return;
+          setBoundaryShape("Polygon");
+        }
         enterBoundaryEditMode(true);
       }
     };
@@ -1011,10 +1029,15 @@ export default function App() {
         document.getElementById(`section-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
     };
-    // Delete / Backspace on the canvas: whatever is selected in the current mode.
+    // Delete / Backspace on the canvas: whatever is selected in the current
+    // mode. A controller only when it was actually selected — `selectedController`
+    // falls back to the channel's first one so the inspector is never blank,
+    // and Delete must not act on a fallback the user never clicked.
     const deleteSelection = () => {
-      if (fieldEditMode && selectedControllerId) removeController(selectedControllerId);
-      else if (boundaryEditMode && selectedCutoutId) removeCutout(selectedCutoutId);
+      const explicit = api.ref.current.fields.controllers.find(c => c.id === selectedId);
+      if (fieldEditMode) {
+        if (explicit) removeController(explicit.id);
+      } else if (boundaryEditMode && selectedCutoutId) removeCutout(selectedCutoutId);
       else if (pathEditMode && api.ref.current.layout.path.paths.length) removePath(selectedPath);
     };
 
@@ -1093,7 +1116,7 @@ export default function App() {
       removeBoundaryVertexAt,
       importBoundarySVG,
     };
-  }, [doc, api, history, variationEditMode, fieldEditMode, pathEditModeOn, pathEditMode, boundaryEditMode, boundaryEditable, selectedCutoutId, selectedPath, geometry.region, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
+  }, [doc, api, history, variationEditMode, fieldEditMode, pathEditModeOn, pathEditMode, boundaryEditMode, boundaryEditable, selectedCutoutId, selectedPath, penStart, geometry.region, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
@@ -1265,17 +1288,20 @@ export default function App() {
       else if (key === "b") actions.setMode("boundary");
       else if (key === "r") actions.setMode("remove");
       else if (key === "p" && layoutIsPath) {
-        // P in Path mode arms the pen; in any other mode it enters Path editing first.
+        // P is deliberately inert unless the layout already IS Path: a stray
+        // letter must not change the layout type (a document edit). Within a
+        // Path document it enters Path editing, and then arms the pen. The rail
+        // and the palette, which are deliberate clicks, do switch the layout.
         if (mode === "path") setPathTool(tool => (tool === "pen" ? null : "pen"));
         else actions.setMode("path");
       } else if (key === "0") actions.resetView();
       else if (key === "=" || key === "+") actions.zoomBy(1.25);
       else if (key === "-") actions.zoomBy(0.8);
       else if (key === "h" && e.shiftKey) setShowHud(v => !v);
-      else if (key === "1" || key === "2" || key === "3" || key === "4") {
+      else if (mode === "fields" && (key === "1" || key === "2" || key === "3" || key === "4")) {
         // The four channels, when editing fields.
-        if (mode === "fields") actions.selectChannel(EDITABLE_CHANNELS[Number(key) - 1]);
-      } else return;
+        actions.selectChannel(EDITABLE_CHANNELS[Number(key) - 1]);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1330,6 +1356,7 @@ export default function App() {
     mode,
     pathTool,
     setPathTool,
+    penStart,
     paletteOpen,
     setPaletteOpen,
     closedSections,

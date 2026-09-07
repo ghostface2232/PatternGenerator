@@ -40,8 +40,10 @@ export function GlobalStyles({ theme }) {
         .pg-rail-btn:hover:not(:disabled) { background: ${theme.dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)"}; color: ${theme.textPrimary}; }
         .pg-fade-in { animation: pg-fade-in ${DURATION}ms ${EASE} both; }
         .pg-pop-in { animation: pg-pop-in ${DURATION}ms ${EASE} both; }
-        .pg-collapse { display: grid; grid-template-rows: 1fr; transition: grid-template-rows ${DURATION}ms ${EASE}, opacity ${DURATION}ms ${EASE}; }
-        .pg-collapse[data-closed="true"] { grid-template-rows: 0fr; opacity: 0; pointer-events: none; }
+        .pg-collapse { display: grid; grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows ${DURATION}ms ${EASE}, opacity ${DURATION}ms ${EASE}, visibility 0s linear 0s; }
+        /* visibility: hidden takes the folded controls out of the tab order (opacity alone left
+           invisible sliders focusable), delayed so the fold still animates shut. */
+        .pg-collapse[data-closed="true"] { grid-template-rows: 0fr; opacity: 0; pointer-events: none; visibility: hidden; transition-delay: 0s, 0s, ${DURATION}ms; }
         .pg-collapse > div { min-height: 0; overflow: hidden; }
         .pg-tooltip { position: relative; }
         .pg-tooltip::after { content: attr(data-tip); position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%) translateX(-4px); white-space: nowrap; background: ${theme.dark ? "#26262d" : "#17171b"}; color: #f4f4f5; font-size: 10px; padding: 5px 8px; border-radius: 6px; pointer-events: none; opacity: 0; transition: opacity ${DURATION_FAST}ms ${EASE}, transform ${DURATION_FAST}ms ${EASE}; z-index: 20; box-shadow: 0 6px 18px rgba(0,0,0,0.3); }

@@ -9,6 +9,7 @@ import {
   moveBoundaryHandle,
   nearestBoundaryEdge,
   removeBoundaryVertex,
+  translateCutout,
 } from "./boundary-gizmo.js";
 import { createCutout } from "./boundary.js";
 import { fitRings, inspectSVG, svgToRings, svgToUnitShape } from "./svg-import.js";
@@ -55,6 +56,12 @@ test("polygon vertices and cutouts have handles that hit, move and snap", () => 
   near(sized.cutouts[0].w, 60);
   near(sized.cutouts[0].h, 60, 1e-9);
   assert.equal(moveBoundaryHandle(b, { role: "move", cutout: "ghost" }, 0, 0), null);
+  // A body drag moves the whole cutout, and never past the document's range.
+  assert.deepEqual([translateCutout(cut, 5, -5).x, translateCutout(cut, 5, -5).y], [105, 95]);
+  assert.equal(translateCutout(cut, 1e6, 0).x, DOC_LIMITS["boundary.coord"][1]);
+  const poly = createCutout("Polygon", 100, 100, 20);
+  const shifted = translateCutout(poly, 3, 4);
+  assert.deepEqual(shifted.points[0], [poly.points[0][0] + 3, poly.points[0][1] + 4]);
 });
 
 test("a rectangle cutout's rim handle follows its rotation and only its width", () => {

@@ -123,6 +123,15 @@ export function moveBoundaryHandle(boundary, handle, x, y, shift = false) {
   return { cutouts: cutouts.map(c => (c.id === cutout.id ? next : c)) };
 }
 
+// A cutout moved by (dx, dy) as one piece — its centre, or every vertex of a
+// polygon — clamped like every other drag so a reload reads it back unchanged.
+export function translateCutout(cutout, dx, dy) {
+  if (cutout.shape === "Polygon") {
+    return { ...cutout, points: (cutout.points || []).map(([x, y]) => [coord(x + dx), coord(y + dy)]) };
+  }
+  return { ...cutout, x: coord(cutout.x + dx), y: coord(cutout.y + dy) };
+}
+
 // The edge of a polygon ring (or a polygon cutout) nearest to a point:
 // { ring | cutout, index, distance }, with `index` the edge from vertex
 // `index` to the next. Where a double-click puts a new vertex.

@@ -15,7 +15,7 @@ import { isPointInsideHole } from "../../geometry/shapes.js";
 import { resolveSyncedGeometry } from "../../fields/controllers.js";
 import { controllerBodyDistance, hitTestController, moveControllerHandle } from "../../fields/controller-gizmo.js";
 import { hitTestPath, movePathVertex, pathBodyDistance } from "../../layouts/path-gizmo.js";
-import { cutoutBodyDistance, hitTestBoundary, moveBoundaryHandle } from "../../geometry/boundary-gizmo.js";
+import { cutoutBodyDistance, hitTestBoundary, moveBoundaryHandle, translateCutout } from "../../geometry/boundary-gizmo.js"; // prettier-ignore
 import { lockDelta } from "../../geometry/snap.js";
 import { drawScene } from "../../render/canvas-renderer.js";
 import { canvasToSheet, zoomAbout } from "../../render/view.js";
@@ -55,7 +55,7 @@ export function CanvasView() {
     actions,
   } = useEditor();
   const { dark, showHud, mode, holeRemovalMode, variationEditMode, pan, setPan, zoom, setZoom, setVariationHud } = ui;
-  const { fieldEditMode, activeChannel, fieldTool, selectedControllerId, pathTool } = ui;
+  const { fieldEditMode, activeChannel, fieldTool, selectedControllerId, pathTool, penStart } = ui;
   const { pathEditMode, selectedPath, boundaryEditMode, selectedCutoutId } = ui;
   const pathBlock = doc.layout.path;
   const boundary = doc.boundary;
@@ -73,7 +73,7 @@ export function CanvasView() {
   const pointerDownPos = useRef(null);
   const variationDrag = useRef(null);
   const controllerDrag = useRef(null); // { id, handle } while a handle is held
-  const bodyDrag = useRef(null); // { kind: "controller" | "path", id | index, last, moved } while a body is held
+  const bodyDrag = useRef(null); // { kind, id | index, start, applied, moved } while a body is held
   const pathDrag = useRef(null); // { pathIndex, pointIndex } while a path vertex is held
   const boundaryDrag = useRef(null); // a boundary handle while it is held
   const drawDrag = useRef(null); // { kind, from } while a line/curve is being drawn
@@ -125,6 +125,7 @@ export function CanvasView() {
       pathBlock,
       pathEditMode,
       selectedPath,
+      penStart,
       trim: doc.boundary.trim,
       boundary,
       boundaryEditMode,
@@ -158,6 +159,7 @@ export function CanvasView() {
       pathBlock,
       pathEditMode,
       selectedPath,
+      penStart,
       doc.boundary.trim,
       boundary,
       boundaryEditMode,
@@ -350,7 +352,7 @@ export function CanvasView() {
       // two it is only becomes clear once the pointer has travelled, so the
       // press just remembers where it started.
       if (hit?.kind === "controllerBody" || hit?.kind === "pathBody" || hit?.kind === "cutout") {
-        bodyDrag.current = { ...hit, last: sheet, applied: { dx: 0, dy: 0 }, moved: false };
+        bodyDrag.current = { ...hit, start: sheet, applied: { dx: 0, dy: 0 }, moved: false };
         e.currentTarget.setPointerCapture(e.pointerId);
         return;
       }
@@ -430,7 +432,7 @@ export function CanvasView() {
         // The move is measured from where the drag STARTED and applied as the
         // difference from what has been applied so far, so Shift's axis lock
         // holds over the whole gesture rather than per pointer event.
-        const total = lockedDelta(sheet.x - drag.last.x, sheet.y - drag.last.y, e.shiftKey);
+        const total = lockedDelta(sheet.x - drag.start.x, sheet.y - drag.start.y, e.shiftKey);
         const dx = total.dx - drag.applied.dx,
           dy = total.dy - drag.applied.dy;
         drag.applied = total;
@@ -439,9 +441,8 @@ export function CanvasView() {
         else if (drag.kind === "cutout") {
           const cutout = api.ref.current.boundary.cutouts.find(c => c.id === drag.id);
           if (cutout) {
-            if (cutout.shape === "Polygon") {
-              actions.updateCutout(drag.id, { points: cutout.points.map(([x, y]) => [x + dx, y + dy]) }, true);
-            } else actions.updateCutout(drag.id, { x: cutout.x + dx, y: cutout.y + dy }, true);
+            const { x, y, points } = translateCutout(cutout, dx, dy);
+            actions.updateCutout(drag.id, cutout.shape === "Polygon" ? { points } : { x, y }, true);
           }
         }
         return;

@@ -281,7 +281,8 @@ export function removeLayerVertexAt(layer, index) {
 
 // A copy beside the original, with a fresh id.
 export function duplicateLayer(layer, existing) {
-  const copy = { ...createShapeLayer(layer.shape, existing), ...layer, id: createShapeLayer(layer.shape, existing).id };
+  const fresh = createShapeLayer(layer.shape, existing);
+  const copy = { ...fresh, ...layer, id: fresh.id };
   copy.points = (layer.points || []).map(([x, y]) => [x, y]);
   const box = layerBox(layer);
   const dx = Math.max(1, Math.round((box.right - box.left) * 0.5 + 1));

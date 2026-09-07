@@ -754,7 +754,15 @@ test("the path gizmo moves, adds and drops vertices within the document's range"
   // The pen appends after the last vertex, locked to 45° with Shift.
   const pen = appendPathVertex(paths[0], 91.5, 130, true);
   assert.deepEqual(pen.points[3], { x: 90, y: 130 });
-  assert.deepEqual(startPath(3, 4), { points: [{ x: 3, y: 4 }], closed: false });
+  assert.deepEqual(startPath({ x: 3, y: 4 }, { x: 30, y: 4 }), { points: [{ x: 3, y: 4 }, { x: 30, y: 4 }], closed: false }); // prettier-ignore
+  // A smoothed curve emits more segments for a longer span, so a vertex
+  // dropped on the long span must land on THAT span — not, counted by an even
+  // share, before the short span's end, where it would fold the curve back.
+  const uneven = { points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 200, y: 0 }], closed: false }; // prettier-ignore
+  const onLong = insertPathVertexAt(uneven, 30, 0.5, true, 5);
+  assert.equal(onLong.points.length, 4);
+  assert.ok(Math.abs(onLong.points[2].x - 30) < 0.5, `landed at ${onLong.points[2].x}`);
+  assert.deepEqual(onLong.points[1], { x: 10, y: 0 });
   let full = paths[0];
   while (appendPathVertex(full, 0, 0)) full = appendPathVertex(full, 0, 0);
   assert.equal(full.points.length, MAX_PATH_POINTS);

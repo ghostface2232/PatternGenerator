@@ -6,7 +6,7 @@ import { clamp } from "../core/math.js";
 import { DOC_LIMITS, MAX_PATHS, MAX_PATH_POINTS } from "../core/constants.js";
 import { distPointSeg } from "../geometry/polygon.js";
 import { lockAnchor, lockAngleFrom, lockDelta, nearestSpan } from "../geometry/snap.js";
-import { defaultPathPoints, flattenPath } from "./path.js";
+import { defaultPathPoints, flattenPath, spanSegments } from "./path.js";
 
 const COORD = DOC_LIMITS["layout.path.coord"];
 // Everything a canvas drag writes is clamped to the same range validateDocument
@@ -81,10 +81,23 @@ export function insertPathVertexAt(path, x, y, smooth, tolerance = Infinity) {
   const hit = nearestSpan(poly, x, y);
   if (!hit || hit.distance > tolerance) return null;
   // Which authored span does that flattened segment fall in? The flattening
-  // emits the same number of segments per span, so count them back.
-  const spans = path.closed ? path.points.length : path.points.length - 1;
-  const perSpan = (poly.length - 1) / spans;
-  const at = Math.min(spans - 1, Math.floor(hit.index / Math.max(1e-9, perSpan)));
+  // emits a segment count PER SPAN that depends on the span's length
+  // (`spanSegments`), so walk the same counts back rather than assuming an
+  // even share: a short span beside a long one would otherwise send the vertex
+  // to the wrong span and fold the curve back on itself.
+  const n = path.points.length;
+  const spans = path.closed ? n : n - 1;
+  let at = spans - 1;
+  if (smooth) {
+    let consumed = 0;
+    for (let i = 0; i < spans; i++) {
+      consumed += spanSegments(path.points[i], path.points[(i + 1) % n]);
+      if (hit.index < consumed) {
+        at = i;
+        break;
+      }
+    }
+  } else at = Math.min(spans - 1, hit.index);
   const points = path.points.slice();
   points.splice(at + 1, 0, { x: clampCoord(hit.x), y: clampCoord(hit.y) });
   return { ...path, points };
@@ -105,9 +118,17 @@ export function appendPathVertex(path, x, y, shift = false) {
   return { ...path, points: [...path.points, { x: clampCoord(target.x), y: clampCoord(target.y) }] };
 }
 
-// A curve started by the pen: one vertex, which the next click extends.
-export function startPath(x, y) {
-  return { points: [{ x: clampCoord(x), y: clampCoord(y) }], closed: false };
+// A curve started by the pen, from its first two clicks. The first click alone
+// is held in UI state rather than written: a one-vertex path is not a curve,
+// and `validateDocument` would drop it on reload.
+export function startPath(a, b) {
+  return {
+    points: [
+      { x: clampCoord(a.x), y: clampCoord(a.y) },
+      { x: clampCoord(b.x), y: clampCoord(b.y) },
+    ],
+    closed: false,
+  };
 }
 
 // A new vertex at the midpoint of the longest span, which is where a curve has

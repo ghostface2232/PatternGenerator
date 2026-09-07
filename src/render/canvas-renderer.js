@@ -41,6 +41,7 @@ export function drawScene(canvas, scene) {
     pathBlock,
     pathEditMode,
     selectedPath,
+    penStart,
     trim,
     boundary,
     boundaryEditMode,
@@ -291,6 +292,7 @@ export function drawScene(canvas, scene) {
       pathBlock,
       selectedPath,
       editing: pathEditMode,
+      penStart,
       bounds: { xMin: marginLeft, xMax: marginLeft + perfW, yMin: marginTop, yMax: marginTop + perfH },
       baseScale,
       dark,
@@ -507,7 +509,7 @@ const bandAlpha = radius => 0.1 * Math.max(0.22, Math.min(1, 40 / Math.max(1, ra
 // own yet" is something you can SEE, outlined under the holes, rather than
 // something a panel has to tell you. The handles are the edit mode's, and they
 // go on top of the holes, because a handle you cannot see is not a handle.
-function drawPaths(ctx, { pathBlock, selectedPath, editing, bounds, baseScale, dark }) {
+function drawPaths(ctx, { pathBlock, selectedPath, editing, penStart, bounds, baseScale, dark }) {
   const own = pathBlock?.paths || [];
   const paths = own.length ? own : [{ points: defaultPathPoints(bounds), closed: false, ghost: true }];
   const px = 1 / baseScale;
@@ -556,6 +558,19 @@ function drawPaths(ctx, { pathBlock, selectedPath, editing, bounds, baseScale, d
       ctx.stroke();
     }
   });
+  // The pen's first click on a new curve, held until the second: a hollow
+  // accent ring where the curve will start.
+  if (editing && penStart) {
+    ctx.beginPath();
+    ctx.arc(penStart.x, penStart.y, 5 * px, 0, Math.PI * 2);
+    ctx.fillStyle = dark ? "#0f0f11" : "#ffffff";
+    ctx.fill();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1.6 * px;
+    ctx.setLineDash([2 * px, 2 * px]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 }
 
 // The boundary's handles: the outline's vertices and each cutout's centre and
@@ -702,6 +717,7 @@ function drawController(ctx, controller, { source = controller, selected, active
   // editor shares. Drawn under the handles, in the controller's colour, thin.
   const points = source.geometry?.points || [];
   if (source.kind === "curve" && points.length >= 4 && source === controller) {
+    ctx.save();
     ctx.strokeStyle = color;
     ctx.globalAlpha *= 0.7;
     ctx.lineWidth = 1 * px;
@@ -712,7 +728,7 @@ function drawController(ctx, controller, { source = controller, selected, active
     ctx.moveTo(points[3].x, points[3].y);
     ctx.lineTo(points[2].x, points[2].y);
     ctx.stroke();
-    ctx.globalAlpha /= 0.7;
+    ctx.restore();
   }
   // The polyline's chord under a smoothed reach band: the vertices are what
   // the handles move, so the straight line between them is what to read.
