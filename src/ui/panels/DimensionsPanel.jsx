@@ -316,17 +316,14 @@ export function DimensionsPanel() {
               }}
               aria-label="Draw a path with the pen"
               aria-pressed={ui.pathTool === "pen"}
-              title="Pen: click on the canvas to add vertices, Shift locks to 45°, Esc puts it away"
+              title="Pen"
               style={actionButtonStyle(theme, ui.pathTool === "pen", { width: 38, padding: 0 })}
             >
               <PenTool size={12} />
             </button>
           </div>
           {layout.path.paths.length === 0 ? (
-            <div style={hintStyle(theme)}>
-              No path of your own yet — the holes are following the default one outlined on the canvas. Add a path to
-              take hold of it, or pick the pen and click a curve out on the canvas.
-            </div>
+            <div style={hintStyle(theme)}>No path yet — the holes follow the default curve.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
               {layout.path.paths.map((path, index) => (
@@ -371,10 +368,6 @@ export function DimensionsPanel() {
                 {text}
               </button>
             ))}
-          </div>
-          <div style={hintStyle(theme)}>
-            On the canvas: drag a vertex (Shift locks it to 45°) or the whole curve, double-click the curve to add a
-            vertex there, double-click a vertex to drop it.
           </div>
           {[
             ["Smooth the path through its points", layout.path.smooth, v => api.set("layout.path.smooth", v)],

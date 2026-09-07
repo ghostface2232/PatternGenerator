@@ -6,7 +6,7 @@ import { useEditor } from "../EditorContext.jsx";
 import { ProfileIcon, Select, SliderRow, Toggle } from "../controls/index.js";
 import { actionButtonStyle, chipStyle, iconButtonStyle } from "../controls/index.js";
 import { MONO } from "../theme.js";
-import { Section, groupLabelStyle, hintStyle } from "./Section.jsx";
+import { Section, groupLabelStyle } from "./Section.jsx";
 
 // The size gradient: one scalar field over the whole sheet (space × profile,
 // up to three layers) that scales every hole. It is the broad-brush sibling of
@@ -31,10 +31,6 @@ export function VariationPanel() {
         <Toggle value={variation.enabled} onChange={actions.setVariationEnabled} dark={dark} label="Size Gradient" />
       }
     >
-      <div style={hintStyle(theme)}>
-        A gradient across the whole sheet that scales every hole — linear, radial, angular or spiral, shaped by a
-        profile. Controllers below multiply on top of it.
-      </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 5, marginBottom: 8 }}>
         <Select
           value=""

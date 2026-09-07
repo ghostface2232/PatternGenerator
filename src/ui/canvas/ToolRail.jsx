@@ -11,16 +11,16 @@ import { transition } from "../controls/index.js";
 // the sheet, so the hand never has to travel to the inspector for a tool. In
 // Fields mode it is the channel and the kind of controller the next click
 // drops; in Path mode the pen and the vertex edits; in Boundary mode the
-// cutouts; in Remove mode the way back. The inspector keeps the same actions
-// under longer names, since the rail cannot say why a tool is greyed out.
+// cutouts; in Remove mode the way back. Each button carries only a name (and
+// its shortcut) as a delayed tooltip; the icon has to say the rest.
 const FIELD_TOOLS = [
-  { kind: "point", Icon: Circle, hint: "Point — click the canvas" },
-  { kind: "line", Icon: Minus, hint: "Line — drag across the canvas" },
-  { kind: "curve", Icon: Spline, hint: "Curve — drag across the canvas" },
+  { kind: "point", Icon: Circle, tip: "Point" },
+  { kind: "line", Icon: Minus, tip: "Line" },
+  { kind: "curve", Icon: Spline, tip: "Curve" },
 ];
 const FIELD_PANEL_KINDS = [
-  { kind: "polyline", Icon: Waypoints, hint: "Polyline — placed at the centre; double-click it to add vertices" },
-  { kind: "image", Icon: ImageIcon, hint: "Image — placed at the centre, then given a picture in the panel" },
+  { kind: "polyline", Icon: Waypoints, tip: "Polyline" },
+  { kind: "image", Icon: ImageIcon, tip: "Image" },
 ];
 const CUTOUT_ICON = { Circle, Rectangle: RectangleHorizontal, Polygon: Hexagon };
 
@@ -65,21 +65,20 @@ export function ToolRail() {
       (channel === "spacing" && !layoutReadsSpacing(shape, doc.layout.type));
     const why = channel =>
       channel === "shape"
-        ? `${CHANNEL_INFO.shape.label} channel — needs the ${MORPH_SHAPE} hole shape`
-        : doc.layout.type === "Radial"
-          ? `${CHANNEL_INFO.spacing.label} channel — Radial does not read it`
-          : `${CHANNEL_INFO.spacing.label} channel — ${shape} on ${doc.layout.type} is an exact tiling, which does not read it`;
+        ? `${CHANNEL_INFO.shape.label}  ·  needs ${MORPH_SHAPE}`
+        : `${CHANNEL_INFO.spacing.label}  ·  not read by this layout`;
     const allowsImage = imageChannels(layoutPlacementChannels(doc.layout.type));
     const kindDisabled = kind => full || (kind === "image" && !allowsImage.includes(activeChannel));
+    const limit = `Max ${MAX_CONTROLLERS} controllers`;
     content = (
       <>
         {column(
           EDITABLE_CHANNELS.map((channel, i) => (
             <button
               key={channel}
-              className="pg-hover"
+              className="pg-hover pg-tooltip"
               onClick={() => actions.selectChannel(channel)}
-              title={`${inert(channel) ? why(channel) : `${CHANNEL_INFO[channel].label} channel`}  ·  ${i + 1}`}
+              data-tip={inert(channel) ? why(channel) : `${CHANNEL_INFO[channel].label}  ·  ${i + 1}`}
               aria-label={`${CHANNEL_INFO[channel].label} channel`}
               aria-pressed={activeChannel === channel}
               style={cell(activeChannel === channel, inert(channel), channelColor(theme, channel))}
@@ -92,12 +91,12 @@ export function ToolRail() {
         {rule}
         {column(
           [
-            ...FIELD_TOOLS.map(({ kind, Icon, hint }) => (
+            ...FIELD_TOOLS.map(({ kind, Icon, tip }) => (
               <button
                 key={kind}
-                className="pg-hover"
+                className="pg-hover pg-tooltip"
                 onClick={() => setFieldTool(fieldTool === kind ? null : kind)}
-                title={full ? `At most ${MAX_CONTROLLERS} controllers` : hint}
+                data-tip={full ? limit : tip}
                 aria-label={`Draw ${kind} controller on the canvas`}
                 aria-pressed={fieldTool === kind}
                 disabled={full}
@@ -106,18 +105,12 @@ export function ToolRail() {
                 <Icon size={14} />
               </button>
             )),
-            ...FIELD_PANEL_KINDS.map(({ kind, Icon, hint }) => (
+            ...FIELD_PANEL_KINDS.map(({ kind, Icon, tip }) => (
               <button
                 key={kind}
-                className="pg-hover"
+                className="pg-hover pg-tooltip"
                 onClick={() => actions.addController(kind)}
-                title={
-                  full
-                    ? `At most ${MAX_CONTROLLERS} controllers`
-                    : kindDisabled(kind)
-                      ? "A picture cannot drive spacing — it is decoded after the page loads and left out of share links"
-                      : hint
-                }
+                data-tip={full ? limit : kindDisabled(kind) ? `${tip}  ·  not for ${activeChannel}` : tip}
                 aria-label={`Place ${kind} controller at the centre`}
                 disabled={kindDisabled(kind)}
                 style={cell(false, kindDisabled(kind))}
@@ -137,9 +130,9 @@ export function ToolRail() {
       [
         <button
           key="pen"
-          className="pg-hover"
+          className="pg-hover pg-tooltip"
           onClick={() => setPathTool(pathTool === "pen" ? null : "pen")}
-          title="Pen — click to add vertices to the selected curve; Shift locks to 45°  ·  P"
+          data-tip="Pen  ·  P"
           aria-label="Pen tool"
           aria-pressed={pathTool === "pen"}
           style={cell(pathTool === "pen", false)}
@@ -148,10 +141,10 @@ export function ToolRail() {
         </button>,
         <button
           key="new"
-          className="pg-hover"
+          className="pg-hover pg-tooltip"
           onClick={() => actions.addPath()}
           disabled={paths.length >= MAX_PATHS}
-          title={paths.length >= MAX_PATHS ? `At most ${MAX_PATHS} curves` : "New curve"}
+          data-tip={paths.length >= MAX_PATHS ? `Max ${MAX_PATHS} curves` : "New curve"}
           aria-label="New path curve"
           style={cell(false, paths.length >= MAX_PATHS)}
         >
@@ -159,10 +152,10 @@ export function ToolRail() {
         </button>,
         <button
           key="plus"
-          className="pg-hover"
+          className="pg-hover pg-tooltip"
           onClick={() => actions.addVertex(selectedPath)}
           disabled={!current || current.points.length >= MAX_PATH_POINTS}
-          title="Insert a vertex on the longest span (or double-click the curve where you want one)"
+          data-tip="Add vertex"
           aria-label="Insert a vertex on the selected path"
           style={cell(false, !current || current.points.length >= MAX_PATH_POINTS)}
         >
@@ -170,10 +163,10 @@ export function ToolRail() {
         </button>,
         <button
           key="minus"
-          className="pg-hover"
+          className="pg-hover pg-tooltip"
           onClick={() => actions.removeVertex(selectedPath)}
           disabled={!current || current.points.length <= 2}
-          title="Drop the last vertex (or double-click a vertex to drop that one)"
+          data-tip="Remove vertex"
           aria-label="Drop the last vertex of the selected path"
           style={cell(false, !current || current.points.length <= 2)}
         >
@@ -192,10 +185,10 @@ export function ToolRail() {
             return (
               <button
                 key={shape}
-                className="pg-hover"
+                className="pg-hover pg-tooltip"
                 onClick={() => actions.addCutout(shape)}
                 disabled={full}
-                title={full ? `At most ${MAX_CUTOUTS} cutouts` : `${shape} cutout at the centre, then dragged`}
+                data-tip={full ? `Max ${MAX_CUTOUTS} cutouts` : `${shape} cutout`}
                 aria-label={`Place ${shape.toLowerCase()} cutout`}
                 style={cell(false, full)}
               >
@@ -209,9 +202,9 @@ export function ToolRail() {
           <>
             {rule}
             <button
-              className="pg-hover"
+              className="pg-hover pg-tooltip"
               onClick={actions.resetBoundaryOutline}
-              title="Back to the rectangle"
+              data-tip="Reset outline"
               aria-label="Reset the outline to the rectangle"
               style={cell(false, false)}
             >
@@ -222,14 +215,15 @@ export function ToolRail() {
       </>
     );
   } else if (mode === "remove") {
+    const none = !stats.hasRemovedHoles && doc.removedHoles.length === 0;
     content = (
       <button
-        className="pg-hover"
+        className="pg-hover pg-tooltip"
         onClick={actions.clearRemovedHoles}
-        disabled={!stats.hasRemovedHoles && doc.removedHoles.length === 0}
-        title="Restore every removed hole"
+        disabled={none}
+        data-tip="Restore all"
         aria-label="Restore every removed hole"
-        style={cell(false, !stats.hasRemovedHoles && doc.removedHoles.length === 0)}
+        style={cell(false, none)}
       >
         <RotateCcw size={14} />
       </button>

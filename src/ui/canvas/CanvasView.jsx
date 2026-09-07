@@ -678,22 +678,15 @@ export function CanvasView() {
 
   const modeBadge = (() => {
     if (holeRemovalMode)
-      return ["remove", `HOLE REMOVAL MODE${stats.removedHoleCount > 0 ? ` (${stats.removedHoleCount} removed)` : ""}`, "click a hole to remove or restore it"]; // prettier-ignore
-    if (variationActive) return ["variation", "EDIT VARIATION", "drag the handles · Shift snaps · Space to pan"];
+      return ["remove", `HOLE REMOVAL MODE${stats.removedHoleCount > 0 ? ` (${stats.removedHoleCount} removed)` : ""}`];
+    if (variationActive) return ["variation", "EDIT VARIATION"];
     if (pathActive)
-      return [
-        "path",
-        `EDIT PATH${pathBlock.paths.length > 1 ? ` ${selectedPath + 1}/${pathBlock.paths.length}` : ""}`,
-        pathTool === "pen"
-          ? "pen: click to add a vertex · Shift locks 45° · Esc to put it away"
-          : "drag a vertex or the curve · double-click to add or drop a vertex · Space to pan",
-      ];
-    if (boundaryActive)
-      return ["boundary", "EDIT BOUNDARY", "drag a vertex or a cutout · double-click an edge to add a vertex, a vertex to drop it · Space to pan"]; // prettier-ignore
+      return ["path", `EDIT PATH${pathBlock.paths.length > 1 ? ` ${selectedPath + 1}/${pathBlock.paths.length}` : ""}`];
+    if (boundaryActive) return ["boundary", "EDIT BOUNDARY"];
     if (fieldActive)
       return fieldTool
-        ? ["fields", `${fieldTool === "point" ? "CLICK" : "DRAG"} TO PLACE ${fieldTool.toUpperCase()}`, "Esc to stop"]
-        : ["fields", `${activeChannel.toUpperCase()} FIELD`, "drag a controller or its handles · Shift locks 45° · Delete removes it · Space to pan"]; // prettier-ignore
+        ? ["fields", `${fieldTool === "point" ? "CLICK" : "DRAG"} TO PLACE ${fieldTool.toUpperCase()}`]
+        : ["fields", `${activeChannel.toUpperCase()} FIELD`];
     return null;
   })();
 
@@ -734,7 +727,7 @@ export function CanvasView() {
           }}
         >
           {modeBadge && (
-            <Badge key={modeBadge[1]} color={modeColor(theme, modeBadge[0])} dark={dark} hint={modeBadge[2]}>
+            <Badge key={modeBadge[1]} color={modeColor(theme, modeBadge[0])} dark={dark}>
               {modeBadge[1]}
             </Badge>
           )}
@@ -757,10 +750,9 @@ export function CanvasView() {
   );
 }
 
-// The mode badge: the mode's name in its colour, and — quieter — what the
-// pointer does in it. One glance says which mode the canvas is in and how to
-// use it; the tests read the name.
-function Badge({ color, dark, hint, children }) {
+// The mode badge: the mode's name in its colour. One glance says which mode
+// the canvas is in; the tests read the name.
+function Badge({ color, dark, children }) {
   return (
     <span
       className="pg-fade-in"
@@ -780,7 +772,6 @@ function Badge({ color, dark, hint, children }) {
       }}
     >
       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{children}</span>
-      {hint && <span style={{ fontWeight: 400, opacity: 0.85, letterSpacing: 0 }}>· {hint}</span>}
     </span>
   );
 }

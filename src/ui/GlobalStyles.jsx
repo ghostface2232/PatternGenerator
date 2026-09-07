@@ -47,7 +47,7 @@ export function GlobalStyles({ theme }) {
         .pg-collapse > div { min-height: 0; overflow: hidden; }
         .pg-tooltip { position: relative; }
         .pg-tooltip::after { content: attr(data-tip); position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%) translateX(-4px); white-space: nowrap; background: ${theme.dark ? "#26262d" : "#17171b"}; color: #f4f4f5; font-size: 10px; padding: 5px 8px; border-radius: 6px; pointer-events: none; opacity: 0; transition: opacity ${DURATION_FAST}ms ${EASE}, transform ${DURATION_FAST}ms ${EASE}; z-index: 20; box-shadow: 0 6px 18px rgba(0,0,0,0.3); }
-        .pg-tooltip:hover::after, .pg-tooltip:focus-visible::after { opacity: 1; transform: translateY(-50%) translateX(0); transition-delay: 350ms; }
+        .pg-tooltip:hover::after, .pg-tooltip:focus-visible::after { opacity: 1; transform: translateY(-50%) translateX(0); transition-delay: 1000ms; }
         @keyframes pg-fade-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
         @keyframes pg-pop-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
         ::-webkit-scrollbar { width: 5px; height: 5px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: ${theme.scrollbar}; border-radius: 3px; }

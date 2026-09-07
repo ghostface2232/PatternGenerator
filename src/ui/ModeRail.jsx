@@ -100,7 +100,7 @@ export function ModeRail() {
       <div style={{ height: 1, width: 24, background: theme.sectionBorder, margin: "6px 0" }} />
       <button
         className="pg-rail-btn pg-tooltip"
-        data-tip="Shape editor  ·  boolean hole shapes"
+        data-tip="Shape editor"
         onClick={() => ui.setShapeEditorOpen(true)}
         aria-label="Open the shape editor from the rail"
         style={cell(false, theme.accent)}
