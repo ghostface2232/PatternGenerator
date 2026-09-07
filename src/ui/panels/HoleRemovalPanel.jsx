@@ -1,7 +1,6 @@
 import { useEditor } from "../EditorContext.jsx";
-import { Toggle } from "../controls/index.js";
-import { MONO } from "../theme.js";
-import { Section } from "./Section.jsx";
+import { Toggle, ghostButtonStyle, rowLabelStyle } from "../controls/index.js";
+import { Section, hintStyle } from "./Section.jsx";
 
 export function HoleRemovalPanel() {
   const { theme, ui, doc, stats, actions } = useEditor();
@@ -12,25 +11,25 @@ export function HoleRemovalPanel() {
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center",
-        padding: "4px 8px",
-        borderRadius: 4,
+        padding: "5px 9px",
+        borderRadius: 6,
         background: bg,
       }}
     >
       <span style={{ fontSize: 10, color: theme.textSecondary }}>{label}</span>
-      <span style={{ fontSize: 11, fontWeight: 600, color }}>{value}</span>
+      <span style={{ fontSize: 11, fontWeight: 600, color, fontVariantNumeric: "tabular-nums" }}>{value}</span>
     </div>
   );
   return (
-    <Section title="Hole Removal" theme={theme}>
+    <Section id="removal" title="Hole Removal" theme={theme}>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
-          <span style={{ fontSize: 11, color: theme.textSecondary }}>Click to Remove</span>
+        <label style={{ ...rowLabelStyle(theme), marginBottom: 0, cursor: "pointer" }}>
+          <span>Click to Remove · R</span>
           <Toggle value={ui.holeRemovalMode} onChange={actions.setHoleRemoval} dark={dark} label="Click to Remove" />
         </label>
         {ui.holeRemovalMode && (
-          <div style={{ fontSize: 9, color: "#888", lineHeight: 1.4 }}>
-            Click holes on the canvas to remove/restore them. OAR recalculates automatically.
+          <div style={{ ...hintStyle(theme), marginBottom: 4 }}>
+            Click a hole on the canvas to remove it, and again to restore it. The open area follows.
           </div>
         )}
         {doc.removedHoles.length > 0 && (
@@ -46,17 +45,13 @@ export function HoleRemovalPanel() {
             {row("Active", `${stats.activeHoleCount} holes`, theme.accent, theme.accentBgSoft)}
             <button
               onClick={actions.clearRemovedHoles}
-              style={{
-                padding: "5px 0",
-                fontSize: 10,
+              style={ghostButtonStyle(theme, {
+                height: 28,
                 fontWeight: 500,
                 background: theme.warnBg,
                 color: theme.warn,
-                border: `1px solid ${dark ? "rgba(239,68,68,0.25)" : "rgba(239,68,68,0.2)"}`,
-                borderRadius: 4,
-                cursor: "pointer",
-                fontFamily: MONO,
-              }}
+                border: `1px solid ${dark ? "rgba(242,107,107,0.25)" : "rgba(220,75,75,0.2)"}`,
+              })}
             >
               Restore All Holes
             </button>

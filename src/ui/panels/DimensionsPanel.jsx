@@ -1,8 +1,9 @@
-import { MoveVertical, Shuffle, SquarePen, Waypoints, X } from "lucide-react";
+import { MoveVertical, PenTool, Shuffle, SquarePen, Waypoints, X } from "lucide-react";
 import { CUSTOM_SHAPE, DIAMOND_ORIENTATIONS, MAX_PATHS, MAX_PATH_POINTS, RADIAL_LAYOUTS, RADIAL_MODES } from "../../core/constants.js"; // prettier-ignore
 import { SHAPE_PRESETS } from "../../geometry/shape-presets.js";
 import { useEditor } from "../EditorContext.jsx";
 import { Dropdown, LinkButton, PitchInfo, SegRow, SliderRow, Toggle } from "../controls/index.js";
+import { actionButtonStyle, chipStyle, ghostButtonStyle, iconButtonStyle, rowLabelStyle } from "../controls/index.js"; // prettier-ignore
 import { MONO } from "../theme.js";
 import { Section, groupLabelStyle, hintStyle, noteStyle, subLabelStyle } from "./Section.jsx";
 
@@ -53,7 +54,7 @@ export function DimensionsPanel() {
   const crossPitchesMatch = Math.abs(g.crossPitchA - g.crossPitchB) < 1e-9;
 
   return (
-    <Section title="Dimensions" theme={theme}>
+    <Section id="dimensions" title="Dimensions" theme={theme}>
       {tooFine && (
         <div style={hintStyle(theme)}>
           {doc.layout.type} cannot draw a pattern this fine on a sheet this size, so it has placed nothing rather than
@@ -299,72 +300,52 @@ export function DimensionsPanel() {
       {g.isPath && (
         <>
           <div style={groupLabelStyle(theme)}>Paths</div>
-          <button
-            onClick={actions.togglePathEditMode}
-            aria-label="Edit path curves on the canvas"
-            aria-pressed={ui.pathEditMode}
-            style={{
-              width: "100%",
-              height: 31,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 5,
-              border: `1px solid ${ui.pathEditMode ? theme.accent : theme.border}`,
-              borderRadius: 4,
-              background: ui.pathEditMode ? theme.accentBg : theme.controlBg,
-              color: ui.pathEditMode ? theme.accent : theme.textPrimary,
-              fontSize: 10,
-              cursor: "pointer",
-              fontFamily: MONO,
-              marginBottom: 12,
-            }}
-          >
-            <SquarePen size={11} /> {ui.pathEditMode ? "Editing Canvas" : "Edit on Canvas"}
-          </button>
+          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+            <button
+              onClick={actions.togglePathEditMode}
+              aria-label="Edit path curves on the canvas"
+              aria-pressed={ui.pathEditMode}
+              style={actionButtonStyle(theme, ui.pathEditMode, { flex: 1 })}
+            >
+              <SquarePen size={11} /> {ui.pathEditMode ? "Editing Canvas · P" : "Edit on Canvas · P"}
+            </button>
+            <button
+              onClick={() => {
+                if (!ui.pathEditMode) actions.setMode("path");
+                ui.setPathTool(ui.pathTool === "pen" ? null : "pen");
+              }}
+              aria-label="Draw a path with the pen"
+              aria-pressed={ui.pathTool === "pen"}
+              title="Pen: click on the canvas to add vertices, Shift locks to 45°, Esc puts it away"
+              style={actionButtonStyle(theme, ui.pathTool === "pen", { width: 38, padding: 0 })}
+            >
+              <PenTool size={12} />
+            </button>
+          </div>
           {layout.path.paths.length === 0 ? (
             <div style={hintStyle(theme)}>
               No path of your own yet — the holes are following the default one outlined on the canvas. Add a path to
-              take hold of it.
+              take hold of it, or pick the pen and click a curve out on the canvas.
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
               {layout.path.paths.map((path, index) => (
                 <div key={index} style={{ display: "flex", gap: 4 }}>
                   <button
+                    className="pg-hover"
                     onClick={() => actions.selectPath(index)}
                     aria-label={`Select path ${index + 1}`}
                     aria-pressed={index === ui.selectedPath}
-                    style={{
-                      flex: 1,
-                      height: 28,
-                      border: `1px solid ${index === ui.selectedPath ? theme.accent : theme.border}`,
-                      borderRadius: 4,
-                      background: index === ui.selectedPath ? theme.accentBg : "transparent",
-                      color: index === ui.selectedPath ? theme.accent : theme.textSecondary,
-                      fontSize: 9,
-                      cursor: "pointer",
-                      fontFamily: MONO,
-                    }}
+                    style={chipStyle(theme, index === ui.selectedPath, { flex: 1, height: 28, textAlign: "left", padding: "0 8px" })} // prettier-ignore
                   >
                     Path {index + 1} · {path.points.length} pts{path.closed ? " · loop" : ""}
                   </button>
                   <button
+                    className="pg-hover"
                     onClick={() => actions.removePath(index)}
                     aria-label={`Remove path ${index + 1}`}
                     title="Remove this path"
-                    style={{
-                      width: 28,
-                      height: 28,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: 4,
-                      background: theme.controlBg,
-                      color: theme.warn,
-                      cursor: "pointer",
-                    }}
+                    style={iconButtonStyle(theme, { color: theme.warn })}
                   >
                     <X size={12} />
                   </button>
@@ -380,43 +361,28 @@ export function DimensionsPanel() {
             ].map(([name, run, disabled, text, why]) => (
               <button
                 key={name}
+                className="pg-hover"
                 onClick={run}
                 disabled={disabled}
                 aria-label={name}
                 title={disabled ? why : name}
-                style={{
-                  flex: 1,
-                  height: 26,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: 4,
-                  background: "transparent",
-                  color: theme.textSecondary,
-                  fontSize: 9,
-                  opacity: disabled ? 0.4 : 1,
-                  cursor: disabled ? "default" : "pointer",
-                  fontFamily: MONO,
-                }}
+                style={ghostButtonStyle(theme, { flex: 1, opacity: disabled ? 0.4 : 1, cursor: disabled ? "default" : "pointer" })} // prettier-ignore
               >
                 {text}
               </button>
             ))}
+          </div>
+          <div style={hintStyle(theme)}>
+            On the canvas: drag a vertex (Shift locks it to 45°) or the whole curve, double-click the curve to add a
+            vertex there, double-click a vertex to drop it.
           </div>
           {[
             ["Smooth the path through its points", layout.path.smooth, v => api.set("layout.path.smooth", v)],
             ["Turn holes along the path", layout.path.alignToTangent, v => api.set("layout.path.alignToTangent", v)],
             ["Close this path into a loop", layout.path.paths[ui.selectedPath]?.closed ?? false, () => actions.togglePathClosed(ui.selectedPath), layout.path.paths.length === 0], // prettier-ignore
           ].map(([label, value, onChange, disabled]) => (
-            <label
-              key={label}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 10,
-                opacity: disabled ? 0.4 : 1,
-              }}
-            >
-              <span style={{ fontSize: 11, color: theme.textSecondary }}>{label}</span>
+            <label key={label} style={{ ...rowLabelStyle(theme), opacity: disabled ? 0.4 : 1 }}>
+              <span>{label}</span>
               <Toggle value={value} onChange={onChange} dark={dark} label={label} disabled={disabled} />
             </label>
           ))}
@@ -460,22 +426,8 @@ export function DimensionsPanel() {
             onClick={actions.reseedScatter}
             aria-label={g.isVoronoi ? "Shuffle the cell seed" : "Shuffle the scatter seed"}
             title="Try another arrangement at the same density"
-            style={{
-              width: "100%",
-              height: 31,
-              marginBottom: 12,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 5,
-              border: `1px solid ${theme.border}`,
-              borderRadius: 4,
-              background: theme.controlBg,
-              color: theme.textPrimary,
-              fontSize: 10,
-              cursor: "pointer",
-              fontFamily: MONO,
-            }}
+            className="pg-hover"
+            style={actionButtonStyle(theme, false, { width: "100%", marginBottom: 12 })}
           >
             <Shuffle size={11} /> Shuffle
           </button>
@@ -670,22 +622,8 @@ export function DimensionsPanel() {
             onClick={actions.addFlowDirection}
             aria-label="Add an angle controller to steer the flow"
             title="Drops a point controller on the Angle channel, ready to drag"
-            style={{
-              width: "100%",
-              height: 31,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 5,
-              border: `1px solid ${theme.border}`,
-              borderRadius: 4,
-              background: theme.controlBg,
-              color: theme.textPrimary,
-              fontSize: 10,
-              cursor: "pointer",
-              fontFamily: MONO,
-              marginBottom: 12,
-            }}
+            className="pg-hover"
+            style={actionButtonStyle(theme, false, { width: "100%", marginBottom: 12 })}
           >
             <Waypoints size={11} /> Steer the Flow
           </button>

@@ -10,6 +10,7 @@ export function TaperPanel() {
   const { taperActive } = g;
   return (
     <Section
+      id="taper"
       title="Sheet Thickness & Hole Taper"
       theme={theme}
       collapsed={!taper.enabled}
@@ -78,7 +79,7 @@ export function TaperPanel() {
         </>
       )}
       {!taperActive && (
-        <div style={{ fontSize: 9, color: theme.textFaint, marginTop: 6, lineHeight: 1.4 }}>
+        <div style={{ fontSize: 10, color: theme.textMuted, marginTop: 8, lineHeight: 1.5 }}>
           Set thickness and angle above 0 to enable taper compensation.
         </div>
       )}

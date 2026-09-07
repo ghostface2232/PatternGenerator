@@ -25,7 +25,7 @@
 const SMOOTH_MM = 2;
 const MIN_SMOOTH_SEGMENTS = 8;
 const MAX_SMOOTH_SEGMENTS = 128;
-const spanSegments = (a, b) =>
+export const spanSegments = (a, b) =>
   Math.min(
     MAX_SMOOTH_SEGMENTS,
     Math.max(MIN_SMOOTH_SEGMENTS, Math.round(Math.hypot(b.x - a.x, b.y - a.y) / SMOOTH_MM))

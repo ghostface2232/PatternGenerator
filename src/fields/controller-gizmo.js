@@ -3,13 +3,16 @@
 // (the variation gizmo) — the canvas component only supplies the cursor.
 import { clamp } from "../core/math.js";
 import { DOC_LIMITS } from "../core/constants.js";
+import { SNAP_GRID_MM, lockAnchor, lockAngleFrom, lockDelta, nearestSpan } from "../geometry/snap.js";
 import { flattenCubic, KIND_POINT_COUNT } from "./controllers.js";
 import { placementCorners } from "./image-map.js";
 
 // Grid the geometry snaps to while Shift is held, and the step the reach radius
 // lands on. Both in millimetres — the same "hold Shift to lock" idiom the
-// variation gizmo uses, but on a metric grid rather than on panel fractions.
-export const SNAP_GRID_MM = 1;
+// variation gizmo uses, but on a metric grid rather than on panel fractions. A
+// vertex with a neighbour is locked to 45° from it as well (geometry/snap.js),
+// which is what makes a Shift-dragged line come out level or square.
+export { SNAP_GRID_MM };
 export const RADIUS_STEP_MM = 0.5;
 
 // Every value a drag can write is bounded by the same range `validateDocument`
@@ -203,8 +206,60 @@ export function moveControllerHandle(controller, handleId, x, y, shift = false, 
   const index = Number(match[1]);
   const points = controller.geometry?.points || [];
   if (index >= points.length) return null;
-  const next = points.map((p, i) => (i === index ? { x: px, y: py } : p));
+  // With Shift a vertex that has a neighbour is locked to 45° from it, at a
+  // whole number of millimetres; a lone point simply lands on the grid.
+  const locked = shift ? lockAngleFrom(lockAnchor(points, index), x, y) : { x: px, y: py };
+  const next = points.map((p, i) => (i === index ? { x: coord(locked.x), y: coord(locked.y) } : p));
   return { geometry: { ...controller.geometry, points: next } };
+}
+
+// The whole controller moved by (dx, dy) — every point, or the image's
+// rectangle — for dragging it by its body. Shift constrains the move to the
+// axes and diagonals. Returns null for a controller that has no geometry of
+// its own to move (a synced one is moved through the one it follows).
+export function translateController(controller, dx, dy, shift = false) {
+  const delta = shift ? lockDelta(dx, dy) : { dx, dy };
+  if (controller.kind === "image") {
+    const placement = controller.image?.placement;
+    if (!placement) return null;
+    return {
+      image: {
+        ...controller.image,
+        placement: { ...placement, x: coord(placement.x + delta.dx), y: coord(placement.y + delta.dy) },
+      },
+    };
+  }
+  if (controller.syncWith) return null;
+  const points = controller.geometry?.points || [];
+  if (!points.length) return null;
+  return {
+    geometry: {
+      ...controller.geometry,
+      points: points.map(p => ({ x: coord(p.x + delta.dx), y: coord(p.y + delta.dy) })),
+    },
+  };
+}
+
+// A polyline vertex put where the pointer is, on the span nearest to it — what
+// a double-click on the line does, like Figma's click on a segment. Null when
+// the controller is not a polyline, is full, or the pointer is too far away.
+export function insertPolylinePointAt(controller, x, y, tolerance = Infinity) {
+  const points = controller.geometry?.points || [];
+  const { max } = KIND_POINT_COUNT.polyline;
+  if (controller.kind !== "polyline" || points.length < 2 || points.length >= max) return null;
+  const span = nearestSpan(points, x, y);
+  if (!span || span.distance > tolerance) return null;
+  const point = { x: coord(span.x), y: coord(span.y) };
+  return { geometry: { ...controller.geometry, points: [...points.slice(0, span.index + 1), point, ...points.slice(span.index + 1)] } }; // prettier-ignore
+}
+
+// One named vertex removed — what a double-click on it does. A polyline keeps
+// at least its two ends.
+export function removePolylinePointAt(controller, index) {
+  const points = controller.geometry?.points || [];
+  const min = KIND_POINT_COUNT.polyline.min;
+  if (controller.kind !== "polyline" || points.length <= min || index < 0 || index >= points.length) return null;
+  return { geometry: { ...controller.geometry, points: points.filter((_, i) => i !== index) } };
 }
 
 // Polyline vertex count, edited from the inspector: a new vertex is inserted at

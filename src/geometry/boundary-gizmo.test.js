@@ -9,6 +9,7 @@ import {
   moveBoundaryHandle,
   nearestBoundaryEdge,
   removeBoundaryVertex,
+  translateCutout,
 } from "./boundary-gizmo.js";
 import { createCutout } from "./boundary.js";
 import { fitRings, inspectSVG, svgToRings, svgToUnitShape } from "./svg-import.js";
@@ -39,9 +40,13 @@ test("polygon vertices and cutouts have handles that hit, move and snap", () => 
   assert.equal(hitTestBoundary(b, 110, 100, 10).role, "size");
   assert.equal(hitTestBoundary(b, 60, 60, 10), null);
 
+  // Shift locks the vertex to 45° from the one before it round the ring —
+  // here (20, 180), so the left edge stays square — at a whole millimetre.
   const moved = moveBoundaryHandle(b, handles[0], 25.4, 21.6, true);
-  assert.deepEqual(moved.rings[0][0], [25, 22], "shift snaps to the millimetre grid");
+  assert.deepEqual(moved.rings[0][0], [20, 22], "shift squares the edge and snaps to the millimetre grid");
   assert.deepEqual(moved.rings[0][1], [180, 20]);
+  // A cutout's centre, with no neighbour, simply lands on the grid.
+  assert.deepEqual([moveBoundaryHandle(b, handles[4], 50.4, 60.6, true).cutouts[0].x, moveBoundaryHandle(b, handles[4], 50.4, 60.6, true).cutouts[0].y], [50, 61]); // prettier-ignore
   const far = moveBoundaryHandle(b, handles[0], 99999, -99999);
   assert.deepEqual(far.rings[0][0], [DOC_LIMITS["boundary.coord"][1], DOC_LIMITS["boundary.coord"][0]]);
 
@@ -51,6 +56,12 @@ test("polygon vertices and cutouts have handles that hit, move and snap", () => 
   near(sized.cutouts[0].w, 60);
   near(sized.cutouts[0].h, 60, 1e-9);
   assert.equal(moveBoundaryHandle(b, { role: "move", cutout: "ghost" }, 0, 0), null);
+  // A body drag moves the whole cutout, and never past the document's range.
+  assert.deepEqual([translateCutout(cut, 5, -5).x, translateCutout(cut, 5, -5).y], [105, 95]);
+  assert.equal(translateCutout(cut, 1e6, 0).x, DOC_LIMITS["boundary.coord"][1]);
+  const poly = createCutout("Polygon", 100, 100, 20);
+  const shifted = translateCutout(poly, 3, 4);
+  assert.deepEqual(shifted.points[0], [poly.points[0][0] + 3, poly.points[0][1] + 4]);
 });
 
 test("a rectangle cutout's rim handle follows its rotation and only its width", () => {

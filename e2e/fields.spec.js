@@ -233,12 +233,15 @@ test("an image controller drives the channel from the picture's brightness", asy
   await page.getByRole("switch", { name: "Invert image", exact: true }).click();
   await expect.poll(() => oar(page)).toBeCloseTo(bright, 1);
 
-  // A target equal to the channel's neutral value leaves the pattern alone.
-  const defaultTarget = await page.getByLabel("Target Size", { exact: true }).inputValue();
-  await setSlider(page, "Target Size", 1);
+  // A fresh picture is read as a halftone whose two ends are the value at
+  // black and at white; with both on the channel's neutral value the pattern
+  // is left alone.
+  const defaultTarget = await page.getByLabel("Light → Size", { exact: true }).inputValue();
+  await expect(page.getByLabel("Dark → Size", { exact: true })).toHaveValue("1");
+  await setSlider(page, "Light → Size", 1);
   expect(await oar(page)).toBeLessThan(bright);
   await expect(stat(page, "stat-ligament")).toHaveText("3.00 mm");
-  await setSlider(page, "Target Size", defaultTarget);
+  await setSlider(page, "Light → Size", defaultTarget);
   expect(await oar(page)).toBeCloseTo(bright, 1);
 
   // Flattening the output range sends every pixel to zero brightness, so the
@@ -304,7 +307,7 @@ test("the three canvas modes are mutually exclusive", async ({ page }) => {
   await expect(page.getByText(/SIZE FIELD/)).toBeVisible();
   await expect(page.getByText(/HOLE REMOVAL MODE/)).toHaveCount(0);
 
-  const editVariation = page.getByRole("button", { name: /Edit on Canvas|Editing Canvas/ }).first();
+  const editVariation = page.getByRole("button", { name: "Edit the size gradient on the canvas", exact: true });
   await editVariation.scrollIntoViewIfNeeded();
   await editVariation.click();
   await expect(page.getByText(/EDIT VARIATION/)).toBeVisible();

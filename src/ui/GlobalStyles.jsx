@@ -1,3 +1,5 @@
+import { DURATION, DURATION_FAST, EASE } from "./theme.js";
+
 export function GlobalStyles({ theme }) {
   return (
     <>
@@ -24,13 +26,34 @@ export function GlobalStyles({ theme }) {
           descent-override: 30%;
           line-gap-override: 0%;
         }
-        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: ${theme.accent}; cursor: pointer; border: 2px solid ${theme.dark ? "#18181b" : "#fff"}; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
-        input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: ${theme.accent}; cursor: pointer; border: 2px solid ${theme.dark ? "#18181b" : "#fff"}; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
-        button { transition: background 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s, transform 0.1s; }
-        button:active { transform: scale(0.96); }
-        .pg-menu-item:hover { background: ${theme.dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"} !important; }
-        ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: ${theme.scrollbar}; border-radius: 3px; }
         * { box-sizing: border-box; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: ${theme.accent}; cursor: pointer; border: 2px solid ${theme.dark ? "#15151a" : "#fff"}; box-shadow: 0 1px 3px rgba(0,0,0,0.3); transition: transform ${DURATION_FAST}ms ${EASE}; }
+        input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: ${theme.accent}; cursor: pointer; border: 2px solid ${theme.dark ? "#15151a" : "#fff"}; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+        input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.15); }
+        input[type="range"]:focus-visible { outline: none; box-shadow: ${theme.focusRing}; border-radius: 4px; }
+        button { transition: background ${DURATION_FAST}ms ${EASE}, color ${DURATION_FAST}ms ${EASE}, border-color ${DURATION_FAST}ms ${EASE}, opacity ${DURATION_FAST}ms ${EASE}, transform ${DURATION_FAST}ms ${EASE}, box-shadow ${DURATION_FAST}ms ${EASE}; }
+        button:active:not(:disabled) { transform: scale(0.97); }
+        button:focus-visible, input:focus-visible, [role="switch"]:focus-visible { outline: none; box-shadow: ${theme.focusRing}; }
+        button:disabled { cursor: default; }
+        .pg-menu-item:hover { background: ${theme.dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"} !important; }
+        .pg-hover:hover:not(:disabled) { background: ${theme.dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"}; color: ${theme.textPrimary}; }
+        .pg-rail-btn:hover:not(:disabled) { background: ${theme.dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)"}; color: ${theme.textPrimary}; }
+        .pg-fade-in { animation: pg-fade-in ${DURATION}ms ${EASE} both; }
+        .pg-pop-in { animation: pg-pop-in ${DURATION}ms ${EASE} both; }
+        .pg-collapse { display: grid; grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows ${DURATION}ms ${EASE}, opacity ${DURATION}ms ${EASE}, visibility 0s linear 0s; }
+        /* visibility: hidden takes the folded controls out of the tab order (opacity alone left
+           invisible sliders focusable), delayed so the fold still animates shut. */
+        .pg-collapse[data-closed="true"] { grid-template-rows: 0fr; opacity: 0; pointer-events: none; visibility: hidden; transition-delay: 0s, 0s, ${DURATION}ms; }
+        .pg-collapse > div { min-height: 0; overflow: hidden; }
+        .pg-tooltip { position: relative; }
+        .pg-tooltip::after { content: attr(data-tip); position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%) translateX(-4px); white-space: nowrap; background: ${theme.dark ? "#26262d" : "#17171b"}; color: #f4f4f5; font-size: 10px; padding: 5px 8px; border-radius: 6px; pointer-events: none; opacity: 0; transition: opacity ${DURATION_FAST}ms ${EASE}, transform ${DURATION_FAST}ms ${EASE}; z-index: 20; box-shadow: 0 6px 18px rgba(0,0,0,0.3); }
+        .pg-tooltip:hover::after, .pg-tooltip:focus-visible::after { opacity: 1; transform: translateY(-50%) translateX(0); transition-delay: 350ms; }
+        @keyframes pg-fade-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+        @keyframes pg-pop-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
+        ::-webkit-scrollbar { width: 5px; height: 5px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: ${theme.scrollbar}; border-radius: 3px; }
+        @media (prefers-reduced-motion: reduce) {
+          *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+        }
       `}</style>
     </>
   );

@@ -2,8 +2,7 @@ import { useRef, useState } from "react";
 import { Layers, Upload } from "lucide-react";
 import { CUSTOM_SHAPE, DIN_PRESETS, HOLE_SHAPES, MORPH_SHAPE, PATTERN_TYPES } from "../../core/constants.js";
 import { useEditor } from "../EditorContext.jsx";
-import { Dropdown, SliderRow } from "../controls/index.js";
-import { MONO } from "../theme.js";
+import { Dropdown, SliderRow, ghostButtonStyle } from "../controls/index.js";
 import { Section, hintStyle } from "./Section.jsx";
 
 export function PatternPanel() {
@@ -21,21 +20,14 @@ export function PatternPanel() {
       setImportError(`Could not use ${file.name}: ${err.message}`);
     }
   };
-  const smallButton = {
+  const smallButton = ghostButtonStyle(theme, {
     flex: 1,
     height: 28,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     gap: 5,
-    border: `1px solid ${theme.border}`,
-    borderRadius: 4,
-    background: "transparent",
-    color: theme.textSecondary,
-    fontSize: 9,
-    cursor: "pointer",
-    fontFamily: MONO,
-  };
+  });
   // Voronoi cuts each hole to its own cell and Flow Lines cuts a slot along each
   // streamline, so in those two the shape dropdown below is not driving anything
   // — and saying so is better than leaving someone to work out why changing it
@@ -44,7 +36,7 @@ export function PatternPanel() {
   const morph = geometry.holeShape === MORPH_SHAPE;
   const mix = doc.hole.shapeMix;
   return (
-    <Section title="Pattern & Hole" theme={theme}>
+    <Section id="pattern" title="Pattern & Hole" theme={theme}>
       <Dropdown
         label="Preset (DIN 24041)"
         value={doc.presetIndex}

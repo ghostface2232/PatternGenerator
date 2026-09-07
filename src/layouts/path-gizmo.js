@@ -5,7 +5,8 @@
 import { clamp } from "../core/math.js";
 import { DOC_LIMITS, MAX_PATHS, MAX_PATH_POINTS } from "../core/constants.js";
 import { distPointSeg } from "../geometry/polygon.js";
-import { defaultPathPoints, flattenPath } from "./path.js";
+import { lockAnchor, lockAngleFrom, lockDelta, nearestSpan } from "../geometry/snap.js";
+import { defaultPathPoints, flattenPath, spanSegments } from "./path.js";
 
 const COORD = DOC_LIMITS["layout.path.coord"];
 // Everything a canvas drag writes is clamped to the same range validateDocument
@@ -43,15 +44,91 @@ export function pathBodyDistance(path, x, y, smooth) {
   return best;
 }
 
-export function movePathVertex(paths, pathIndex, pointIndex, x, y) {
+// Shift locks the vertex to 45° from its neighbour, at a whole number of
+// millimetres — the same idiom as the controller gizmo.
+export function movePathVertex(paths, pathIndex, pointIndex, x, y, shift = false) {
+  return paths.map((path, i) => {
+    if (i !== pathIndex) return path;
+    const target = shift ? lockAngleFrom(lockAnchor(path.points, pointIndex, path.closed), x, y) : { x, y };
+    return {
+      ...path,
+      points: path.points.map((point, j) =>
+        j !== pointIndex ? point : { x: clampCoord(target.x), y: clampCoord(target.y) }
+      ),
+    };
+  });
+}
+
+// The whole curve moved by (dx, dy), for dragging it by its body. Shift
+// constrains the move to the axes and diagonals.
+export function translatePath(paths, pathIndex, dx, dy, shift = false) {
+  const delta = shift ? lockDelta(dx, dy) : { dx, dy };
   return paths.map((path, i) =>
     i !== pathIndex
       ? path
-      : {
-          ...path,
-          points: path.points.map((point, j) => (j !== pointIndex ? point : { x: clampCoord(x), y: clampCoord(y) })),
-        }
+      : { ...path, points: path.points.map(p => ({ x: clampCoord(p.x + delta.dx), y: clampCoord(p.y + delta.dy) })) }
   );
+}
+
+// A vertex put where the pointer is, on the span of the drawn curve nearest to
+// it — a double-click on the curve, as in Figma. The span is found on the
+// FLATTENED curve, since that is what is on screen, and mapped back to the
+// authored span it belongs to. Null when the curve is full or the pointer is
+// further than `tolerance` from it.
+export function insertPathVertexAt(path, x, y, smooth, tolerance = Infinity) {
+  if (path.points.length >= MAX_PATH_POINTS || path.points.length < 2) return null;
+  const poly = flattenPath(path.points, { closed: path.closed, smooth });
+  const hit = nearestSpan(poly, x, y);
+  if (!hit || hit.distance > tolerance) return null;
+  // Which authored span does that flattened segment fall in? The flattening
+  // emits a segment count PER SPAN that depends on the span's length
+  // (`spanSegments`), so walk the same counts back rather than assuming an
+  // even share: a short span beside a long one would otherwise send the vertex
+  // to the wrong span and fold the curve back on itself.
+  const n = path.points.length;
+  const spans = path.closed ? n : n - 1;
+  let at = spans - 1;
+  if (smooth) {
+    let consumed = 0;
+    for (let i = 0; i < spans; i++) {
+      consumed += spanSegments(path.points[i], path.points[(i + 1) % n]);
+      if (hit.index < consumed) {
+        at = i;
+        break;
+      }
+    }
+  } else at = Math.min(spans - 1, hit.index);
+  const points = path.points.slice();
+  points.splice(at + 1, 0, { x: clampCoord(hit.x), y: clampCoord(hit.y) });
+  return { ...path, points };
+}
+
+// One named vertex removed — a double-click on it. Two is the floor.
+export function removePathVertexAt(path, pointIndex) {
+  if (path.points.length <= 2 || pointIndex < 0 || pointIndex >= path.points.length) return null;
+  return { ...path, points: path.points.filter((_, i) => i !== pointIndex) };
+}
+
+// The pen: a vertex appended after the curve's last one. Shift locks it to 45°
+// from that one. Null when the curve is full.
+export function appendPathVertex(path, x, y, shift = false) {
+  if (path.points.length >= MAX_PATH_POINTS) return null;
+  const last = path.points[path.points.length - 1];
+  const target = shift && last ? lockAngleFrom(last, x, y) : { x, y };
+  return { ...path, points: [...path.points, { x: clampCoord(target.x), y: clampCoord(target.y) }] };
+}
+
+// A curve started by the pen, from its first two clicks. The first click alone
+// is held in UI state rather than written: a one-vertex path is not a curve,
+// and `validateDocument` would drop it on reload.
+export function startPath(a, b) {
+  return {
+    points: [
+      { x: clampCoord(a.x), y: clampCoord(a.y) },
+      { x: clampCoord(b.x), y: clampCoord(b.y) },
+    ],
+    closed: false,
+  };
 }
 
 // A new vertex at the midpoint of the longest span, which is where a curve has

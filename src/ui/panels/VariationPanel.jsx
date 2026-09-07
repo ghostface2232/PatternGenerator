@@ -4,53 +4,37 @@ import { MAX_VARIATION_LAYERS } from "../../core/constants.js";
 import { gizmoUsesPosition } from "../../fields/gizmo.js";
 import { useEditor } from "../EditorContext.jsx";
 import { ProfileIcon, Select, SliderRow, Toggle } from "../controls/index.js";
+import { actionButtonStyle, chipStyle, iconButtonStyle } from "../controls/index.js";
 import { MONO } from "../theme.js";
-import { Section } from "./Section.jsx";
+import { Section, groupLabelStyle, hintStyle } from "./Section.jsx";
 
+// The size gradient: one scalar field over the whole sheet (space × profile,
+// up to three layers) that scales every hole. It is the broad-brush sibling of
+// the controllers below it — a controller is local, the gradient is global —
+// and the two multiply, so they are edited from the same Fields group and the
+// same rail.
 export function VariationPanel() {
   const { doc, theme, ui, geometry: g, stats, history, selectedVariationLayer: layer, actions } = useEditor();
   const { dark } = theme;
   const { variation } = doc;
   const { variationEditMode, variationAdvanced, setVariationAdvanced } = ui;
-  const iconBtn = (extra = {}) => ({
-    width: 28,
-    height: 28,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    border: `1px solid ${theme.border}`,
-    borderRadius: 4,
-    background: theme.controlBg,
-    color: theme.textPrimary,
-    cursor: "pointer",
-    ...extra,
-  });
-  const chip = (active, extra = {}) => ({
-    border: `1px solid ${active ? theme.accent : theme.border}`,
-    borderRadius: 4,
-    background: active ? theme.accentBg : "transparent",
-    color: active ? theme.accent : theme.textSecondary,
-    fontSize: 9,
-    cursor: "pointer",
-    fontFamily: MONO,
-    ...extra,
-  });
-  const groupLabel = {
-    fontSize: 9,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-    color: theme.textSecondary,
-    marginBottom: 6,
-  };
+  const iconBtn = (extra = {}) => iconButtonStyle(theme, extra);
+  const chip = (active, extra = {}) => chipStyle(theme, active, { padding: 0, ...extra });
+  const groupLabel = groupLabelStyle(theme);
 
   return (
     <Section
-      title="Size Variation"
+      id="variation"
+      title="Size Gradient"
       theme={theme}
       right={
-        <Toggle value={variation.enabled} onChange={actions.setVariationEnabled} dark={dark} label="Size Variation" />
+        <Toggle value={variation.enabled} onChange={actions.setVariationEnabled} dark={dark} label="Size Gradient" />
       }
     >
+      <div style={hintStyle(theme)}>
+        A gradient across the whole sheet that scales every hole — linear, radial, angular or spiral, shaped by a
+        profile. Controllers below multiply on top of it.
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 5, marginBottom: 8 }}>
         <Select
           value=""
@@ -92,48 +76,26 @@ export function VariationPanel() {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 12 }}>
         <button
+          className="pg-hover"
           onClick={actions.randomizeVariation}
-          style={{
-            height: 31,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 5,
-            border: `1px solid ${theme.border}`,
-            borderRadius: 4,
-            background: theme.controlBg,
-            color: theme.textPrimary,
-            fontSize: 10,
-            cursor: "pointer",
-            fontFamily: MONO,
-          }}
+          aria-label="Randomize"
+          style={actionButtonStyle(theme)}
         >
           <Sparkles size={11} /> Randomize
         </button>
         <button
           onClick={actions.toggleVariationEditMode}
-          style={{
-            height: 31,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 5,
-            border: `1px solid ${variationEditMode ? theme.accent : theme.border}`,
-            borderRadius: 4,
-            background: variationEditMode ? theme.accentBg : theme.controlBg,
-            color: variationEditMode ? theme.accent : theme.textPrimary,
-            fontSize: 10,
-            cursor: "pointer",
-            fontFamily: MONO,
-          }}
+          aria-label="Edit the size gradient on the canvas"
+          aria-pressed={variationEditMode}
+          style={actionButtonStyle(theme, variationEditMode)}
         >
           {variationEditMode ? (
             <>
-              <Check size={11} /> Editing Canvas
+              <Check size={11} /> Editing Canvas · G
             </>
           ) : (
             <>
-              <SquarePen size={11} /> Edit on Canvas
+              <SquarePen size={11} /> Edit on Canvas · G
             </>
           )}
         </button>

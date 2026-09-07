@@ -108,7 +108,7 @@ test("a layout mode is still addressable with the variation panel open", async (
   // Spiral and Radial are layout modes AND variation field spaces. An accessible
   // name has to be unique in the document, and the suite uses no `.first()`, so
   // this fails on a collision rather than silently clicking the wrong control.
-  const variation = page.getByRole("switch", { name: "Size Variation", exact: true });
+  const variation = page.getByRole("switch", { name: "Size Gradient", exact: true });
   await variation.scrollIntoViewIfNeeded();
   await variation.click();
   await expect(page.getByRole("button", { name: "Spiral field space", exact: true })).toBeVisible();

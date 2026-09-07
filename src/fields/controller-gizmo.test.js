@@ -7,9 +7,12 @@ import {
   controllerHandles,
   controllerPolyline,
   hitTestController,
+  insertPolylinePointAt,
   moveControllerHandle,
   reachAnchor,
   removePolylinePoint,
+  removePolylinePointAt,
+  translateController,
 } from "./controller-gizmo.js";
 import { MAX_POLYLINE_POINTS, createController } from "./controllers.js";
 
@@ -94,8 +97,17 @@ test("dragging a handle moves exactly the thing it stands for", () => {
   // that cannot be dragged back open.
   near(moveControllerHandle(controller, "radius", 10, 0).radius, RADIUS_MIN_MM);
 
-  // Shift snaps positions to the millimetre grid and the reach to its own step.
-  assert.deepEqual(moveControllerHandle(controller, "p0", 3.4, -2.6, true).geometry.points[0], { x: 3, y: -3 });
+  // Shift locks a vertex to 45° from its neighbour at a whole number of
+  // millimetres, and the reach to its own step. From p1 at (20, 0), a cursor at
+  // (3.4, −2.6) is 9° off level, 16.8 mm away: the segment comes out level.
+  assert.deepEqual(moveControllerHandle(controller, "p0", 3.4, -2.6, true).geometry.points[0], { x: 3, y: 0 });
+  // Straight down from p0 at (0, 0): the line stands square.
+  const square = moveControllerHandle(controller, "p1", 1.2, 14.7, true).geometry.points[1];
+  near(square.x, 0);
+  near(square.y, 15);
+  // A lone point has no neighbour, so Shift simply lands it on the grid.
+  const lone = { ...controller, kind: "point", geometry: { points: [{ x: 5, y: 5 }] } };
+  assert.deepEqual(moveControllerHandle(lone, "p0", 3.4, -2.6, true).geometry.points[0], { x: 3, y: -3 });
   near(moveControllerHandle(controller, "radius", 10, 7.4, true).radius, 7.5);
 
   // A handle from another controller is a no-op, not a corruption.
@@ -187,4 +199,36 @@ test("polyline vertices are added on the longest span and removed from the end",
   }
   assert.equal(long.geometry.points.length, MAX_POLYLINE_POINTS);
   assert.equal(addPolylinePoint(long), null);
+
+  // A double-click on the line puts a vertex where the pointer is, on that span.
+  const onSpan = insertPolylinePointAt(controller, 30, 2, 5);
+  assert.equal(onSpan.geometry.points.length, 4);
+  assert.deepEqual(onSpan.geometry.points[2], { x: 30, y: 0 });
+  assert.equal(insertPolylinePointAt(controller, 30, 20, 5), null, "too far from the line");
+  assert.equal(insertPolylinePointAt(line(), 10, 0), null, "not a polyline");
+  // …and on a vertex takes that one away, never the last two.
+  assert.deepEqual(removePolylinePointAt(controller, 1).geometry.points, [
+    { x: 0, y: 0 },
+    { x: 45, y: 0 },
+  ]);
+  assert.equal(removePolylinePointAt({ ...controller, geometry: { points: controller.geometry.points.slice(0, 2) } }, 0), null); // prettier-ignore
+});
+
+test("a controller is dragged by its body as one piece", () => {
+  const moved = translateController(line(), 5, -3);
+  assert.deepEqual(moved.geometry.points, [
+    { x: 5, y: -3 },
+    { x: 25, y: -3 },
+  ]);
+  assert.equal(moved.radius, undefined);
+  // Shift constrains the move to the axes and diagonals.
+  const level = translateController(line(), 10, 1, true);
+  near(level.geometry.points[0].x, Math.hypot(10, 1), 1e-6);
+  near(level.geometry.points[0].y, 0);
+  // An image moves its rectangle; a synced controller has nothing of its own to move.
+  const image = createController({ channel: "size", kind: "image", area: AREA });
+  const shifted = translateController(image, 7, 8);
+  near(shifted.image.placement.x, image.image.placement.x + 7);
+  near(shifted.image.placement.y, image.image.placement.y + 8);
+  assert.equal(translateController(line({ syncWith: "other" }), 1, 1), null);
 });

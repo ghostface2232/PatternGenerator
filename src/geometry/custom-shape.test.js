@@ -1,6 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { composeLayers, createShapeLayer, designExtent, layerRings, layersToUnitShape } from "./custom-shape.js";
+import {
+  composeLayers,
+  createShapeLayer,
+  designExtent,
+  duplicateLayer,
+  hitTestLayerHandles,
+  hitTestLayers,
+  insertLayerVertexAt,
+  layerHandles,
+  layerRings,
+  layersToUnitShape,
+  moveLayerHandle,
+  removeLayerVertexAt,
+  translateLayer,
+} from "./custom-shape.js";
 import { ringsArea, ringsBBox, ringsContains } from "./rings.js";
 import { createDocument } from "../core/document.js";
 import { validateDocument } from "../core/persistence.js";
@@ -92,6 +106,74 @@ test("a complex composed outline survives save validation without losing its far
   assert.equal(ringsContains(custom.rings, 0.49, 0), true);
   const fittedArea = ringsArea(custom.rings) * 109 * 10;
   assert.ok(Math.abs(fittedArea - rawArea) / rawArea < 0.003);
+});
+
+test("intersect keeps the overlap and exclude keeps everything but it", () => {
+  const a = { ...createShapeLayer("Rectangle"), ratio: 0, w: 10, h: 10, x: 0 };
+  const b = { ...createShapeLayer("Rectangle", [a]), ratio: 0, w: 10, h: 10, x: 5 };
+  near(ringsArea(composeLayers([a, { ...b, role: "intersect" }]).flat()), 50);
+  const excluded = composeLayers([a, { ...b, role: "exclude" }]).flat();
+  near(ringsArea(excluded), 100);
+  assert.equal(ringsContains(excluded, 2.5, 0), false, "the overlap is gone");
+  assert.equal(ringsContains(excluded, -2.5, 0), true);
+  assert.equal(ringsContains(excluded, 7.5, 0), true);
+  // A cut with nothing yet to cut from is skipped rather than emptying the stack.
+  near(ringsArea(composeLayers([{ ...a, role: "subtract" }, b]).flat()), 100);
+  // Intersecting with nothing below is the shape itself.
+  near(ringsArea(composeLayers([{ ...a, role: "intersect" }]).flat()), 100);
+});
+
+test("layers are dragged, resized, turned and picked on the editor's canvas", () => {
+  const layer = { ...createShapeLayer("Rectangle"), ratio: 0, w: 20, h: 10 };
+  const handles = layerHandles(layer, 3);
+  assert.deepEqual(
+    handles.map(h => h.id),
+    ["nw", "ne", "se", "sw", "rotate"]
+  );
+  near(handles[2].x, 10);
+  near(handles[2].y, 5);
+  near(handles[4].y, -8);
+  assert.equal(hitTestLayerHandles(layer, 10.2, 5.1, 1, 3).id, "se");
+  assert.equal(hitTestLayerHandles(layer, 0, 0, 1, 3), null);
+
+  const moved = translateLayer(layer, 3, 4);
+  assert.deepEqual([moved.x, moved.y], [3, 4]);
+  near(translateLayer(layer, 10, 0.4, true).y, 0);
+
+  // A corner resizes about the centre; Shift keeps 2:1.
+  const sized = moveLayerHandle(layer, handles[2], 15, 5);
+  near(sized.w, 30);
+  near(sized.h, 10);
+  const kept = moveLayerHandle(layer, handles[2], 15, 5, true);
+  near(kept.w, 30);
+  near(kept.h, 15);
+  // The knob turns it; Shift in 15° steps.
+  assert.equal(moveLayerHandle(layer, handles[4], 10, 0).rotation, 90);
+  assert.equal(moveLayerHandle(layer, handles[4], 10, -1, true).rotation, 90);
+
+  // Picking: the topmost layer under the point, or near its outline.
+  const other = { ...createShapeLayer("Circle", [layer]), x: 30, w: 10, h: 10 };
+  assert.equal(hitTestLayers([layer, other], 0, 0).id, layer.id);
+  assert.equal(hitTestLayers([layer, other], 30, 0).id, other.id);
+  assert.equal(hitTestLayers([layer, other], 50, 50), null);
+  assert.equal(hitTestLayers([layer, other], 10.5, 0, 1).id, layer.id);
+
+  // Polygon vertices move, lock to 45° with Shift, and are added and removed.
+  const poly = createShapeLayer("Polygon");
+  const vertex = layerHandles(poly)[1];
+  assert.equal(vertex.role, "vertex");
+  assert.deepEqual(moveLayerHandle(poly, vertex, 6, 6).points[1], [6, 6]);
+  assert.deepEqual(moveLayerHandle(poly, vertex, 0.3, 7, true).points[1], [0, 7]); // straight below vertex 0
+  const grown = insertLayerVertexAt(poly, 5, 0, 5);
+  assert.equal(grown.points.length, 4);
+  assert.equal(insertLayerVertexAt(poly, 50, 50, 1), null);
+  assert.equal(removeLayerVertexAt(grown, 1).points.length, 3);
+  assert.equal(removeLayerVertexAt(poly, 0), null, "three is the floor");
+
+  const twin = duplicateLayer(layer, [layer, other]);
+  assert.notEqual(twin.id, layer.id);
+  assert.ok(twin.x > layer.x);
+  assert.equal(twin.w, layer.w);
 });
 
 test("the editor rejects proportions that would change after a reload", () => {

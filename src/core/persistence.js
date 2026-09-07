@@ -34,6 +34,7 @@ import {
   CONTROLLER_KINDS,
   FALLOFFS,
   FIELD_CHANNELS,
+  IMAGE_MODES,
   KIND_POINT_COUNT,
   MAX_CONTROLLERS,
   ONE_SIDED_VALUES,
@@ -84,6 +85,27 @@ const MIGRATIONS = {
   // defaults — a Rectangle with no cutouts, not trimmed — which is exactly the
   // margin-inset rectangle it was saved with.
   5: doc => ({ ...doc, schemaVersion: 6 }),
+  // 6 → 7: image controllers gain a reading mode. Before it existed every
+  // image was read as a MASK (brightness is the weight toward the target), so
+  // a v6 image controller is marked as one explicitly — a validation default of
+  // "halftone" would otherwise change what its picture does. The shape editor's
+  // layer roles also grew intersect and exclude, which a v6 stack cannot name.
+  6: doc => {
+    const controllers = doc?.fields?.controllers;
+    if (!Array.isArray(controllers)) return { ...doc, schemaVersion: 7 };
+    return {
+      ...doc,
+      schemaVersion: 7,
+      fields: {
+        ...doc.fields,
+        controllers: controllers.map(c =>
+          c && c.kind === "image" && c.image && typeof c.image === "object" && !("mode" in c.image)
+            ? { ...c, image: { ...c.image, mode: "mask" } }
+            : c
+        ),
+      },
+    };
+  },
 };
 
 // ─── Validation ───────────────────────────────────────────────────────
@@ -227,6 +249,9 @@ function validateController(raw, index, takenIds) {
     const image = obj(c.image);
     controller.image = {
       assetId: typeof image.assetId === "string" && image.assetId ? image.assetId.slice(0, 64) : null,
+      mode: pick(image.mode, IMAGE_MODES, "halftone"),
+      // The value a black pixel reads in the halftone mode; neutral by default.
+      low: num(image.low, CHANNEL_INFO[channel].base, TARGET_LIMIT[channel]),
       invert: bool(image.invert, false),
       gamma: num(image.gamma, 1, "controller.image.gamma"),
       min: num(image.min, 0, "controller.image.level"),
