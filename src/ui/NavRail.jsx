@@ -10,8 +10,11 @@ import { transition } from "./controls/index.js";
 // left column says WHAT you are working on and the right panel holds the
 // numbers for it. Choosing an entry shows its page in the inspector and, when
 // the page owns a canvas mode, enters that mode, so the handles on the sheet
-// and the numbers beside it arrive together. The entry's coloured bar says
-// the mode is live; the highlight alone says only that the page is open.
+// and the numbers beside it arrive together. Two states, drawn apart: the
+// open page is a quiet neutral highlight (where you are), and a live mode is
+// the mode's own colour with a full-height bar (what the canvas is doing) —
+// colour on a rail reads as "tool active" to anyone from Figma or a CAD tool,
+// so it is reserved for exactly that.
 //
 // The pages keep their own "Edit on Canvas" buttons: a mode has to be
 // reachable from where its numbers are as well as from here.
@@ -20,7 +23,7 @@ export function NavRail() {
   const { mode, activePanel } = ui;
   const isPath = doc.layout.type === "Path";
 
-  const cell = (active, colour) => ({
+  const cell = (active, live, colour) => ({
     width: 50,
     height: 46,
     display: "flex",
@@ -30,8 +33,8 @@ export function NavRail() {
     gap: 4,
     border: "none",
     borderRadius: 9,
-    background: active ? `${colour}22` : "transparent",
-    color: active ? colour : theme.textSecondary,
+    background: live ? `${colour}22` : active ? theme.btnBg : "transparent",
+    color: live ? colour : active ? theme.textPrimary : theme.textSecondary,
     cursor: "pointer",
     padding: 0,
     position: "relative",
@@ -43,7 +46,7 @@ export function NavRail() {
     // others overrode the global focus ring, and the rail could not be seen
     // to have the keyboard focus; the stylesheet's focus rule wins over the
     // open page's ring as well.
-    ...(active ? { boxShadow: `inset 0 0 0 1px ${colour}55` } : null),
+    ...(live ? { boxShadow: `inset 0 0 0 1px ${colour}55` } : active ? { boxShadow: `inset 0 0 0 1px ${theme.border}` } : null), // prettier-ignore
   });
 
   return (
@@ -79,7 +82,7 @@ export function NavRail() {
             onClick={() => actions.showPanel(entry.id, { toggleMode: true })}
             aria-label={entry.aria}
             aria-pressed={active}
-            style={cell(active, colour)}
+            style={cell(active, live, colour)}
           >
             <entry.Icon size={16} strokeWidth={1.8} />
             <span aria-hidden="true">{entry.label}</span>
@@ -89,9 +92,9 @@ export function NavRail() {
                 style={{
                   position: "absolute",
                   left: -6,
-                  top: 15,
+                  top: 4,
                   width: 3,
-                  height: 16,
+                  height: 38,
                   borderRadius: 2,
                   background: colour,
                 }}
@@ -107,7 +110,7 @@ export function NavRail() {
         data-tip="Shape editor"
         onClick={() => ui.setShapeEditorOpen(true)}
         aria-label="Open the shape editor from the rail"
-        style={cell(false, theme.accent)}
+        style={cell(false, false, theme.accent)}
       >
         <Layers size={16} strokeWidth={1.8} />
         <span aria-hidden="true">Shape</span>
@@ -117,7 +120,7 @@ export function NavRail() {
         data-tip="Commands  ·  Ctrl K"
         onClick={() => ui.setPaletteOpen(true)}
         aria-label="Open the command palette"
-        style={cell(false, theme.accent)}
+        style={cell(false, false, theme.accent)}
       >
         <Command size={15} strokeWidth={1.8} />
         <span aria-hidden="true">Ctrl K</span>
