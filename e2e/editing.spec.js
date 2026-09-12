@@ -64,10 +64,19 @@ test("the rail and the letter keys switch canvas modes, and Escape leaves them",
   await page.keyboard.press("3");
   await expect(page.getByText("ANGLE FIELD", { exact: true })).toBeVisible();
 
-  // Escape leaves the mode; the page stays where the work was.
+  // Escape leaves the mode; the page stays where the work was, and the
+  // rail's Select entry says no mode is live.
   await page.keyboard.press("Escape");
   await expect(page.getByText("ANGLE FIELD", { exact: true })).toHaveCount(0);
   await expect(rail.getByRole("button", { name: "Fields panel", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
+  const select = rail.getByRole("button", { name: "Select and pan", exact: true });
+  await expect(select).toHaveAttribute("aria-pressed", "true");
+  // And it is the mouse's way out of a mode.
+  await page.keyboard.press("f");
+  await expect(select).toHaveAttribute("aria-pressed", "false");
+  await select.click();
+  await expect(page.getByText("ANGLE FIELD", { exact: true })).toHaveCount(0);
+  await expect(select).toHaveAttribute("aria-pressed", "true");
 
   // B on a plain rectangle draws a polygon to edit rather than doing nothing.
   await page.keyboard.press("b");

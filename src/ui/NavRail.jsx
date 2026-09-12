@@ -1,4 +1,4 @@
-import { Command, Layers } from "lucide-react";
+import { Command, Layers, MousePointer2 } from "lucide-react";
 import { useEditor } from "./EditorContext.jsx";
 import { PANELS } from "./Sidebar.jsx";
 import { MONO, modeColor } from "./theme.js";
@@ -17,7 +17,10 @@ import { transition } from "./controls/index.js";
 // so it is reserved for exactly that.
 //
 // The pages keep their own "Edit on Canvas" buttons: a mode has to be
-// reachable from where its numbers are as well as from here.
+// reachable from where its numbers are as well as from here. Above the
+// pages sits the one tool that is not a page — Select, the way out of every
+// mode — so a mouse-first user can put the handles down without knowing
+// Escape or V, and can see at a glance that no mode is live.
 export function NavRail() {
   const { doc, theme, ui, actions } = useEditor();
   const { mode, activePanel } = ui;
@@ -70,6 +73,18 @@ export function NavRail() {
         // fit any viewport the app supports.
       }}
     >
+      <button
+        className="pg-rail-btn pg-tooltip"
+        data-tip="Select & pan  ·  V"
+        onClick={() => actions.setMode("select")}
+        aria-label="Select and pan"
+        aria-pressed={mode === "select"}
+        style={cell(false, mode === "select", modeColor(theme, "select"))}
+      >
+        <MousePointer2 size={16} strokeWidth={1.8} />
+        <span aria-hidden="true">Select</span>
+      </button>
+      <div style={{ height: 1, width: 24, background: theme.sectionBorder, margin: "3px 0" }} />
       {PANELS.filter(entry => !entry.pathOnly || isPath).map(entry => {
         const active = activePanel === entry.id;
         const live = !!entry.mode && mode === entry.mode;
