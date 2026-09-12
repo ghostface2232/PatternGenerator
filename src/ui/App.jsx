@@ -1502,6 +1502,11 @@ export default function App() {
     fieldEditMode,
     pathEditMode,
     boundaryEditMode,
+    // Whether B (or the page's own button) has anything to do: an outline or
+    // a cutout to drag, or the plain rectangle that B turns into one. On an
+    // ellipse alone it has not, and the page says so rather than advertising
+    // a key that does nothing.
+    boundaryKeyWorks: boundaryEditable || boundary.shape === "Rectangle",
     selectedCutoutId: selectedCutout?.id ?? null,
     shapeEditorOpen,
     setShapeEditorOpen,

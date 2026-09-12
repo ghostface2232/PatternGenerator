@@ -185,7 +185,10 @@ export function BoundaryPanel() {
               dark={dark}
             />
           ) : (
-            <div style={hintStyle(theme)}>The ellipse fills the margin-inset rectangle.</div>
+            <div style={hintStyle(theme)}>
+              The ellipse fills the margin-inset rectangle. It has no handles of its own, so there is nothing to edit on
+              the canvas until a cutout is added or the outline is drawn as a Polygon.
+            </div>
           )}
         </>
       )}

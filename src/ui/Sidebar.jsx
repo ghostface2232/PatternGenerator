@@ -68,6 +68,8 @@ export function Sidebar() {
   const panel = PANEL_BY_ID[ui.activePanel] ?? PANEL_BY_ID[DEFAULT_PANEL];
   const colour = panel.mode ? modeColor(theme, panel.mode) : theme.accent;
   const live = panel.mode && ui.mode === panel.mode;
+  // The key is shown only while it does something here.
+  const keyWorks = panel.mode !== "boundary" || ui.boundaryKeyWorks;
   return (
     <div
       style={{
@@ -119,7 +121,7 @@ export function Sidebar() {
           </span>
         )}
         <div style={{ flex: 1 }} />
-        {panel.key && <span style={kbdStyle(theme)}>{panel.key}</span>}
+        {panel.key && keyWorks && <span style={kbdStyle(theme)}>{panel.key}</span>}
       </div>
       <div
         style={{
