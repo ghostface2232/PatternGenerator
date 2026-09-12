@@ -38,6 +38,8 @@ export function GlobalStyles({ theme }) {
         .pg-menu-item:hover { background: ${theme.dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"} !important; }
         .pg-hover:hover:not(:disabled) { background: ${theme.dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)"}; color: ${theme.textPrimary}; }
         .pg-rail-btn:hover:not(:disabled) { background: ${theme.dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)"}; color: ${theme.textPrimary}; }
+        /* The open page's inline ring must not hide the keyboard focus. */
+        .pg-rail-btn:focus-visible { box-shadow: ${theme.focusRing} !important; }
         .pg-fade-in { animation: pg-fade-in ${DURATION}ms ${EASE} both; }
         .pg-pop-in { animation: pg-pop-in ${DURATION}ms ${EASE} both; }
         .pg-collapse { display: grid; grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows ${DURATION}ms ${EASE}, opacity ${DURATION}ms ${EASE}, visibility 0s linear 0s; }

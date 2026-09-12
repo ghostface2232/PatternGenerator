@@ -39,7 +39,11 @@ export function NavRail() {
     fontSize: 8,
     letterSpacing: 0.3,
     transition: transition(),
-    boxShadow: active ? `inset 0 0 0 1px ${colour}55` : "none",
+    // Only the open page carries an inline ring. An inline `none` on the
+    // others overrode the global focus ring, and the rail could not be seen
+    // to have the keyboard focus; the stylesheet's focus rule wins over the
+    // open page's ring as well.
+    ...(active ? { boxShadow: `inset 0 0 0 1px ${colour}55` } : null),
   });
 
   return (
