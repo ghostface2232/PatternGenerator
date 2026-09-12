@@ -454,6 +454,8 @@ test("the path controls do nothing until there is a path to act on", async ({ pa
   await page.getByTitle("Undo (Ctrl+Z)").click();
   await expect(page.getByRole("button", { name: "Edit path curves on the canvas", exact: true })).toHaveCount(0);
   await page.getByTitle("Redo (Ctrl+Shift+Z)").click();
+  // The Path page went with the layout and does not come back on its own.
+  await goTo(page, "path");
 
   // With a curve they act, and undoing back past it leaves them inert again
   // rather than pointing at a path that is no longer there.
