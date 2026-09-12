@@ -3,6 +3,7 @@ import { Search } from "lucide-react";
 import { HOLE_SHAPES, PATTERN_TYPES } from "../core/constants.js";
 import { CHANNEL_INFO, EDITABLE_CHANNELS } from "../fields/controllers.js";
 import { useEditor } from "./EditorContext.jsx";
+import { PANELS } from "./Sidebar.jsx";
 import { MONO } from "./theme.js";
 import { kbdStyle } from "./controls/index.js";
 
@@ -33,6 +34,14 @@ export function CommandPalette({ onClose }) {
       { group: "Mode", label: "Edit field controllers", key: "F", run: run(() => actions.setMode("fields")) },
       { group: "Mode", label: "Edit Path curves", key: "P", run: run(() => actions.setMode("path")) },
       { group: "Mode", label: "Remove holes by clicking", key: "R", run: run(() => actions.setMode("remove")) },
+      // The pages with no canvas mode of their own; the ones with one are the
+      // Mode entries above, which open their page as they enter.
+      ...PANELS.filter(panel => !panel.mode).map(panel => ({
+        group: "Page",
+        label: `Open the ${panel.aria.replace(/ panel$/, "")} page`,
+        active: ui.activePanel === panel.id,
+        run: run(() => actions.showPanel(panel.id)),
+      })),
       { group: "Shape", label: "Open the shape editor", run: run(() => ui.setShapeEditorOpen(true)) },
       { group: "File", label: "Export…", key: "Ctrl E", run: run(openExport) },
       { group: "File", label: "Save .perf.json", key: "Ctrl S", run: run(project.saveFile) },

@@ -1,14 +1,14 @@
-import { MoveVertical, PenTool, Shuffle, SquarePen, Waypoints, X } from "lucide-react";
-import { CUSTOM_SHAPE, DIAMOND_ORIENTATIONS, MAX_PATHS, MAX_PATH_POINTS, RADIAL_LAYOUTS, RADIAL_MODES } from "../../core/constants.js"; // prettier-ignore
+import { MoveVertical, Shuffle, Waypoints } from "lucide-react";
+import { CUSTOM_SHAPE, DIAMOND_ORIENTATIONS, RADIAL_LAYOUTS, RADIAL_MODES } from "../../core/constants.js";
 import { SHAPE_PRESETS } from "../../geometry/shape-presets.js";
 import { useEditor } from "../EditorContext.jsx";
 import { Dropdown, LinkButton, PitchInfo, SegRow, SliderRow, Toggle } from "../controls/index.js";
-import { actionButtonStyle, chipStyle, ghostButtonStyle, iconButtonStyle, rowLabelStyle } from "../controls/index.js"; // prettier-ignore
+import { actionButtonStyle } from "../controls/index.js";
 import { MONO } from "../theme.js";
-import { Section, groupLabelStyle, hintStyle, noteStyle, subLabelStyle } from "./Section.jsx";
+import { Section, hintStyle, noteStyle, subLabelStyle } from "./Section.jsx";
 
 export function DimensionsPanel() {
-  const { doc, api, theme, ui, geometry: g, stats, actions } = useEditor();
+  const { doc, api, theme, geometry: g, stats, actions } = useEditor();
   const { dark } = theme;
   const { hole, layout } = doc;
   const { radial, crosshatch } = layout;
@@ -294,94 +294,8 @@ export function DimensionsPanel() {
         </>
       )}
 
-      {/* Path: the curves the holes are strung along. Vertices are dragged on the
-          canvas; everything about which curve, and how many points it has, is
-          here — the same division as the polyline field controller. */}
-      {g.isPath && (
-        <>
-          <div style={groupLabelStyle(theme)}>Paths</div>
-          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-            <button
-              onClick={actions.togglePathEditMode}
-              aria-label="Edit path curves on the canvas"
-              aria-pressed={ui.pathEditMode}
-              style={actionButtonStyle(theme, ui.pathEditMode, { flex: 1 })}
-            >
-              <SquarePen size={11} /> {ui.pathEditMode ? "Editing Canvas · P" : "Edit on Canvas · P"}
-            </button>
-            <button
-              onClick={() => {
-                if (!ui.pathEditMode) actions.setMode("path");
-                ui.setPathTool(ui.pathTool === "pen" ? null : "pen");
-              }}
-              aria-label="Draw a path with the pen"
-              aria-pressed={ui.pathTool === "pen"}
-              title="Pen"
-              style={actionButtonStyle(theme, ui.pathTool === "pen", { width: 38, padding: 0 })}
-            >
-              <PenTool size={12} />
-            </button>
-          </div>
-          {layout.path.paths.length === 0 ? (
-            <div style={hintStyle(theme)}>No path yet — the holes follow the default curve.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
-              {layout.path.paths.map((path, index) => (
-                <div key={index} style={{ display: "flex", gap: 4 }}>
-                  <button
-                    className="pg-hover"
-                    onClick={() => actions.selectPath(index)}
-                    aria-label={`Select path ${index + 1}`}
-                    aria-pressed={index === ui.selectedPath}
-                    style={chipStyle(theme, index === ui.selectedPath, { flex: 1, height: 28, textAlign: "left", padding: "0 8px" })} // prettier-ignore
-                  >
-                    Path {index + 1} · {path.points.length} pts{path.closed ? " · loop" : ""}
-                  </button>
-                  <button
-                    className="pg-hover"
-                    onClick={() => actions.removePath(index)}
-                    aria-label={`Remove path ${index + 1}`}
-                    title="Remove this path"
-                    style={iconButtonStyle(theme, { color: theme.warn })}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-            {[
-              ["Add a path", () => actions.addPath(), layout.path.paths.length >= MAX_PATHS, "+ path", `At most ${MAX_PATHS} paths`], // prettier-ignore
-              ["Add a path vertex", () => actions.addVertex(ui.selectedPath), (layout.path.paths[ui.selectedPath]?.points.length ?? MAX_PATH_POINTS) >= MAX_PATH_POINTS, "+ vertex", layout.path.paths.length === 0 ? "Add a path first" : `At most ${MAX_PATH_POINTS} vertices`], // prettier-ignore
-              ["Remove a path vertex", () => actions.removeVertex(ui.selectedPath), (layout.path.paths[ui.selectedPath]?.points.length ?? 0) <= 2, "− vertex", layout.path.paths.length === 0 ? "Add a path first" : "A path needs two vertices"], // prettier-ignore
-            ].map(([name, run, disabled, text, why]) => (
-              <button
-                key={name}
-                className="pg-hover"
-                onClick={run}
-                disabled={disabled}
-                aria-label={name}
-                title={disabled ? why : name}
-                style={ghostButtonStyle(theme, { flex: 1, opacity: disabled ? 0.4 : 1, cursor: disabled ? "default" : "pointer" })} // prettier-ignore
-              >
-                {text}
-              </button>
-            ))}
-          </div>
-          {[
-            ["Smooth the path through its points", layout.path.smooth, v => api.set("layout.path.smooth", v)],
-            ["Turn holes along the path", layout.path.alignToTangent, v => api.set("layout.path.alignToTangent", v)],
-            ["Close this path into a loop", layout.path.paths[ui.selectedPath]?.closed ?? false, () => actions.togglePathClosed(ui.selectedPath), layout.path.paths.length === 0], // prettier-ignore
-          ].map(([label, value, onChange, disabled]) => (
-            <label key={label} style={{ ...rowLabelStyle(theme), opacity: disabled ? 0.4 : 1 }}>
-              <span>{label}</span>
-              <Toggle value={value} onChange={onChange} dark={dark} label={label} disabled={disabled} />
-            </label>
-          ))}
-        </>
-      )}
-
+      {/* Path's curves have a page of their own on the rail; the step along
+          them is the Along Gap below. */}
       {/* Flow Lines: the heading the streamlines take where no angle controller
           bends them. Everything else about the mode is the hole size (the slot
           width) and the edge gap (the metal between two slots), which the size

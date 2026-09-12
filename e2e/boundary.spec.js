@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { goTo } from "./pages.js";
 
 // The Phase 4 boundary: ellipse, polygon (drawn, and read from an SVG file),
 // cutouts and the trim flag, in a real browser. Every control is addressed by
@@ -10,9 +11,13 @@ const holes = page =>
     .textContent()
     .then(t => Number(t.replace(/[^\d]/g, "")));
 const oar = page => stat(page, "stat-oar").textContent().then(parseFloat);
-const shape = (page, name) => page.getByRole("button", { name: `${name} boundary`, exact: true }).click();
+const shape = async (page, name) => {
+  await goTo(page, "boundary");
+  await page.getByRole("button", { name: `${name} boundary`, exact: true }).click();
+};
 
 async function download(page, button) {
+  await goTo(page, "export");
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: button, exact: true }).click();
   const stream = await (await downloadPromise).createReadStream();
@@ -54,6 +59,7 @@ test("an ellipse boundary takes holes away and switches to the counted open area
 });
 
 test("a cutout is a keep-out, edited on the canvas, and one undo step", async ({ page }) => {
+  await goTo(page, "boundary");
   await page.getByRole("button", { name: "Add circle cutout", exact: true }).click();
   const fewer = await holes(page);
   expect(fewer).toBeLessThan(739);
@@ -114,6 +120,7 @@ test("a polygon boundary starts as an octagon, gains a vertex on double-click, a
   await expect(stat(page, "save-status")).toHaveText("SAVED IN BROWSER");
   await page.reload();
   await expect.poll(() => holes(page)).toBe(notched);
+  await goTo(page, "boundary");
   await expect(page.getByText("1 outline · 9 vertices")).toBeVisible();
   // And back to the rectangle is one click.
   await page.getByRole("button", { name: "Reset the boundary to the rectangle", exact: true }).click();
@@ -135,6 +142,7 @@ test("an SVG file becomes the boundary at the size it states", async ({ page }) 
   expect(text.match(/<circle /g)).toHaveLength(count);
   expect(text).toContain('clip-rule="evenodd"');
   // A file that is not an outline says so instead of blanking the sheet.
+  await goTo(page, "boundary");
   await page.getByLabel("Boundary outline file", { exact: true }).setInputFiles({ name: "words.svg", mimeType: "image/svg+xml", buffer: Buffer.from("<svg><text>hi</text></svg>") }); // prettier-ignore
   await expect(page.getByText(/no closed outline/)).toBeVisible();
   expect(await holes(page)).toBe(count);
@@ -156,21 +164,22 @@ test("the four canvas modes are mutually exclusive", async ({ page }) => {
   const editBoundary = page.getByRole("button", { name: "Edit the boundary on the canvas", exact: true });
   await editBoundary.click();
   await expect(editBoundary).toHaveAttribute("aria-pressed", "true");
+  // Opening the Remove page enters hole removal, which leaves boundary editing.
+  await goTo(page, "remove");
   const removal = page.getByRole("switch", { name: "Click to Remove", exact: true });
-  await removal.scrollIntoViewIfNeeded();
-  await removal.click();
-  await expect(editBoundary).toHaveAttribute("aria-pressed", "false");
+  await expect(removal).toHaveAttribute("aria-checked", "true");
   await expect(page.getByText(/EDIT BOUNDARY/)).toHaveCount(0);
-  await editBoundary.scrollIntoViewIfNeeded();
-  await editBoundary.click();
-  await expect(removal).toHaveAttribute("aria-checked", "false");
+  // And back on the Boundary page, editing an outline that exists resumes, and
+  // removal is over.
+  await goTo(page, "boundary");
+  await expect(editBoundary).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText(/HOLE REMOVAL MODE/)).toHaveCount(0);
   // Randomize enters variation editing, which leaves boundary editing too.
+  await goTo(page, "gradient");
   const randomize = page.getByRole("button", { name: "Randomize", exact: true });
-  await randomize.scrollIntoViewIfNeeded();
   await randomize.click();
   await expect(page.getByText(/EDIT VARIATION/)).toHaveCount(1);
   await expect(page.getByText(/EDIT BOUNDARY/)).toHaveCount(0);
-  await expect(editBoundary).toHaveAttribute("aria-pressed", "false");
 });
 
 test("boundary editing ends when there is nothing left to edit", async ({ page }) => {
@@ -209,6 +218,7 @@ test("a preset hole shape has its own parameters, and an SVG file becomes a cust
   const text = await download(page, "SVG");
   expect(text).toContain('fill-rule="evenodd"');
   // Releasing the lock hands the height back to its own slider.
+  await goTo(page, "pattern");
   await page.getByRole("switch", { name: "Keep proportions", exact: true }).click();
   await expect(page.getByLabel("Height (H)", { exact: true })).toHaveValue("2.5");
 });
@@ -243,6 +253,7 @@ test("the shape editor stacks shapes that add to or cut from the hole", async ({
   expect(text.match(/<path d="M /g)).toHaveLength(739);
   expect(text).toContain('fill-rule="evenodd"');
   // Reopening finds the stack, and cancelling changes nothing.
+  await goTo(page, "pattern");
   await page.getByRole("button", { name: "Open the shape editor", exact: true }).click();
   await expect(page.getByRole("button", { name: "Select layer 2", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Cancel the shape editor", exact: true }).click();
@@ -272,6 +283,7 @@ for (const shortcut of ["preset", "randomize"]) {
     const editBoundary = page.getByRole("button", { name: "Edit the boundary on the canvas", exact: true });
     await editBoundary.click();
     await expect(page.getByText(/EDIT BOUNDARY/)).toBeVisible();
+    await goTo(page, "gradient");
     if (shortcut === "preset") {
       await page.getByRole("button", { name: "Field preset", exact: true }).click();
       await page.getByRole("button", { name: "Center Bloom", exact: true }).click();
@@ -280,7 +292,6 @@ for (const shortcut of ["preset", "randomize"]) {
     }
     await expect(page.getByText(/EDIT VARIATION/)).toBeVisible();
     await expect(page.getByText(/EDIT BOUNDARY/)).toHaveCount(0);
-    await expect(editBoundary).toHaveAttribute("aria-pressed", "false");
   });
 }
 

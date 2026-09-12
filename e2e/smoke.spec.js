@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { goTo } from "./pages.js";
 
 // Baseline numbers for the default document (Circle ⌀5, Staggered 60°, gap 3,
 // 200×200 sheet). They pin the generator's output so refactors that change
@@ -75,6 +76,7 @@ test("radial pattern renders and reports counted OAR", async ({ page }) => {
 });
 
 test("SVG export contains one element per hole in mm units", async ({ page }) => {
+  await goTo(page, "export");
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "SVG", exact: true }).click();
   const download = await downloadPromise;

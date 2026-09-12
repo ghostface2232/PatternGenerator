@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { goTo } from "./pages.js";
 
 // Field controllers, the morph shape and image controllers (Phase 2).
 
@@ -16,11 +17,10 @@ async function setSlider(page, label, value) {
   await input.press("Enter");
 }
 
-// The fields panel sits below the variation card; scroll it into view first so
-// the clicks below are not intercepted by the sticky cards above.
+// The fields panel is its own page on the rail; open it, then switch the block on.
 async function enableFields(page) {
+  await goTo(page, "fields");
   const toggle = page.getByRole("switch", { name: "Field Controllers", exact: true });
-  await toggle.scrollIntoViewIfNeeded();
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
 }
@@ -104,6 +104,7 @@ test("controllers survive a reload and a share link", async ({ page, browser }) 
   await expect(stat(page, "stat-oar")).toHaveText(String(grown.toFixed(1)));
 
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await goTo(page, "project");
   await page.getByRole("button", { name: "Share", exact: true }).click();
   await expect(page.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
   const url = await page.evaluate(() => navigator.clipboard.readText());
@@ -151,6 +152,7 @@ test("the superellipse hole morphs from diamond to square, and exports as one", 
   expect(diamond).toBeLessThan(ellipse);
   expect(square).toBeGreaterThan(ellipse);
 
+  await goTo(page, "export");
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "SVG", exact: true }).click();
   const download = await downloadPromise;
@@ -258,11 +260,13 @@ test("an image controller drives the channel from the picture's brightness", asy
 
   // The picture is saved with the document…
   await page.reload();
+  await goTo(page, "fields");
   await expect(page.getByText(/split\.png · 4×1/)).toBeVisible();
   await expect.poll(() => oar(page)).toBeGreaterThan(inert);
 
   // …and dropped from a share link, where the controller goes inert instead.
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await goTo(page, "project");
   await expect(page.getByText(/leave out the controller images/)).toBeVisible();
   await page.getByRole("button", { name: "Share", exact: true }).click();
   const url = await page.evaluate(() => navigator.clipboard.readText());
@@ -295,20 +299,18 @@ test("the three canvas modes are mutually exclusive", async ({ page }) => {
   await addController(page, "point");
   await expect(page.getByText(/SIZE FIELD/)).toBeVisible();
 
-  const removal = page.getByRole("switch", { name: "Click to Remove", exact: true });
-  await removal.scrollIntoViewIfNeeded();
-  await removal.click();
+  // The Remove page enters hole removal as it opens.
+  await goTo(page, "remove");
   await expect(page.getByText(/HOLE REMOVAL MODE/)).toBeVisible();
   await expect(page.getByText(/SIZE FIELD/)).toHaveCount(0);
 
-  const editFields = page.getByRole("button", { name: "Edit field controllers on the canvas", exact: true });
-  await editFields.scrollIntoViewIfNeeded();
-  await editFields.click();
+  // The Fields page resumes field editing (the block is on) and ends removal.
+  await goTo(page, "fields");
   await expect(page.getByText(/SIZE FIELD/)).toBeVisible();
   await expect(page.getByText(/HOLE REMOVAL MODE/)).toHaveCount(0);
 
+  await goTo(page, "gradient");
   const editVariation = page.getByRole("button", { name: "Edit the size gradient on the canvas", exact: true });
-  await editVariation.scrollIntoViewIfNeeded();
   await editVariation.click();
   await expect(page.getByText(/EDIT VARIATION/)).toBeVisible();
   await expect(page.getByText(/SIZE FIELD/)).toHaveCount(0);

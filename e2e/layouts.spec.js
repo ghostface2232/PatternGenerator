@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { goTo } from "./pages.js";
 
 // The Phase 3 layout modes and the spacing field channel, in a real browser.
 // Every control is addressed by an accessible name that is unique in the
@@ -8,7 +9,9 @@ const stat = (page, id) => page.getByTestId(id);
 const holes = page => stat(page, "stat-holes").textContent().then(t => Number(t.replace(/[^\d]/g, ""))); // prettier-ignore
 const ligament = page => stat(page, "stat-ligament").textContent().then(parseFloat);
 
+// The Type and Hole Shape dropdowns live on the Pattern page.
 async function choose(page, dropdownLabel, optionLabel) {
+  await goTo(page, "pattern");
   await page.getByRole("button", { name: dropdownLabel, exact: true }).click();
   await page.getByRole("button", { name: optionLabel, exact: true }).click();
 }
@@ -21,8 +24,8 @@ async function setSlider(page, label, value) {
 }
 
 async function enableFields(page) {
+  await goTo(page, "fields");
   const toggle = page.getByRole("switch", { name: "Field Controllers", exact: true });
-  await toggle.scrollIntoViewIfNeeded();
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
 }
@@ -52,6 +55,7 @@ for (const type of ["Cross-hatch", "Scatter", "Spiral", "Fibonacci", "Path", "Vo
     expect(oar).toBeGreaterThan(type === "Path" ? 1 : 5);
     expect(oar).toBeLessThan(100);
 
+    await goTo(page, "export");
     const downloadPromise = page.waitForEvent("download");
     await page.getByRole("button", { name: "SVG", exact: true }).click();
     const download = await downloadPromise;
@@ -108,8 +112,8 @@ test("a layout mode is still addressable with the variation panel open", async (
   // Spiral and Radial are layout modes AND variation field spaces. An accessible
   // name has to be unique in the document, and the suite uses no `.first()`, so
   // this fails on a collision rather than silently clicking the wrong control.
+  await goTo(page, "gradient");
   const variation = page.getByRole("switch", { name: "Size Gradient", exact: true });
-  await variation.scrollIntoViewIfNeeded();
   await variation.click();
   await expect(page.getByRole("button", { name: "Spiral field space", exact: true })).toBeVisible();
   await choose(page, "Type", "Spiral");
@@ -187,10 +191,12 @@ test("the modes that ignore the spacing channel say why", async ({ page }) => {
   await expect(page.getByText(/exact tiling and does not read spacing/)).toHaveCount(0);
 
   await choose(page, "Hole Shape", "Hexagon");
+  await goTo(page, "fields");
   await expect(page.getByText(/exact tiling and does not read spacing/)).toBeVisible();
 
   await choose(page, "Hole Shape", "Circle");
   await choose(page, "Type", "Radial");
+  await goTo(page, "fields");
   await expect(page.getByText(/Radial does not read spacing/)).toBeVisible();
 
   // And a controller they ignore leaves the pattern untouched — read the
@@ -214,9 +220,9 @@ test("a spacing edit clears removed holes, and a size edit does not", async ({ p
   // to drop them and one that only redraws holes must not.
   await choose(page, "Type", "Straight");
   const total = await holes(page);
+  await goTo(page, "remove");
   const removal = page.getByRole("switch", { name: "Click to Remove", exact: true });
-  await removal.scrollIntoViewIfNeeded();
-  await removal.click();
+  await expect(removal).toHaveAttribute("aria-checked", "true");
   const box = await page.locator("canvas").boundingBox();
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await expect.poll(() => holes(page)).toBe(total - 1);
@@ -292,6 +298,8 @@ test("an image dropped while Spacing is selected lands on a channel it can drive
 test("Path hands over its default curve without moving the pattern", async ({ page }) => {
   await choose(page, "Type", "Path");
   const implicit = await holes(page);
+  // Opening the page draws nothing: the default curve is still implicit.
+  await goTo(page, "path");
   await expect(page.getByText(/No path yet/)).toBeVisible();
 
   // Add Path makes the curve the layout was already drawing editable, so the
@@ -321,21 +329,20 @@ test("the path edit mode takes the canvas from the other three", async ({ page }
   // Two canvas modes at once means a click does something the badge does not
   // describe, which is why each entry point clears the others.
   await choose(page, "Type", "Path");
+  await goTo(page, "remove");
   const removal = page.getByRole("switch", { name: "Click to Remove", exact: true });
-  await removal.scrollIntoViewIfNeeded();
-  await removal.click();
   await expect(removal).toHaveAttribute("aria-checked", "true");
 
+  await goTo(page, "path");
   const edit = page.getByRole("button", { name: "Edit path curves on the canvas", exact: true });
-  await edit.scrollIntoViewIfNeeded();
   await edit.click();
   await expect(edit).toHaveAttribute("aria-pressed", "true");
-  await expect(removal).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByText(/HOLE REMOVAL MODE/)).toHaveCount(0);
   await expect(page.getByText(/EDIT PATH/)).toBeVisible();
 
   await enableFields(page);
   await page.getByRole("button", { name: "Edit field controllers on the canvas", exact: true }).click();
-  await expect(edit).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByText(/EDIT PATH/)).toHaveCount(0);
 });
 
 test("voronoi cuts cells with a constant ligament, and says the hole shape is not used", async ({ page }) => {
@@ -397,8 +404,10 @@ test("flow lines follow the direction they are given and keep the edge gap", asy
   // Turning the flow re-lays every line. On an oblong panel that changes how
   // many fit; on a square one both directions would fit the same number, which
   // is a symmetry rather than an answer.
+  await goTo(page, "boundary");
   await setSlider(page, "Panel Height", 120);
   const oblong = await holes(page);
+  await goTo(page, "pattern");
   await setSlider(page, "Flow Direction", 90);
   const down = await holes(page);
   expect(down).not.toBe(oblong);
@@ -419,6 +428,7 @@ test("Flow Lines is the mode where an image may not drive the angle channel", as
   const image = page.getByRole("button", { name: "Add image controller", exact: true });
   await expect(image).toBeEnabled();
   await choose(page, "Type", "Flow Lines");
+  await goTo(page, "fields");
   await expect(page.getByRole("button", { name: "Add image controller", exact: true })).toHaveCount(0);
   await chooseChannel(page, "Size");
   await expect(page.getByRole("button", { name: "Add image controller", exact: true })).toBeEnabled();
@@ -432,6 +442,7 @@ test("the path controls do nothing until there is a path to act on", async ({ pa
   page.on("pageerror", error => errors.push(String(error)));
   await choose(page, "Type", "Path");
   const before = await holes(page);
+  await goTo(page, "path");
   await expect(page.getByRole("button", { name: "Add a path vertex", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Remove a path vertex", exact: true })).toBeDisabled();
   const loop = page.getByRole("switch", { name: "Close this path into a loop", exact: true });
@@ -465,14 +476,16 @@ test("leaving Path mode leaves its canvas editor with it", async ({ page }) => {
   // with the mode still on: the badge stayed up and a drag still moved vertices
   // of a curve nothing was drawing.
   await choose(page, "Type", "Path");
+  await goTo(page, "path");
   await page.getByRole("button", { name: "Edit path curves on the canvas", exact: true }).click();
   await expect(page.getByText(/EDIT PATH/)).toBeVisible();
   await choose(page, "Type", "Straight");
   await expect(page.getByText(/EDIT PATH/)).toHaveCount(0);
-  // And coming back is off, not still on from before.
+  // And coming back is off, not still on from before. (Opening the Path page
+  // again would resume editing, deliberately: the curve handed over earlier is
+  // still there to edit.)
   await choose(page, "Type", "Path");
   await expect(page.getByText(/EDIT PATH/)).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Edit path curves on the canvas", exact: true })).toHaveAttribute("aria-pressed", "false"); // prettier-ignore
 });
 
 test("Flow Lines hands over its own direction field in one click", async ({ page }) => {

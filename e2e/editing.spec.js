@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { goTo } from "./pages.js";
 
 // The direct-manipulation layer added with the UI redesign: the mode rail and
 // its shortcuts, body drags, the pen, double-click vertex edits, the Pathfinder
@@ -40,12 +41,14 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("the rail and the letter keys switch canvas modes, and Escape leaves them", async ({ page }) => {
-  const rail = page.getByRole("toolbar", { name: "Canvas modes", exact: true });
-  await expect(rail.getByRole("button", { name: "Select & pan mode", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
+  const rail = page.getByRole("toolbar", { name: "Workspace pages", exact: true });
+  await expect(rail.getByRole("button", { name: "Pattern panel", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
 
+  // A mode key opens the page that owns the mode as it enters it.
   await page.keyboard.press("r");
   await expect(page.getByText("HOLE REMOVAL MODE", { exact: true })).toBeVisible();
-  await expect(rail.getByRole("button", { name: "Remove holes mode", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
+  await expect(rail.getByRole("button", { name: "Remove holes panel", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
+  await expect(page.getByRole("switch", { name: "Click to Remove", exact: true })).toHaveAttribute("aria-checked", "true"); // prettier-ignore
 
   await page.keyboard.press("g");
   await expect(page.getByText("EDIT VARIATION", { exact: true })).toBeVisible();
@@ -57,9 +60,10 @@ test("the rail and the letter keys switch canvas modes, and Escape leaves them",
   await page.keyboard.press("3");
   await expect(page.getByText("ANGLE FIELD", { exact: true })).toBeVisible();
 
+  // Escape leaves the mode; the page stays where the work was.
   await page.keyboard.press("Escape");
   await expect(page.getByText("ANGLE FIELD", { exact: true })).toHaveCount(0);
-  await expect(rail.getByRole("button", { name: "Select & pan mode", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
+  await expect(rail.getByRole("button", { name: "Field controllers panel", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
 
   // B on a plain rectangle draws a polygon to edit rather than doing nothing.
   await page.keyboard.press("b");
@@ -71,6 +75,7 @@ test("the rail and the letter keys switch canvas modes, and Escape leaves them",
   await expect(stat(page, "stat-holes")).toHaveText("739");
 
   // A letter typed into a text field is text, not a command.
+  await goTo(page, "project");
   const name = page.getByLabel("Document name", { exact: true });
   await name.fill("");
   await name.pressSequentially("frb");
@@ -79,6 +84,7 @@ test("the rail and the letter keys switch canvas modes, and Escape leaves them",
 });
 
 test("a controller is dragged by its body, and Delete removes it", async ({ page }) => {
+  await goTo(page, "fields");
   await page.getByRole("switch", { name: "Field Controllers", exact: true }).click();
   await page.getByRole("button", { name: "Add line controller", exact: true }).click();
   const centred = await oar(page);
@@ -101,6 +107,7 @@ test("a controller is dragged by its body, and Delete removes it", async ({ page
 
 test("the pen draws a path click by click, and a double-click adds a vertex on the curve", async ({ page }) => {
   await choose(page, "Type", "Path");
+  await goTo(page, "path");
   await page.getByRole("button", { name: "Edit path curves on the canvas", exact: true }).click();
   // Entering the mode hands over the default curve; Delete takes it away, so
   // the pen starts from nothing.
@@ -187,6 +194,7 @@ test("the shape editor intersects and excludes, and handles are dragged on its c
 });
 
 test("an image read as a halftone shrinks the holes under its dark pixels", async ({ page }) => {
+  await goTo(page, "fields");
   await page.getByRole("switch", { name: "Field Controllers", exact: true }).click();
   await page.getByRole("button", { name: "Add image controller", exact: true }).click();
   const png = await page.evaluate(() => {

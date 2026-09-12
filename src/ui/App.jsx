@@ -63,8 +63,8 @@ import { EditorContext } from "./EditorContext.jsx";
 import { GlobalStyles } from "./GlobalStyles.jsx";
 import { TopBar } from "./TopBar.jsx";
 import { CanvasView } from "./canvas/CanvasView.jsx";
-import { ModeRail } from "./ModeRail.jsx";
-import { Sidebar } from "./Sidebar.jsx";
+import { NavRail } from "./NavRail.jsx";
+import { DEFAULT_PANEL, PANEL_BY_ID, Sidebar } from "./Sidebar.jsx";
 import { ShapeEditor } from "./ShapeEditor.jsx";
 import { CommandPalette } from "./CommandPalette.jsx";
 
@@ -191,6 +191,11 @@ export default function App() {
   // Which inspector sections are folded. `closed[id] === true` folds it; every
   // section starts open.
   const [closedSections, setClosedSections] = useState(loadSectionState);
+  // Which page the inspector shows — the rail's selection. UI state: the
+  // document does not know which of its parts is being looked at. Held as a
+  // request and resolved below, because the Path page exists only while the
+  // layout is Path.
+  const [panelRequest, setActivePanel] = useState(DEFAULT_PANEL);
   useEffect(() => {
     try {
       window.localStorage.setItem(STORAGE_KEY_SECTIONS, JSON.stringify(closedSections));
@@ -243,6 +248,10 @@ export default function App() {
   if (boundaryEditModeOn && !boundaryEditable) setBoundaryEditMode(false);
   const boundaryEditMode = boundaryEditModeOn && boundaryEditable;
   const selectedPath = Math.max(0, Math.min(selectedPathIndex, layout.path.paths.length - 1));
+  // The page on screen. A request for a page that is not there — Path after
+  // the layout changed, an id from an older build — falls back to the pattern.
+  const activePanel =
+    !PANEL_BY_ID[panelRequest] || (panelRequest === "path" && layout.type !== "Path") ? DEFAULT_PANEL : panelRequest;
   // Resolved rather than trusted: undo or a removal can take the cutout away
   // under the selection, and then the first one stands in.
   const selectedCutout = boundary.cutouts.find(c => c.id === selectedCutoutId) ?? boundary.cutouts[0] ?? null;
@@ -397,6 +406,20 @@ export default function App() {
     [variation]
   );
 
+  // The current canvas mode, as one word. The rail, the badge and the
+  // shortcuts read it; `actions.setMode` writes it.
+  const mode = fieldEditMode
+    ? "fields"
+    : variation.enabled && variationEditMode
+      ? "variation"
+      : pathEditMode
+        ? "path"
+        : boundaryEditMode
+          ? "boundary"
+          : holeRemovalMode
+            ? "remove"
+            : "select";
+
   // ─── Compound edits (things that touch more than one field) ────────
   const actions = useMemo(() => {
     const setShape = shape => {
@@ -549,6 +572,7 @@ export default function App() {
     const enterVariationEditMode = next => {
       setVariationEditMode(next);
       if (next) {
+        setActivePanel("variation");
         setHoleRemovalMode(false);
         setPathEditMode(false);
         setBoundaryEditMode(false);
@@ -635,6 +659,7 @@ export default function App() {
     const enterFieldEditMode = on => {
       setFieldEditMode(on);
       if (on) {
+        setActivePanel("fields");
         setHoleRemovalMode(false);
         setVariationEditMode(false);
         setPathEditMode(false);
@@ -784,6 +809,7 @@ export default function App() {
     const setHoleRemoval = on => {
       setHoleRemovalMode(on);
       if (on) {
+        setActivePanel("remove");
         setVariationEditMode(false);
         setPathEditMode(false);
         setBoundaryEditMode(false);
@@ -799,6 +825,7 @@ export default function App() {
       const next = !pathEditModeOn;
       setPathEditMode(next);
       if (next) {
+        setActivePanel("path");
         setVariationEditMode(false);
         setHoleRemovalMode(false);
         setBoundaryEditMode(false);
@@ -815,6 +842,7 @@ export default function App() {
       api.set("layout.path.paths", [...paths, newPath(perfArea, paths)]);
       setSelectedPath(paths.length);
       setPathEditMode(true);
+      setActivePanel("path");
     };
     // No `setSelectedPath` here: React may run a reducer more than once, so a
     // state update inside one is not something to rely on — and the selection is
@@ -904,6 +932,7 @@ export default function App() {
     const enterBoundaryEditMode = on => {
       setBoundaryEditMode(on);
       if (on) {
+        setActivePanel("boundary");
         setVariationEditMode(false);
         setHoleRemovalMode(false);
         setPathEditMode(false);
@@ -1021,13 +1050,38 @@ export default function App() {
       }
     };
     const toggleSection = id => setClosedSections(current => ({ ...current, [id]: !current[id] }));
-    // Unfold a section and bring it into view: what the rail does for the
-    // panel that owns the mode it just entered.
-    const revealSection = id => {
-      setClosedSections(current => (current[id] ? { ...current, [id]: false } : current));
-      window.requestAnimationFrame(() => {
-        document.getElementById(`section-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
+    // Open a page of the inspector: what the rail and the palette do. A page
+    // that owns a canvas mode brings the mode with it — and drops it again when
+    // another page is chosen, so the handles on the sheet are never those of a
+    // page that is no longer on screen. `toggleMode` is the rail's own click on
+    // the page already open: it puts the mode down or picks it back up, the way
+    // the page's Edit on Canvas button does.
+    //
+    // Opening a page never edits the document. Its mode comes along only when
+    // entering it is free — Remove always; Boundary once there is an outline
+    // or a cutout to drag; Fields and Gradient once their block is on; Path
+    // once a curve exists. Otherwise the page opens in Select, and the letter
+    // key or the page's own button is the deliberate act that draws the
+    // octagon, switches the block on or hands over the default curve.
+    const modeReady = m => {
+      const current = api.ref.current;
+      if (m === "remove") return true;
+      if (m === "boundary") return boundaryEditable;
+      if (m === "path") return current.layout.path.paths.length > 0;
+      if (m === "fields") return current.fields.enabled;
+      if (m === "variation") return current.variation.enabled;
+      return false;
+    };
+    const showPanel = (id, { toggleMode = false } = {}) => {
+      const panel = PANEL_BY_ID[id];
+      if (!panel) return;
+      if (panel.mode && mode === panel.mode) {
+        if (toggleMode) setMode("select");
+      } else if (panel.mode && modeReady(panel.mode)) setMode(panel.mode);
+      else if (mode !== "select") setMode("select");
+      // Entering the mode sets the page too; this covers the pages that open
+      // without one.
+      setActivePanel(id);
     };
     // Delete / Backspace on the canvas: whatever is selected in the current
     // mode. A controller only when it was actually selected — `selectedController`
@@ -1044,7 +1098,7 @@ export default function App() {
     return {
       setMode,
       toggleSection,
-      revealSection,
+      showPanel,
       deleteSelection,
       setPathTool,
       penClick,
@@ -1116,7 +1170,7 @@ export default function App() {
       removeBoundaryVertexAt,
       importBoundarySVG,
     };
-  }, [doc, api, history, variationEditMode, fieldEditMode, pathEditModeOn, pathEditMode, boundaryEditMode, boundaryEditable, selectedCutoutId, selectedPath, penStart, geometry.region, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
+  }, [doc, api, history, mode, variationEditMode, fieldEditMode, pathEditModeOn, pathEditMode, boundaryEditMode, boundaryEditable, selectedCutoutId, selectedPath, penStart, geometry.region, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
@@ -1220,20 +1274,6 @@ export default function App() {
     }),
     [saveStatus, recent, loadDocument, openFile, api, documentHasAssets, doc]
   );
-
-  // The current canvas mode, as one word. The rail, the badge and the
-  // shortcuts read it; `actions.setMode` writes it.
-  const mode = fieldEditMode
-    ? "fields"
-    : variation.enabled && variationEditMode
-      ? "variation"
-      : pathEditMode
-        ? "path"
-        : boundaryEditMode
-          ? "boundary"
-          : holeRemovalMode
-            ? "remove"
-            : "select";
 
   // Keyboard shortcuts. Modifier chords: undo / redo / save / export / palette.
   // Bare letters switch modes and tools, the way Figma's do, and never fire
@@ -1360,6 +1400,7 @@ export default function App() {
     paletteOpen,
     setPaletteOpen,
     closedSections,
+    activePanel,
     openExport: () => setExportOpen(true),
     holeRemovalMode,
     variationEditMode,
@@ -1431,11 +1472,12 @@ export default function App() {
       >
         <GlobalStyles theme={theme} />
         <TopBar />
-        {/* Body: the mode rail on the left, the canvas in the middle, the
-            inspector on the right — the arrangement every CAD and design tool
-            settles on, so the hand knows where things are before the eye does. */}
+        {/* Body: the rail of pages on the left, the canvas in the middle, the
+            page's inspector on the right — the arrangement every CAD and design
+            tool settles on, so the hand knows where things are before the eye
+            does. */}
         <div style={{ display: "flex", flex: 1, minHeight: 0, gap: 10 }}>
-          <ModeRail />
+          <NavRail />
           <CanvasView />
           <Sidebar />
         </div>
