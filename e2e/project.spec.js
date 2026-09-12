@@ -479,12 +479,12 @@ test("a link toggle keeps removed holes; a pattern edit clears them and undo res
   await goTo(page, "pattern");
   await setSlider(page, "Hole Diameter", 4);
   await goTo(page, "remove");
-  await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeDisabled();
 
   // That clearing rode along in the same undo step.
   await page.getByTitle("Undo (Ctrl+Z)").click();
   await expect(stat(page, "stat-holes")).toHaveText(remaining);
-  await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Restore All Holes" })).toBeEnabled();
   await goTo(page, "pattern");
   await expect(page.getByLabel("Hole Diameter", { exact: true })).toHaveValue("5");
 });
