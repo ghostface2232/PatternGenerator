@@ -156,7 +156,10 @@ export function segmentProbe(ax, ay, bx, by, x, y) {
     oy = y - (ay + t * dy);
   const distance = Math.hypot(ox, oy);
   const len = Math.sqrt(len2);
-  return { distance, side: distance > 0 && len > 0 ? (dx * oy - dy * ox) / (len * distance) : 0 };
+  // `ox, oy` is the offset from the nearest point of the segment to the sample:
+  // the direction the warp below pushes along, so it is returned rather than
+  // worked out again.
+  return { distance, ox, oy, side: distance > 0 && len > 0 ? (dx * oy - dy * ox) / (len * distance) : 0 };
 }
 
 // The weight a path-shaped controller gives one sample point: the strongest
@@ -324,6 +327,149 @@ export function evaluateCompiled(compiled, channel, x, y, base = channelBase(cha
 // it recompiles on every call — the pipeline compiles once and loops instead.
 export function evaluateChannel(controllers, channel, x, y, ctx = {}) {
   return evaluateCompiled(compileControllers(controllers, ctx), channel, x, y, ctx.base);
+}
+
+// ─── The warp a multiplier channel makes ──────────────────────────────
+// How a lattice — the grid family, Cross-hatch — follows the spacing channel.
+// Those modes cannot re-sample a pitch per hole the way Scatter or Spiral do:
+// a grid whose holes each pick their own pitch is not a grid. What they can do
+// is keep their lattice and MOVE it, and the field says how.
+//
+// One controller, and the distance d from its geometry. Along the ray running
+// straight away from the nearest point, the field asks for a pitch of
+// pitch·m(d), m(d) = 1 + (target − 1)·strength·falloff(d/R). Pushing every
+// point out along that ray by
+//
+//   u(d) = ∫₀ᵈ (m(ρ) − 1) dρ = (target − 1)·strength·R·F(min(d/R, 1))
+//
+// makes the spacing measured along the ray exactly pitch·m(d): the derivative of
+// d + u(d) is m(d). F is the integral of the falloff curve, in closed form
+// (`falloffPush` is F(t)/t). Across the ray the lattice stretches by
+// (d + u)/d — the same m at the geometry itself, easing toward 1 further out —
+// so at the centre of a point controller the pattern opens up (or draws in) the
+// same amount in every direction, which is what a round heat map promises.
+//
+// Beyond the reach, u is the constant u(R): the lattice out there is carried
+// along whole, its pitch untouched. That is not a choice so much as
+// arithmetic — opening the middle of a sheet has to put the rest of it
+// somewhere — and it is what the row-by-row rule this replaces did too, one
+// axis at a time. What that rule could not do is confine anything: a point
+// controller in the middle of the sheet widened the pitch between its rows
+// from one edge of the sheet to the other, in one direction only, because a row
+// can only move as a whole. Here each hole moves by what the field says at ITS
+// nominal position, so the change is a disc around the controller, in both
+// directions, and the far field is a rigid shift that fades as 1/d.
+//
+// A line, curve or polyline pushes perpendicular to itself and radially off its
+// ends. Where two segments are nearly equidistant the push is the
+// distance-weighted average of the two (`SOFT_ARGMIN`), rather than that of
+// whichever is nearer by a hair: taking the nearest alone flips the direction
+// across the bisector inside every bend, and a spreading controller then folds
+// the lattice over itself there. One-sided controllers gate the push per
+// segment exactly as `polylineWeight` gates the weight.
+//
+// Several controllers add, divided by the total weight where it passes 1 — the
+// same normalisation `evaluateCompiled` applies to the value, and for the same
+// reason: two crowding controllers on the same ground would otherwise pull a
+// point past both of them.
+//
+// `expand(bounds)` is how far outside `bounds` a lattice has to be laid down so
+// that, once warped, it still covers them: a crowding controller draws points
+// in from beyond the edge. Per controller it is the smaller of the largest push
+// it can make, |m − 1|·R·F(1), and what a point that LANDS inside the bounds
+// can have travelled, D·|m − 1|/m for D the far corner's distance (a ray's
+// nominal distance and its landing distance differ by a factor between m and 1,
+// so the travel is at most that share of the landing distance). Exact for one
+// controller; for several it is the sum, which the normalisation keeps
+// conservative. Both matter: a hard 0.2× controller with a 2000 mm reach on a
+// 200 mm sheet would otherwise lay down a 3400 mm lattice, and a 4× one would
+// still need a 400 mm one.
+const SOFT_ARGMIN = 4;
+
+// F(t)/t: the mean of `falloffWeight` over 0…t, so that the push at distance
+// d = t·R is (target − 1)·strength·d·falloffPush(t). Every curve is 1 at t = 0.
+export function falloffPush(kind, t) {
+  const u = clamp(t, 0, 1);
+  if (kind === "hard") return 1;
+  if (kind === "linear") return 1 - u / 2;
+  return 1 - u * u + (u * u * u) / 2; // ∫(1 − smoothstep) = t − t³ + t⁴/2
+}
+
+export function compileWarp(compiled, channel, base = channelBase(channel)) {
+  const entries = compiled.filter(entry => entry.channel === channel && !entry.image && entry.points?.length);
+  const displace = (x, y) => {
+    let ux = 0,
+      uy = 0,
+      total = 0;
+    for (const entry of entries) {
+      const { points, radius, falloff, oneSided } = entry;
+      const gain = (entry.target - base) * entry.strength;
+      const segments = points.length === 1 ? 1 : points.length - 1;
+      // Nearest approach first, so each segment's share can be weighed against it.
+      let dMin = Infinity;
+      for (let i = 0; i < segments; i++) {
+        const a = points[i],
+          b = points[Math.min(i + 1, points.length - 1)];
+        const probe = segmentProbe(a.x, a.y, b.x, b.y, x, y);
+        if (probe.distance < dMin) dMin = probe.distance;
+      }
+      let sx = 0,
+        sy = 0,
+        share = 0,
+        weight = 0;
+      for (let i = 0; i < segments; i++) {
+        const a = points[i],
+          b = points[Math.min(i + 1, points.length - 1)];
+        const { distance, ox, oy, side } = segmentProbe(a.x, a.y, b.x, b.y, x, y);
+        const gate = oneSided ? clamp(oneSided * side, 0, 1) : 1;
+        const t = distance / radius;
+        const w = falloffWeight(falloff, t) * gate;
+        if (w > weight) weight = w;
+        // The push per unit of offset: inside the reach it follows the curve,
+        // beyond it the constant u(R) spread over the distance.
+        const push = gain * gate * (t < 1 ? falloffPush(falloff, t) : (radius * falloffPush(falloff, 1)) / distance);
+        const omega = ((dMin + 1e-9) / (distance + 1e-9)) ** SOFT_ARGMIN;
+        sx += omega * push * ox;
+        sy += omega * push * oy;
+        share += omega;
+      }
+      if (share > 0) {
+        ux += sx / share;
+        uy += sy / share;
+      }
+      total += weight * entry.strength;
+    }
+    if (total > 1) {
+      ux /= total;
+      uy /= total;
+    }
+    return [ux, uy];
+  };
+  const expand = ({ xMin, xMax, yMin, yMax }) => {
+    let reach = 0;
+    for (const entry of entries) {
+      const m = base + (entry.target - base) * entry.strength;
+      const gain = Math.abs(m - base);
+      if (!(gain > 0) || !(m > 0)) continue;
+      const farthest = entry.radius * falloffPush(entry.falloff, 1);
+      let landing = Infinity;
+      for (const p of entry.points) {
+        let corner = 0;
+        for (const [cx, cy] of [
+          [xMin, yMin],
+          [xMax, yMin],
+          [xMin, yMax],
+          [xMax, yMax],
+        ]) {
+          corner = Math.max(corner, Math.hypot(cx - p.x, cy - p.y));
+        }
+        landing = Math.min(landing, corner);
+      }
+      reach += gain * Math.min(farthest, landing / m);
+    }
+    return reach;
+  };
+  return { displace, expand, active: entries.length > 0 };
 }
 
 // ─── Authoring helpers ────────────────────────────────────────────────

@@ -27,7 +27,7 @@ import { gridLattice } from "../layouts/grid.js";
 import { MIN_CROSS_SIN, crosshatchPitches } from "../layouts/crosshatch.js";
 import { diamondFlatAngle, getRadialShapeExtents, getRadialShapeOuterRadius } from "../layouts/radial-engine.js";
 import { evaluateVariationField, variationScaleAt } from "../fields/variation-engine.js";
-import { CHANNEL_INFO, compileControllers, compiledDrivesChannel, evaluateCompiled } from "../fields/controllers.js";
+import { CHANNEL_INFO, compileControllers, compiledDrivesChannel, compileWarp, evaluateCompiled } from "../fields/controllers.js"; // prettier-ignore
 
 // The shape a hole is actually DRAWN as, which is the document's choice in every
 // mode but one: Voronoi gives each hole its own cell polygon, so the shape
@@ -359,18 +359,28 @@ export const fieldContext = (layoutType, imageMaps) => ({
 // and the one that has to cost nothing: the layouts then run the arithmetic they
 // always ran, to the last bit, and every pinned baseline still holds.
 //
-// The returned object carries four things, and they must come from one place —
+// The returned object carries these things, and they must come from one place —
 // a sampler and a signature that disagreed would be a hole that moves without
 // the signature saying so, and removed-hole indices left pointing at the wrong
 // holes:
 //
-//   sample(x, y)  the pitch multiplier at a point, clamped to the slider range
-//   signature     what patternSignature adds for this channel
-//   min, max      rigorous bounds on `sample`. The blend in evaluateCompiled is
-//                 a convex combination of the base value and the targets, so the
-//                 extremes of those bound every value it can return — which is
-//                 what lets the scatter sampler size its search grid and the
-//                 spiral its opening radius without either one guessing.
+//   sample(x, y)    the pitch multiplier at a point, clamped to the slider range.
+//                   What the modes that place holes one at a time read (Scatter,
+//                   Spiral, Fibonacci, Path, Voronoi, Flow Lines), and what the
+//                   canvas heat map draws.
+//   displace(x, y)  the same field as a warp: how far a lattice point laid down
+//                   at (x, y) moves so that the lattice's pitch around it becomes
+//                   pitch·sample. What the grid family and Cross-hatch read,
+//                   since a lattice cannot pick a pitch per hole — see
+//                   compileWarp in fields/controllers.js.
+//   expand(bounds)  how far beyond `bounds` that lattice has to be laid down so
+//                   the warped one still covers them.
+//   signature       what patternSignature adds for this channel
+//   min, max        rigorous bounds on `sample`. The blend in evaluateCompiled is
+//                   a convex combination of the base value and the targets, so
+//                   the extremes of those bound every value it can return —
+//                   which is what lets the scatter sampler size its search grid
+//                   and the spiral its opening radius without either guessing.
 const SPACING_RANGE = DOC_LIMITS["controller.target.spacing"];
 
 export function compileSpacing(fields) {
@@ -379,14 +389,14 @@ export function compileSpacing(fields) {
   // The whole list is compiled, not just the spacing entries: a spacing
   // controller may borrow another channel's geometry through `syncWith`.
   const compiled = compileControllers(fields.controllers).filter(entry => entry.channel === "spacing");
-  // A controller whose target IS the channel's neutral value has to compile away
+  // A controller whose target IS the channel's neutral value compiles away
   // entirely, not to a field that returns 1 everywhere. The two are the same
-  // number and a very different pattern: a field, however neutral, puts the grid
-  // on its accumulating row walk, and summing `pitch` a hundred times does not
-  // land on `cy + 100·pitch` to the last bit. One row falling a bit-width past
-  // the sheet edge dropped 31 holes from a 961-hole document while the open-area
-  // readout — correctly, since `activeFieldChannels` already knew the controller
-  // was inert — did not move at all.
+  // number and not the same document: a field, however neutral, puts every mode
+  // on its field path — the grid lays its lattice down over a wider region and
+  // warps it by zero, the scatter sizes its search grid from the bounds — and
+  // `activeFieldChannels`, which already knows the controller is inert, keeps the
+  // statistics on the theoretical path. The pattern has to be the one the
+  // readouts describe, to the last bit.
   if (!compiledDrivesChannel(compiled, "spacing")) return null;
   const base = CHANNEL_INFO.spacing.base;
   const [lo, hi] = SPACING_RANGE;
@@ -396,8 +406,11 @@ export function compileSpacing(fields) {
     if (entry.target < min) min = entry.target;
     if (entry.target > max) max = entry.target;
   }
+  const warp = compileWarp(compiled, "spacing", base);
   return {
     sample: (x, y) => clamp(evaluateCompiled(compiled, "spacing", x, y, base), lo, hi),
+    displace: warp.displace,
+    expand: warp.expand,
     // The compiled entries rather than the authored ones: this is exactly what
     // the layouts will read, so two documents that place holes identically sign
     // identically, and a disabled or inert controller does not clear a removal.

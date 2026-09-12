@@ -7,73 +7,22 @@
 // radius); edge clipping is handled visually and by estimateVisibleHoleArea, not
 // by dropping holes. `bounds` therefore arrives already padded by that radius.
 import { triInradius } from "../geometry/polygon.js";
-import { strongestAlong } from "./field-sampling.js";
 
-// A backstop on the accumulating walk. Unreachable for any document: the worst
-// legal case is a 0.2× field over a 0.354 mm row pitch on a 1000 mm panel, about
-// 14 600 rows.
-const MAX_ROWS = 100_000;
-// Samples per row when the spacing field is read. See `strongestAlong`.
-const SPACING_SAMPLES = 32;
-
-// Where the rows go, from the top of the region down. Each entry is
-// [y, steps from the centre row, the vertical advance that reached it]: the step
-// count decides the stagger offset's parity, and the advance is what a Custom
-// Angle row shears by, so both have to survive a variable pitch.
-//
-// With no spacing field this is the arithmetic sequence the layout has always
-// used, written the same way so the same holes come out to the last bit. With
-// one, each row's pitch is the base pitch scaled by what the field reads along
-// that row, accumulated outward from the middle of the sheet.
-//
-// The accumulation is anchored — it sums the dimensionless multipliers and
-// multiplies by the pitch once — so a field that happens to read 1 over a
-// stretch gives back exactly `cy + k·pitch` instead of k roundings of it. Not a
-// nicety: a row landing one bit-width past the sheet edge is a whole row of
-// holes that disappears.
-//
-// Rows and rows only. Sampling a per-column pitch as well would vary the density
-// in two dimensions, but each row would then read the field at different points
-// along its length and the columns would stop lining up — a grid whose columns
-// wander is not a grid. Cross-hatch is the mode that varies both directions, and
-// it does it by moving whole lines rather than by re-sampling per hole.
-function rowPositions(cy, yTop, yBottom, pitch, sampleRow) {
+// Where the rows go, from the top of the region down: the arithmetic sequence
+// cy + k·pitch, written the same way it always was so the same holes come out
+// to the last bit. Each entry is [y, steps from the centre row]: the step count
+// decides the stagger offset's parity.
+function rowPositions(cy, yTop, yBottom, pitch) {
   const rows = [];
   if (!(pitch > 0) || !(yBottom >= yTop)) return rows;
-  if (!sampleRow) {
-    const up = Math.ceil((cy - yTop) / pitch);
-    const down = Math.ceil((yBottom - cy) / pitch);
-    for (let step = -up; step <= down; step++) {
-      const y = cy + step * pitch;
-      if (y < yTop || y > yBottom) continue;
-      rows.push([y, step < 0 ? -step : step, pitch]);
-    }
-    return rows;
+  const up = Math.ceil((cy - yTop) / pitch);
+  const down = Math.ceil((yBottom - cy) / pitch);
+  for (let step = -up; step <= down; step++) {
+    const y = cy + step * pitch;
+    if (y < yTop || y > yBottom) continue;
+    rows.push([y, step < 0 ? -step : step]);
   }
-  const below = [];
-  for (let y = cy, sum = 0, step = 0; y <= yBottom && below.length < MAX_ROWS;) {
-    const factor = sampleRow(y);
-    if (!(factor > 0)) break;
-    sum += factor;
-    step++;
-    const next = cy + pitch * sum;
-    if (next > yBottom) break;
-    below.push([next, step, next - y]);
-    y = next;
-  }
-  const above = [];
-  for (let y = cy, sum = 0, step = 0; above.length < MAX_ROWS;) {
-    const factor = sampleRow(y);
-    if (!(factor > 0)) break;
-    sum += factor;
-    step++;
-    const next = cy - pitch * sum;
-    if (next < yTop) break;
-    above.push([next, step, y - next]);
-    y = next;
-  }
-  above.reverse();
-  return above.concat(cy >= yTop && cy <= yBottom ? [[cy, 0, pitch]] : [], below);
+  return rows;
 }
 
 // The lattice the grid family actually draws: the pitch along a row, and the
@@ -128,20 +77,6 @@ export function generateGridHoles(options) {
     yBottom = yMax + pad;
   const cx = (xMin + xMax) / 2,
     cy = (yMin + yMax) / 2;
-  // What a row reads from the field: its STRONGEST value along the row, meaning
-  // the one furthest from the channel's neutral 1×. For a point controller that
-  // is the value at the row's closest approach to it, so a row reads a
-  // controller by how far away it is — which is the whole of what a row can
-  // say, and it says it the same wherever along the row the controller sits.
-  //
-  // Reading one fixed point instead — the row's centre, which is what this did
-  // first — left the mode blind to everything off the vertical midline: a
-  // controller dropped on the left half of the sheet lit up the canvas heat map
-  // and moved not one hole. Averaging along the row sees it, but dilutes it by
-  // however much of the row it covers, so a controller reaching a fifth of the
-  // sheet came out at a fifth of its strength and the Target slider stopped
-  // meaning anything.
-  const sampleRow = spacing ? y => strongestAlong(spacing, xMin, y, xMax, y, SPACING_SAMPLES) : null;
 
   // ─── Triangle: dedicated alternating ▲▽ row tiling ───────────────────
   // Triangles of base W × height H tile the plane exactly when up/down copies
@@ -181,29 +116,49 @@ export function generateGridHoles(options) {
   // itself is `gridLattice` above, shared with deriveGeometry for the same reason.
   const { inRowPitchX, rowPitch } = gridLattice({ holeW, holeH, patternType, pitchX, pitchY, isHexHoneycomb });
 
-  // The offset takes the row's own advance as well as its parity, because Custom
-  // Angle's offset IS a slope: shear = rise × tan(angle). Using the nominal
-  // pitch there while the spacing field moved the rise turned a 30° stagger into
-  // a 55° one — the one slider in the app that names an angle, no longer naming
-  // it. The staggered modes' half-pitch offset is horizontal and unaffected.
   let offsetFn = () => 0;
   if (patternType === "Staggered 60°" || patternType === "Staggered 45°") {
     offsetFn = rowIdx => (rowIdx % 2 !== 0 ? inRowPitchX / 2 : 0);
   } else if (patternType === "Custom Angle") {
+    // The offset IS a slope: shear = rise × tan(angle), on the nominal lattice.
+    // The warp below moves the sheared lattice as a whole, so under a uniform
+    // field the angle survives exactly, which layouts.test.js pins.
     const angleRad = (customAngle * Math.PI) / 180;
-    offsetFn = (rowIdx, advance) => (rowIdx % 2 !== 0 ? advance * Math.tan(angleRad) : 0);
+    offsetFn = rowIdx => (rowIdx % 2 !== 0 ? rowPitch * Math.tan(angleRad) : 0);
   }
 
+  // Under a spacing field the lattice is laid down as it always is and then
+  // WARPED: each nominal point moves by what the field says at its position, so
+  // the pitch around it becomes pitch × field (compileWarp in
+  // fields/controllers.js). A grid cannot pick a pitch per hole — the columns
+  // would stop lining up — but it can move as a lattice, and this moves it in
+  // both directions and only around the controller. The rule this replaces
+  // moved whole rows, and so widened the pitch between them from one edge of the
+  // sheet to the other while the pitch along them never changed.
+  //
+  // Warping moves points in from beyond the region (a crowding field) as well as
+  // out of it, so the nominal lattice covers the region grown by what the field
+  // can move a point that lands inside it; what lands outside is dropped.
+  const grow = spacing ? spacing.expand({ xMin: xLeft, xMax: xRight, yMin: yTop, yMax: yBottom }) : 0;
+  const nominal = { xLeft: xLeft - grow, xRight: xRight + grow, yTop: yTop - grow, yBottom: yBottom + grow };
+  const colsLeft = Math.ceil((cx - nominal.xLeft) / inRowPitchX) + 1;
+  const colsRight = Math.ceil((nominal.xRight - cx) / inRowPitchX) + 1;
+
   // Center-aligned: start from panel center, expand outward
-  for (const [y, rowIdx, advance] of rowPositions(cy, yTop, yBottom, rowPitch, sampleRow)) {
-    const off = offsetFn(rowIdx, advance);
-    const colsLeft = Math.ceil((cx - xLeft) / inRowPitchX) + 1;
-    const colsRight = Math.ceil((xRight - cx) / inRowPitchX) + 1;
+  for (const [y, rowIdx] of rowPositions(cy, nominal.yTop, nominal.yBottom, rowPitch)) {
+    const off = offsetFn(rowIdx);
     for (let ci = -colsLeft; ci <= colsRight; ci++) {
       const x = cx + ci * inRowPitchX + off;
-      if (x >= xLeft && x <= xRight) {
+      if (x < nominal.xLeft || x > nominal.xRight) continue;
+      if (!spacing) {
         holes.push(flatTheta ? { x, y, angle: flatTheta } : { x, y });
+        continue;
       }
+      const [ux, uy] = spacing.displace(x, y);
+      const wx = x + ux,
+        wy = y + uy;
+      if (wx < xLeft || wx > xRight || wy < yTop || wy > yBottom) continue;
+      holes.push(flatTheta ? { x: wx, y: wy, angle: flatTheta } : { x: wx, y: wy });
     }
   }
 

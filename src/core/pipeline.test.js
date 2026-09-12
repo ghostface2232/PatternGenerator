@@ -615,7 +615,6 @@ test("no module let, var or ambient global in generateHoles' import closure", ()
     "src/geometry/spatial-hash.js",
     "src/layouts/crosshatch.js",
     "src/layouts/fibonacci.js",
-    "src/layouts/field-sampling.js",
     "src/layouts/flowlines.js",
     "src/layouts/grid.js",
     "src/layouts/index.js",

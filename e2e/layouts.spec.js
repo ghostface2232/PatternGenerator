@@ -163,7 +163,7 @@ test("a spacing controller thins a scatter, and survives a reload", async ({ pag
   await expect.poll(() => holes(page)).toBe(thinned);
 });
 
-test("a spacing controller stretches the grid rows and keeps the columns straight", async ({ page }) => {
+test("a spacing controller opens and crowds the grid around itself", async ({ page }) => {
   await choose(page, "Type", "Straight");
   const base = await holes(page);
   await enableFields(page);
@@ -236,7 +236,7 @@ test("a spacing edit clears removed holes, and a size edit does not", async ({ p
   await chooseChannel(page, "Spacing");
   await addController(page, "point");
   await setSlider(page, "Target Spacing", 2.5);
-  // A spacing controller moves every row, so the removal is dropped — and undo
+  // A spacing controller moves the lattice, so the removal is dropped — and undo
   // brings both the controller and the removal back together.
   const spread = await holes(page);
   expect(spread).toBeLessThan(total - 1);

@@ -450,6 +450,79 @@ test("the spacing channel is a field, not one number applied everywhere", () => 
   }
 });
 
+test("a point controller opens the lattice around itself, in both directions, and nowhere else", () => {
+  // The rule this replaced moved whole rows: a controller in the middle of the
+  // sheet widened the pitch between the rows from one sheet edge to the other and
+  // never changed the pitch along a row. What a round heat map promises is a
+  // round change — wider in every direction at the controller, the nominal
+  // lattice again away from it — and that is what the warp has to deliver.
+  const pitch = 8;
+  for (const type of ["Straight", "Staggered 60°", "Cross-hatch"]) {
+    const holes = computePattern(withSpacing({ "layout.type": type }, { target: 2, radius: 50 })).activeHoles;
+    const nearest = h => Math.min(...holes.filter(o => o !== h).map(o => Math.hypot(o.x - h.x, o.y - h.y)));
+    const ring = r => holes.filter(h => Math.abs(Math.hypot(h.x - 100, h.y - 100) - r) < 6);
+    const mean = list => list.reduce((sum, h) => sum + nearest(h), 0) / list.length;
+    // At the controller the closest neighbour is twice the pitch away — the
+    // holes on either side as well as the ones above and below.
+    const centre = holes.find(h => Math.hypot(h.x - 100, h.y - 100) < 1);
+    assert.ok(centre, `${type}: the centre hole moved`);
+    const beside = holes.filter(h => Math.abs(h.y - 100) < 1 && Math.abs(h.x - 100) > 1);
+    const nearestBeside = Math.min(...beside.map(h => Math.abs(h.x - 100)));
+    assert.ok(nearestBeside > 1.8 * pitch, `${type}: the row through the controller is ${nearestBeside} wide`);
+    assert.ok(nearest(centre) > 1.8 * pitch, `${type}: the centre hole's neighbour is ${nearest(centre)} away`);
+    // The pitch eases back to nominal with distance…
+    assert.ok(mean(ring(20)) > mean(ring(40)) && mean(ring(40)) > mean(ring(60)), `${type}: not monotone`);
+    // …and past the reach (plus the shift the opening made) the lattice is the
+    // nominal one again, carried along whole, its pitch within a tenth.
+    const far = mean(holes.filter(h => Math.hypot(h.x - 100, h.y - 100) > 90));
+    assert.ok(far > pitch * 0.95 && far < pitch * 1.1, `${type}: far pitch ${far}`);
+    // The far field is a rigid push: across the ray from the controller the
+    // lattice is stretched by (d + u)/d, the 25 mm push over the nominal
+    // distance, so the top row is a third wider than nominal in its middle,
+    // fading toward the corners — never the doubling at the controller, and
+    // never the same along its whole length, which is what a row that moved as
+    // one used to give.
+    const top = holes.filter(h => h.y < 12 && h.x > 20 && h.x < 180).sort((a, b) => a.x - b.x);
+    const along = top
+      .slice(1)
+      .map((h, i) => [(h.x + top[i].x) / 2, h.x - top[i].x])
+      .filter(([, gap]) => gap > 1);
+    assert.ok(along.length > 5, `${type}: no top row`);
+    const diagonal = type === "Cross-hatch" ? Math.SQRT2 : 1;
+    const middle = Math.max(...along.filter(([x]) => Math.abs(x - 100) < 20).map(([, gap]) => gap));
+    const corner = Math.max(...along.filter(([x]) => Math.abs(x - 100) > 60).map(([, gap]) => gap));
+    assert.ok(middle < pitch * 1.45 * diagonal, `${type}: top row ${middle} wide in its middle`);
+    assert.ok(corner < middle, `${type}: top row ${corner} wide at its ends against ${middle} in its middle`);
+  }
+});
+
+test("the warp is the field: a uniform controller scales the lattice, and a segment pushes off itself", () => {
+  // Under a hard controller that covers the whole sheet the push is
+  // (target − 1)·d everywhere, so every hole lands at centre + target·(nominal −
+  // centre): a pure scaling, which is what "0.5× pitch everywhere" means.
+  const flat = place(doc({ "layout.type": "Straight" }));
+  const packed = place(withSpacing({ "layout.type": "Straight" }, { target: 0.5, radius: 2000, falloff: "hard" }));
+  const key = h => `${h.x.toFixed(6)},${h.y.toFixed(6)}`;
+  const got = new Set(packed.map(key));
+  for (const h of flat) {
+    assert.ok(got.has(key({ x: 100 + (h.x - 100) / 2, y: 100 + (h.y - 100) / 2 })), `nominal ${key(h)} not at half`);
+  }
+  // A line pushes perpendicular to itself: across a horizontal line the rows
+  // spread while, along it, the columns stay put.
+  const line = { kind: "line", target: 2, radius: 30, geometry: { points: [{ x: 40, y: 100 }, { x: 160, y: 100 }] } }; // prettier-ignore
+  const holes = computePattern(withSpacing({ "layout.type": "Straight" }, line)).activeHoles;
+  const column = holes
+    .filter(h => Math.abs(h.x - 100) < 0.01)
+    .map(h => h.y)
+    .sort((a, b) => a - b);
+  assert.ok(column.length > 10, "the column through the line's middle broke up");
+  const gaps = column.slice(1).map((y, i) => y - column[i]);
+  const across = gaps[column.findIndex(y => y > 100) - 1];
+  assert.ok(across > 14, `across the line the rows are ${across} apart`);
+  const rows = holes.filter(h => Math.abs(h.y - 100) < 20 && h.x > 60 && h.x < 140);
+  for (const h of rows) assert.ok(Math.abs(((h.x - 100) / 8) % 1) < 1e-6, `hole at ${h.x} left its column`);
+});
+
 test("a grid row and a cross-hatch line read the whole of themselves", () => {
   // Reading one point per row or line makes the mode blind everywhere else: the
   // grid's centre column, and — at the default 45°/−45° — cross-hatch's two

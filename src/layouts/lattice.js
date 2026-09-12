@@ -5,9 +5,9 @@
 // walking i and j over a range derived from the sheet's width and height only
 // works for an axis-aligned one. A sheared basis has to walk the pre-image of
 // the rectangle's corners instead, which is what this does. (Cross-hatch builds
-// its lattice from two lists of line offsets rather than from a basis, because
-// only that form can move the lines of each family independently under the
-// spacing field.)
+// its lattice from two lists of line offsets rather than from a basis: its two
+// families are described by an angle and a pitch each, and the offsets are
+// what that description gives directly.)
 
 // Purely a backstop against a degenerate basis — one whose determinant is small
 // enough that the lattice has more points than memory. No document can reach it:
