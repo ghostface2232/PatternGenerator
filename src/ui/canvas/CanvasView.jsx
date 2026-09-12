@@ -56,7 +56,8 @@ export function CanvasView() {
   } = useEditor();
   const { dark, showHud, mode, holeRemovalMode, gradientSelected, pan, setPan, zoom, setZoom, setVariationHud } = ui;
   const { fieldEditMode, activeChannel, fieldTool, selectedControllerId, pathTool, penStart } = ui;
-  const { pathEditMode, selectedPath, boundaryEditMode, selectedCutoutId } = ui;
+  const { pathEditMode, selectedPath, boundaryEditMode, selectedCutoutId, activePanel } = ui;
+  const boundaryPageOpen = activePanel === "boundary";
   const pathBlock = doc.layout.path;
   const boundary = doc.boundary;
   const { variation, fields } = doc;
@@ -132,6 +133,7 @@ export function CanvasView() {
       trim: doc.boundary.trim,
       boundary,
       boundaryEditMode,
+      boundaryPageOpen,
       selectedCutoutId,
     }),
     [
@@ -166,6 +168,7 @@ export function CanvasView() {
       doc.boundary.trim,
       boundary,
       boundaryEditMode,
+      boundaryPageOpen,
       selectedCutoutId,
     ]
   );

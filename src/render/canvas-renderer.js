@@ -45,6 +45,7 @@ export function drawScene(canvas, scene) {
     trim,
     boundary,
     boundaryEditMode,
+    boundaryPageOpen,
     selectedCutoutId,
   } = scene;
   const { sheetW, sheetH } = params;
@@ -196,7 +197,10 @@ export function drawScene(canvas, scene) {
         // Dropped whole for crossing the boundary: ghosted after the clip is
         // lifted (below), since a ghost cut to the region would be the very
         // sliver the rule removed.
-        if (boundaryEditMode && showHud) clippedGhosts.push([h.x, h.y, Math.max(0.15, r)]);
+        // Shown whenever the Boundary page is open, not only in its mode: an
+        // ellipse alone has no mode to enter, and the page is where the count
+        // of dropped holes is read.
+        if ((boundaryEditMode || boundaryPageOpen) && showHud) clippedGhosts.push([h.x, h.y, Math.max(0.15, r)]);
         return;
       }
       if (h.culled && !isRemoved) {
@@ -283,9 +287,11 @@ export function drawScene(canvas, scene) {
   ctx.restore(); // end hole clipping
 
   if (clippedGhosts.length) {
-    ctx.strokeStyle = dark ? "rgba(45,212,191,0.3)" : "rgba(15,118,110,0.28)";
-    ctx.lineWidth = 0.2;
-    ctx.setLineDash([0.6, 0.6]);
+    // Firm enough to read at the fitted zoom on either theme, in the
+    // boundary's own colour; dashed, so a ghost is never mistaken for a hole.
+    ctx.strokeStyle = dark ? "rgba(45,212,191,0.65)" : "rgba(15,118,110,0.6)";
+    ctx.lineWidth = 0.35;
+    ctx.setLineDash([0.8, 0.6]);
     ctx.beginPath();
     for (const [x, y, radius] of clippedGhosts) {
       ctx.moveTo(x + radius, y);
