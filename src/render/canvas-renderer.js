@@ -149,7 +149,7 @@ export function drawScene(canvas, scene) {
     ctx.restore();
   }
 
-  const showFieldOverlay = fieldEditMode && showHud && fields?.enabled;
+  const showFieldOverlay = fieldEditMode && showHud && (fields?.enabled || variation.enabled);
 
   const showTaperRings = taperActive && !perfMode;
 

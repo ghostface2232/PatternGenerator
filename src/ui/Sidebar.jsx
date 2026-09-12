@@ -38,8 +38,6 @@ export const PANELS = [
   { id: "export", label: "Export", aria: "Export panel", Icon: Download, render: ExportPage },
 ];
 export const PANEL_BY_ID = Object.fromEntries(PANELS.map(panel => [panel.id, panel]));
-// The page that owns each canvas mode: entering a mode shows it.
-export const PANEL_FOR_MODE = Object.fromEntries(PANELS.filter(p => p.mode).map(p => [p.mode, p.id]));
 export const DEFAULT_PANEL = "pattern";
 
 function PatternPage() {

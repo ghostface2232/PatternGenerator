@@ -354,10 +354,7 @@ export function FieldsPanel() {
                   </button>
                   <Toggle
                     value={layer.enabled}
-                    onChange={next => {
-                      actions.selectVariationLayer(layer.id);
-                      actions.updateSelectedLayer({ enabled: next }, true);
-                    }}
+                    onChange={next => actions.setVariationLayerEnabled(layer.id, next)}
                     dark={dark}
                     label={`Gradient layer ${index + 1} enabled`}
                   />

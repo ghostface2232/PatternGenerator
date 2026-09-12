@@ -252,8 +252,12 @@ export default function App() {
   const selectedPath = Math.max(0, Math.min(selectedPathIndex, layout.path.paths.length - 1));
   // The page on screen. A request for a page that is not there — Path after
   // the layout changed, an id from an older build — falls back to the pattern.
-  const activePanel =
-    !PANEL_BY_ID[panelRequest] || (panelRequest === "path" && layout.type !== "Path") ? DEFAULT_PANEL : panelRequest;
+  const panelMissing = !PANEL_BY_ID[panelRequest] || (panelRequest === "path" && layout.type !== "Path");
+  const activePanel = panelMissing ? DEFAULT_PANEL : panelRequest;
+  // Settled, not merely resolved: a stale Path request would otherwise snap
+  // the inspector back to the Path page the moment the layout became Path
+  // again, taking the Type dropdown out from under the hand that chose it.
+  if (panelMissing && panelRequest !== DEFAULT_PANEL) setActivePanel(DEFAULT_PANEL);
   // Resolved rather than trusted: undo or a removal can take the cutout away
   // under the selection, and then the first one stands in.
   const selectedCutout = boundary.cutouts.find(c => c.id === selectedCutoutId) ?? boundary.cutouts[0] ?? null;
@@ -603,8 +607,19 @@ export default function App() {
       selectGradient();
       enterFieldEditMode(true);
     };
+    // `commit`, not `live`: it compares before recording, so re-clicking the
+    // selected row spends no undo step.
     const selectVariationLayer = id => {
-      history.live(current => ({ ...current, selectedLayerId: id }));
+      history.commit(current => (current.selectedLayerId === id ? current : { ...current, selectedLayerId: id }));
+      selectGradient();
+    };
+    // The row's own switch: select and flip in one step.
+    const setVariationLayerEnabled = (id, enabled) => {
+      history.commit(current => ({
+        ...current,
+        selectedLayerId: id,
+        layers: current.layers.map(layer => (layer.id === id ? { ...layer, enabled } : layer)),
+      }));
       selectGradient();
     };
     const updateSelectedLayer = (patch, record = false) => {
@@ -713,7 +728,11 @@ export default function App() {
         setHoleRemovalMode(false);
         setPathEditMode(false);
         setBoundaryEditMode(false);
-        if (!api.ref.current.fields.enabled) api.set("fields.enabled", true);
+        // The mode needs something live to edit. A gradient on its own is
+        // that already, so entering costs no edit then; only a page with
+        // nothing on switches the block on.
+        const { fields: liveFields, variation: liveVariation } = api.ref.current;
+        if (!liveFields.enabled && !liveVariation.enabled) api.set("fields.enabled", true);
       } else {
         setFieldTool(null);
       }
@@ -816,8 +835,10 @@ export default function App() {
         // reference that resolves to nothing on every hole.
         const cleaned = controllers.map(c => (c.syncWith === id ? { ...c, syncWith: null } : c));
         // Hand the selection to a controller on the channel being edited, so the
-        // inspector does not vanish while that channel's list still has entries.
-        const next = cleaned.find(c => c.channel === activeChannel) ?? cleaned[0] ?? null;
+        // inspector does not vanish while that channel's list still has entries;
+        // with none left, let the resolver fall back (to the gradient, on size)
+        // rather than pinning a controller from another channel.
+        const next = cleaned.find(c => c.channel === activeChannel) ?? null;
         if (id === selectedId) setSelectedId(next?.id ?? null);
         return pruneAssets({ ...d, fields: { ...d.fields, controllers: cleaned } });
       });
@@ -1091,7 +1112,10 @@ export default function App() {
         // and the rail only opens its panel, where a cutout or the Polygon
         // outline can be picked.
         if (!boundaryEditable) {
-          if (api.ref.current.boundary.shape !== "Rectangle") return;
+          if (api.ref.current.boundary.shape !== "Rectangle") {
+            setActivePanel("boundary");
+            return;
+          }
           setBoundaryShape("Polygon");
         }
         enterBoundaryEditMode(true);
@@ -1180,6 +1204,7 @@ export default function App() {
       editGradient,
       selectGradient,
       selectVariationLayer,
+      setVariationLayerEnabled,
       updateSelectedLayer,
       applyVariationPreset,
       addVariationLayer,

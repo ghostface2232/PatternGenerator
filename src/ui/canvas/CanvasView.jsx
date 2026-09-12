@@ -240,7 +240,9 @@ export function CanvasView() {
   // Every field handler below requires showHud, so the cursor and the hit tests
   // have to as well — otherwise hiding the overlay leaves a crosshair over a
   // canvas where clicks only pan, with no rail, no controllers and no badge.
-  const fieldActive = fieldEditMode && fields.enabled && showHud;
+  // The gradient alone keeps the mode live: a document that uses it and no
+  // controller is still editing fields.
+  const fieldActive = fieldEditMode && (fields.enabled || variation.enabled) && showHud;
   const pathActive = pathEditMode && showHud;
   const boundaryActive = boundaryEditMode && showHud;
 

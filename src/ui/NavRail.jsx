@@ -20,7 +20,7 @@ export function NavRail() {
   const { mode, activePanel } = ui;
   const isPath = doc.layout.type === "Path";
 
-  const cell = (active, colour, disabled = false) => ({
+  const cell = (active, colour) => ({
     width: 50,
     height: 46,
     display: "flex",
@@ -31,8 +31,8 @@ export function NavRail() {
     border: "none",
     borderRadius: 9,
     background: active ? `${colour}22` : "transparent",
-    color: active ? colour : disabled ? theme.textFaint : theme.textSecondary,
-    cursor: disabled ? "default" : "pointer",
+    color: active ? colour : theme.textSecondary,
+    cursor: "pointer",
     padding: 0,
     position: "relative",
     fontFamily: MONO,

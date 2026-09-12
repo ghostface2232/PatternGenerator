@@ -478,8 +478,14 @@ test("leaving Path mode leaves its canvas editor with it", async ({ page }) => {
   await goTo(page, "path");
   await page.getByRole("button", { name: "Edit path curves on the canvas", exact: true }).click();
   await expect(page.getByText(/EDIT PATH/)).toBeVisible();
-  await choose(page, "Type", "Straight");
+  // Through the palette, which changes the layout without leaving the page
+  // or the mode: what ends the mode here is the layout no longer being Path,
+  // not the navigation away from its page.
+  await page.keyboard.press("Control+k");
+  await page.getByLabel("Search commands", { exact: true }).fill("Layout: Straight");
+  await page.keyboard.press("Enter");
   await expect(page.getByText(/EDIT PATH/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Pattern panel", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
   // And coming back is off, not still on from before. (Opening the Path page
   // again would resume editing, deliberately: the curve handed over earlier is
   // still there to edit.)
