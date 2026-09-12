@@ -174,11 +174,11 @@ test("the four canvas modes are mutually exclusive", async ({ page }) => {
   await goTo(page, "boundary");
   await expect(editBoundary).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByText(/HOLE REMOVAL MODE/)).toHaveCount(0);
-  // Randomize enters variation editing, which leaves boundary editing too.
-  await goTo(page, "gradient");
-  const randomize = page.getByRole("button", { name: "Randomize", exact: true });
-  await randomize.click();
-  await expect(page.getByText(/EDIT VARIATION/)).toHaveCount(1);
+  // Adding the size gradient enters field editing with the gradient selected,
+  // which leaves boundary editing too.
+  await goTo(page, "fields");
+  await page.getByRole("button", { name: "Add gradient layer", exact: true }).click();
+  await expect(page.getByText(/SIZE GRADIENT/)).toHaveCount(1);
   await expect(page.getByText(/EDIT BOUNDARY/)).toHaveCount(0);
 });
 
@@ -283,14 +283,19 @@ for (const shortcut of ["preset", "randomize"]) {
     const editBoundary = page.getByRole("button", { name: "Edit the boundary on the canvas", exact: true });
     await editBoundary.click();
     await expect(page.getByText(/EDIT BOUNDARY/)).toBeVisible();
-    await goTo(page, "gradient");
+    // The presets and Randomize live in the gradient's inspector, so the
+    // gradient is added first; that alone enters field editing (asserted by
+    // the badge), and the preset or the shuffle keeps it there.
+    await goTo(page, "fields");
+    await page.getByRole("button", { name: "Add gradient layer", exact: true }).click();
+    await expect(page.getByText(/SIZE GRADIENT/)).toBeVisible();
     if (shortcut === "preset") {
       await page.getByRole("button", { name: "Field preset", exact: true }).click();
       await page.getByRole("button", { name: "Center Bloom", exact: true }).click();
     } else {
       await page.getByRole("button", { name: "Randomize", exact: true }).click();
     }
-    await expect(page.getByText(/EDIT VARIATION/)).toBeVisible();
+    await expect(page.getByText(/SIZE GRADIENT/)).toBeVisible();
     await expect(page.getByText(/EDIT BOUNDARY/)).toHaveCount(0);
   });
 }

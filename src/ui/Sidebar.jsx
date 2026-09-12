@@ -1,10 +1,9 @@
-import { Download, Eraser, FolderOpen, Layers2, LayoutGrid, Route, Scan, SlidersHorizontal, Waves } from "lucide-react"; // prettier-ignore
+import { Download, Eraser, FolderOpen, Layers2, LayoutGrid, Route, Scan, Waves } from "lucide-react";
 import { useEditor } from "./EditorContext.jsx";
 import { ProjectPanel } from "./panels/ProjectPanel.jsx";
 import { PatternPanel } from "./panels/PatternPanel.jsx";
 import { DimensionsPanel } from "./panels/DimensionsPanel.jsx";
 import { BoundaryPanel } from "./panels/BoundaryPanel.jsx";
-import { VariationPanel } from "./panels/VariationPanel.jsx";
 import { FieldsPanel } from "./panels/FieldsPanel.jsx";
 import { PathPanel } from "./panels/PathPanel.jsx";
 import { TaperPanel } from "./panels/TaperPanel.jsx";
@@ -15,7 +14,8 @@ import { MONO, modeColor } from "./theme.js";
 import { kbdStyle } from "./controls/index.js";
 
 // The workspace's pages, in the order the work goes: what the pattern is,
-// where it goes, how it varies, what is taken out, how it is made and where
+// where it goes, how it varies (the size gradient and the controllers are one
+// page: one list of field layers), what is taken out, how it is made and where
 // it ends up. The rail on the left lists them; the inspector on the right
 // shows ONE of them at a time — the way Figma's right sidebar shows the
 // properties of what is selected, Rhino's sidebar swaps its toolbar with the
@@ -31,8 +31,7 @@ export const PANELS = [
   { id: "project", label: "Project", aria: "Project panel", Icon: FolderOpen, render: ProjectPanel },
   { id: "pattern", label: "Pattern", aria: "Pattern panel", Icon: LayoutGrid, render: PatternPage },
   { id: "boundary", label: "Boundary", aria: "Boundary panel", Icon: Scan, mode: "boundary", key: "B", render: BoundaryPanel }, // prettier-ignore
-  { id: "variation", label: "Gradient", aria: "Size gradient panel", Icon: Waves, mode: "variation", key: "G", render: VariationPanel }, // prettier-ignore
-  { id: "fields", label: "Fields", aria: "Field controllers panel", Icon: SlidersHorizontal, mode: "fields", key: "F", render: FieldsPanel }, // prettier-ignore
+  { id: "fields", label: "Fields", aria: "Fields panel", Icon: Waves, mode: "fields", key: "F", render: FieldsPanel },
   { id: "path", label: "Path", aria: "Path panel", Icon: Route, mode: "path", key: "P", pathOnly: true, render: PathPanel }, // prettier-ignore
   { id: "remove", label: "Remove", aria: "Remove holes panel", Icon: Eraser, mode: "remove", key: "R", render: HoleRemovalPanel }, // prettier-ignore
   { id: "taper", label: "Taper", aria: "Taper panel", Icon: Layers2, render: TaperPanel },

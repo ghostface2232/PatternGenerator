@@ -50,20 +50,24 @@ test("the rail and the letter keys switch canvas modes, and Escape leaves them",
   await expect(rail.getByRole("button", { name: "Remove holes panel", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
   await expect(page.getByRole("switch", { name: "Click to Remove", exact: true })).toHaveAttribute("aria-checked", "true"); // prettier-ignore
 
+  // G is the gradient's way in: the Fields mode with the gradient selected.
   await page.keyboard.press("g");
-  await expect(page.getByText("EDIT VARIATION", { exact: true })).toBeVisible();
+  await expect(page.getByText("SIZE GRADIENT", { exact: true })).toBeVisible();
+  await expect(rail.getByRole("button", { name: "Fields panel", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
+  await expect(page.getByRole("button", { name: "Select gradient layer 1", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
   await expect(page.getByText("HOLE REMOVAL MODE", { exact: true })).toHaveCount(0);
 
+  // F is the same mode, so the gradient stays selected; the channel keys pick
+  // a channel while editing fields, and a channel other than size drops it.
   await page.keyboard.press("f");
-  await expect(page.getByText("SIZE FIELD", { exact: true })).toBeVisible();
-  // The channel keys pick a channel while editing fields.
+  await expect(page.getByText("SIZE GRADIENT", { exact: true })).toBeVisible();
   await page.keyboard.press("3");
   await expect(page.getByText("ANGLE FIELD", { exact: true })).toBeVisible();
 
   // Escape leaves the mode; the page stays where the work was.
   await page.keyboard.press("Escape");
   await expect(page.getByText("ANGLE FIELD", { exact: true })).toHaveCount(0);
-  await expect(rail.getByRole("button", { name: "Field controllers panel", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
+  await expect(rail.getByRole("button", { name: "Fields panel", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
 
   // B on a plain rectangle draws a polygon to edit rather than doing nothing.
   await page.keyboard.press("b");
@@ -85,7 +89,7 @@ test("the rail and the letter keys switch canvas modes, and Escape leaves them",
 
 test("a controller is dragged by its body, and Delete removes it", async ({ page }) => {
   await goTo(page, "fields");
-  await page.getByRole("switch", { name: "Field Controllers", exact: true }).click();
+  await page.getByRole("switch", { name: "Fields", exact: true }).click();
   await page.getByRole("button", { name: "Add line controller", exact: true }).click();
   const centred = await oar(page);
   // The line spans the middle of the sheet; grab it a little off its middle so
@@ -195,7 +199,7 @@ test("the shape editor intersects and excludes, and handles are dragged on its c
 
 test("an image read as a halftone shrinks the holes under its dark pixels", async ({ page }) => {
   await goTo(page, "fields");
-  await page.getByRole("switch", { name: "Field Controllers", exact: true }).click();
+  await page.getByRole("switch", { name: "Fields", exact: true }).click();
   await page.getByRole("button", { name: "Add image controller", exact: true }).click();
   const png = await page.evaluate(() => {
     const canvas = document.createElement("canvas");

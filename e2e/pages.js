@@ -3,14 +3,13 @@ import { expect } from "@playwright/test";
 // The inspector shows one page at a time — the one the rail has open — so a
 // control has to be reached through its page. Opening a page enters the canvas
 // mode it owns when that costs no document edit (Remove always; Boundary once
-// there is an outline or a cutout to drag; Fields and Gradient once their block
+// there is an outline or a cutout to drag; Fields once its block or the gradient
 // is on; Path once a curve exists), and leaves whatever mode another page had.
 export const PAGES = {
   project: "Project panel",
   pattern: "Pattern panel",
   boundary: "Boundary panel",
-  gradient: "Size gradient panel",
-  fields: "Field controllers panel",
+  fields: "Fields panel",
   path: "Path panel",
   remove: "Remove holes panel",
   taper: "Taper panel",

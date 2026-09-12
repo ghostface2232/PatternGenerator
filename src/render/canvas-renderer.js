@@ -26,7 +26,7 @@ export function drawScene(canvas, scene) {
     holeShape,
     showHud,
     variation,
-    variationEditMode,
+    gradientEditing,
     selectedVariationLayer,
     fields,
     selectedControllerId,
@@ -131,7 +131,7 @@ export function drawScene(canvas, scene) {
     }
   }
 
-  if (variation.enabled && variationEditMode && showHud) {
+  if (variation.enabled && gradientEditing && showHud) {
     const cols = 34,
       rows = Math.max(18, Math.round((cols * perfH) / Math.max(1, perfW)));
     const cellW = perfW / cols,
@@ -191,7 +191,7 @@ export function drawScene(canvas, scene) {
         // Gone from the real pattern: culled by the size floor, or dropped
         // whole for crossing the boundary. A faint ghost says where it was,
         // only while the thing that took it away is being edited.
-        const ghost = h.culled ? variation.enabled && variationEditMode && showHud : boundaryEditMode && showHud;
+        const ghost = h.culled ? variation.enabled && gradientEditing && showHud : boundaryEditMode && showHud;
         if (ghost) {
           ctx.beginPath();
           ctx.arc(h.x, h.y, Math.max(0.15, r), 0, Math.PI * 2);
@@ -289,7 +289,7 @@ export function drawScene(canvas, scene) {
     ctx.strokeRect(0, 0, sheetW, sheetH);
   }
 
-  if (variation.enabled && variationEditMode && selectedVariationLayer && showHud) {
+  if (variation.enabled && gradientEditing && selectedVariationLayer && showHud) {
     drawGizmo(ctx, selectedVariationLayer, { marginLeft, marginTop, perfW, perfH }, sheetW, sheetH, baseScale, dark);
   }
   if (geometry.isPath && showHud) {
@@ -314,7 +314,10 @@ export function drawScene(canvas, scene) {
     // Over the holes, not under them: at 35% open area a third of the sheet is
     // hole, and an overlay that answers "where does this reach, and which way"
     // is useless with a third of it painted over.
-    drawChannelHeatmap(ctx, { field, activeChannel, marginLeft, marginTop, perfW, perfH, fields });
+    // With the gradient selected its own map is up; two heat maps in one
+    // place would say nothing. The controllers stay, faint or solid as usual,
+    // so one is still a click away.
+    if (!gradientEditing) drawChannelHeatmap(ctx, { field, activeChannel, marginLeft, marginTop, perfW, perfH, fields }); // prettier-ignore
     drawControllers(ctx, { fields, selectedControllerId, activeChannel, imageElements, sheetW, sheetH, baseScale, dark }); // prettier-ignore
   }
   ctx.restore();

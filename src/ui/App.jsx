@@ -69,6 +69,9 @@ import { ShapeEditor } from "./ShapeEditor.jsx";
 import { CommandPalette } from "./CommandPalette.jsx";
 
 const AUTOSAVE_MS = 300;
+// The Fields page's selection when it is the size gradient rather than a
+// controller. Controller ids are `ctrl-N`, so the word cannot collide.
+export const GRADIENT = "gradient";
 // Which inspector sections are folded up. UI preference, kept across reloads
 // but never in the document.
 const STORAGE_KEY_SECTIONS = "perf-pattern:ui.sections";
@@ -166,7 +169,6 @@ export default function App() {
   const [dark, setDark] = useState(true);
   const [showHud, setShowHud] = useState(true); // one switch for every on-canvas overlay
   const [holeRemovalMode, setHoleRemovalMode] = useState(false);
-  const [variationEditMode, setVariationEditMode] = useState(false);
   const [variationAdvanced, setVariationAdvanced] = useState(false);
   const [variationHud, setVariationHud] = useState(null);
   const [fieldEditMode, setFieldEditMode] = useState(false);
@@ -298,10 +300,21 @@ export default function App() {
   // controller on the channel being edited, so the inspector is never blank
   // while that channel has something in it. `selectedId` is therefore a hint;
   // `selectedController` is the answer, and the canvas highlights the same one.
+  //
+  // The size gradient is one more thing the Fields page can select, on the
+  // size channel: `selectedId` holds GRADIENT for it. It is the selection when
+  // it was picked, and the fallback when the channel has no controller to fall
+  // back on — so a document with only a gradient opens the Fields page on it.
+  const gradientSelected =
+    variation.enabled &&
+    activeChannel === "size" &&
+    (selectedId === GRADIENT ||
+      (!fields.controllers.some(c => c.id === selectedId) && !fields.controllers.some(c => c.channel === "size")));
   const selectedController = useMemo(() => {
+    if (gradientSelected) return null;
     const list = fields.controllers;
     return list.find(c => c.id === selectedId) || list.find(c => c.channel === activeChannel) || null;
-  }, [fields, selectedId, activeChannel]);
+  }, [fields, selectedId, activeChannel, gradientSelected]);
   const selectedControllerId = selectedController?.id ?? null;
   // Where a new controller is placed, and the frame the panel reports in.
   const perfArea = useMemo(
@@ -410,15 +423,13 @@ export default function App() {
   // shortcuts read it; `actions.setMode` writes it.
   const mode = fieldEditMode
     ? "fields"
-    : variation.enabled && variationEditMode
-      ? "variation"
-      : pathEditMode
-        ? "path"
-        : boundaryEditMode
-          ? "boundary"
-          : holeRemovalMode
-            ? "remove"
-            : "select";
+    : pathEditMode
+      ? "path"
+      : boundaryEditMode
+        ? "boundary"
+        : holeRemovalMode
+          ? "remove"
+          : "select";
 
   // ─── Compound edits (things that touch more than one field) ────────
   const actions = useMemo(() => {
@@ -564,24 +575,38 @@ export default function App() {
       });
     const clearRemovedHoles = () => api.set("removedHoles", []);
 
-    // Variation block
+    // ─── The size gradient ─────────────────────────────────────────
+    // One field layer among the others on the Fields page, edited in the same
+    // canvas mode as the controllers: selecting it puts its gizmo on the sheet.
+    // Its rows exist while `variation.enabled`; adding the first gradient
+    // switches the block on and removing the last switches it off, and either
+    // way the fields block comes on with it, in the same undo step, so that
+    // what the page shows as one list is on or off as one.
+    const updateGradient = updater =>
+      api.update(d => {
+        const next = updater(cloneVariation(d.variation));
+        if (JSON.stringify(next) === JSON.stringify(d.variation) && d.fields.enabled) return d;
+        return { ...d, variation: next, fields: d.fields.enabled ? d.fields : { ...d.fields, enabled: true } };
+      });
     const setVariationEnabled = enabled => {
       history.commit(current => ({ ...current, enabled }));
-      if (!enabled) setVariationEditMode(false);
+      if (!enabled && selectedId === GRADIENT) setSelectedId(null);
     };
-    const enterVariationEditMode = next => {
-      setVariationEditMode(next);
-      if (next) {
-        setActivePanel("variation");
-        setHoleRemovalMode(false);
-        setPathEditMode(false);
-        setBoundaryEditMode(false);
-        setFieldEditMode(false);
-        setFieldTool(null);
-        if (!history.ref.current.enabled) history.commit(current => ({ ...current, enabled: true }));
-      }
+    // Select the gradient on the Fields page; `editGradient` also puts its
+    // handles on the canvas (the G key, the palette, a preset).
+    const selectGradient = () => {
+      setActiveChannel("size");
+      setSelectedId(GRADIENT);
     };
-    const toggleVariationEditMode = () => enterVariationEditMode(!variationEditMode);
+    const editGradient = () => {
+      updateGradient(current => ({ ...current, enabled: true }));
+      selectGradient();
+      enterFieldEditMode(true);
+    };
+    const selectVariationLayer = id => {
+      history.live(current => ({ ...current, selectedLayerId: id }));
+      selectGradient();
+    };
     const updateSelectedLayer = (patch, record = false) => {
       const apply = current => ({
         ...current,
@@ -593,10 +618,10 @@ export default function App() {
     const applyVariationPreset = name => {
       const preset = VARIATION_PRESETS[name];
       if (!preset) return;
-      history.commit(current => {
-        const selectedId = current.selectedLayerId || current.layers[0]?.id || "layer-1";
+      updateGradient(current => {
+        const selectedLayerId = current.selectedLayerId || current.layers[0]?.id || "layer-1";
         const baseLayer =
-          current.layers.find(layer => layer.id === selectedId) || current.layers[0] || createVariationLayer(1);
+          current.layers.find(layer => layer.id === selectedLayerId) || current.layers[0] || createVariationLayer(1);
         return {
           ...current,
           enabled: true,
@@ -606,29 +631,46 @@ export default function App() {
           layers: [{ ...baseLayer, ...preset.layer, enabled: true }],
         };
       });
-      enterVariationEditMode(true);
+      selectGradient();
+      enterFieldEditMode(true);
     };
+    // The gradient's "add": the first one switches the block on (its layer was
+    // there all along, switched off); the next ones are layers, up to the cap.
     const addVariationLayer = () => {
-      if (history.ref.current.layers.length >= MAX_VARIATION_LAYERS) return;
-      history.commit(current => {
-        const layer = createVariationLayer(current.layers.length + 1);
-        return { ...current, enabled: true, layers: [...current.layers, layer], selectedLayerId: layer.id };
-      });
+      const current = history.ref.current;
+      if (!current.enabled) updateGradient(v => ({ ...v, enabled: true }));
+      else if (current.layers.length < MAX_VARIATION_LAYERS) {
+        updateGradient(v => {
+          const layer = createVariationLayer(v.layers.length + 1);
+          return { ...v, layers: [...v.layers, layer], selectedLayerId: layer.id };
+        });
+      } else return;
+      selectGradient();
+      enterFieldEditMode(true);
     };
-    const removeSelectedVariationLayer = () => {
-      if (history.ref.current.layers.length <= 1) return;
-      history.commit(current => {
-        const layers = current.layers.filter(layer => layer.id !== current.selectedLayerId);
-        return { ...current, layers, selectedLayerId: layers[0].id };
+    // Removing the last layer switches the gradient off rather than leaving a
+    // block with nothing in it; the layer stays in the document, so the next
+    // "add" brings back the one that was there.
+    const removeVariationLayer = id => {
+      const current = history.ref.current;
+      if (current.layers.length <= 1) {
+        history.commit(v => ({ ...v, enabled: false }));
+        if (selectedId === GRADIENT) setSelectedId(null);
+        return;
+      }
+      history.commit(v => {
+        const layers = v.layers.filter(layer => layer.id !== id);
+        return { ...v, layers, selectedLayerId: layers.some(l => l.id === v.selectedLayerId) ? v.selectedLayerId : layers[0].id }; // prettier-ignore
       });
     };
     const randomizeVariation = () => {
-      history.commit(current => ({
+      updateGradient(current => ({
         ...current,
         enabled: true,
         layers: current.layers.map(layer => randomizeVariationLayer(layer)),
       }));
-      enterVariationEditMode(true);
+      selectGradient();
+      enterFieldEditMode(true);
     };
     // ─── Field controllers ─────────────────────────────────────────
     // Every edit goes through api.update so it lands on the one global undo
@@ -647,9 +689,17 @@ export default function App() {
         ? d
         : { ...d, fields: { ...d.fields, controllers } };
     };
+    // The page's one switch: off silences every field layer, the gradient
+    // included, in one undo step; on brings the controllers back and leaves the
+    // gradient as it was, since a gradient is something one adds.
     const setFieldsEnabled = enabled => {
-      api.set("fields.enabled", enabled);
-      if (!enabled) {
+      if (enabled) api.set("fields.enabled", true);
+      else {
+        api.update(d =>
+          d.fields.enabled || d.variation.enabled
+            ? { ...d, fields: { ...d.fields, enabled: false }, variation: { ...d.variation, enabled: false } }
+            : d
+        );
         setFieldEditMode(false);
         setFieldTool(null);
       }
@@ -661,7 +711,6 @@ export default function App() {
       if (on) {
         setActivePanel("fields");
         setHoleRemovalMode(false);
-        setVariationEditMode(false);
         setPathEditMode(false);
         setBoundaryEditMode(false);
         if (!api.ref.current.fields.enabled) api.set("fields.enabled", true);
@@ -677,6 +726,7 @@ export default function App() {
       const selected = current.controllers.find(c => c.id === selectedId);
       // Let the fallback above pick the new channel's first controller.
       if (selected && selected.channel !== channel) setSelectedId(null);
+      if (selectedId === GRADIENT && channel !== "size") setSelectedId(null);
     };
     const selectController = setSelectedId;
     // `geometry` overrides the default placement when the controller is being
@@ -810,7 +860,6 @@ export default function App() {
       setHoleRemovalMode(on);
       if (on) {
         setActivePanel("remove");
-        setVariationEditMode(false);
         setPathEditMode(false);
         setBoundaryEditMode(false);
         enterFieldEditMode(false);
@@ -826,7 +875,6 @@ export default function App() {
       setPathEditMode(next);
       if (next) {
         setActivePanel("path");
-        setVariationEditMode(false);
         setHoleRemovalMode(false);
         setBoundaryEditMode(false);
         enterFieldEditMode(false);
@@ -933,7 +981,6 @@ export default function App() {
       setBoundaryEditMode(on);
       if (on) {
         setActivePanel("boundary");
-        setVariationEditMode(false);
         setHoleRemovalMode(false);
         setPathEditMode(false);
         enterFieldEditMode(false);
@@ -1022,7 +1069,6 @@ export default function App() {
     const setMode = mode => {
       if (mode === "select") {
         setHoleRemovalMode(false);
-        setVariationEditMode(false);
         setPathEditMode(false);
         setBoundaryEditMode(false);
         enterFieldEditMode(false);
@@ -1030,7 +1076,9 @@ export default function App() {
         return;
       }
       if (mode === "fields") enterFieldEditMode(true);
-      else if (mode === "variation") enterVariationEditMode(true);
+      // "variation" is the gradient's own way in: the same Fields mode, with
+      // the gradient selected so its handles are what the canvas shows.
+      else if (mode === "variation") editGradient();
       else if (mode === "remove") setHoleRemoval(true);
       else if (mode === "path") {
         if (api.ref.current.layout.type !== "Path") api.patch({ "layout.type": "Path", presetIndex: 0 });
@@ -1068,8 +1116,7 @@ export default function App() {
       if (m === "remove") return true;
       if (m === "boundary") return boundaryEditable;
       if (m === "path") return current.layout.path.paths.length > 0;
-      if (m === "fields") return current.fields.enabled;
-      if (m === "variation") return current.variation.enabled;
+      if (m === "fields") return current.fields.enabled || current.variation.enabled;
       return false;
     };
     const showPanel = (id, { toggleMode = false } = {}) => {
@@ -1091,6 +1138,7 @@ export default function App() {
       const explicit = api.ref.current.fields.controllers.find(c => c.id === selectedId);
       if (fieldEditMode) {
         if (explicit) removeController(explicit.id);
+        else if (selectedId === GRADIENT && gradientSelected) removeVariationLayer(history.ref.current.selectedLayerId);
       } else if (boundaryEditMode && selectedCutoutId) removeCutout(selectedCutoutId);
       else if (pathEditMode && api.ref.current.layout.path.paths.length) removePath(selectedPath);
     };
@@ -1129,11 +1177,13 @@ export default function App() {
       toggleRemovedHole,
       clearRemovedHoles,
       setVariationEnabled,
-      toggleVariationEditMode,
+      editGradient,
+      selectGradient,
+      selectVariationLayer,
       updateSelectedLayer,
       applyVariationPreset,
       addVariationLayer,
-      removeSelectedVariationLayer,
+      removeVariationLayer,
       randomizeVariation,
       setFieldsEnabled,
       dropImage,
@@ -1170,7 +1220,7 @@ export default function App() {
       removeBoundaryVertexAt,
       importBoundarySVG,
     };
-  }, [doc, api, history, mode, variationEditMode, fieldEditMode, pathEditModeOn, pathEditMode, boundaryEditMode, boundaryEditable, selectedCutoutId, selectedPath, penStart, geometry.region, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
+  }, [doc, api, history, mode, gradientSelected, fieldEditMode, pathEditModeOn, pathEditMode, boundaryEditMode, boundaryEditable, selectedCutoutId, selectedPath, penStart, geometry.region, activeChannel, perfArea, selectedId, selectedControllerId]); // prettier-ignore
 
   // ─── Exports ──────────────────────────────────────────────────────
   const { holeColor, bgColor } = doc.appearance;
@@ -1215,7 +1265,6 @@ export default function App() {
     next => {
       flushPending(); // the outgoing document may hold un-debounced edits
       api.replace(next);
-      setVariationEditMode(false);
       setHoleRemovalMode(false);
       setFieldEditMode(false);
       setPathEditMode(false);
@@ -1403,7 +1452,7 @@ export default function App() {
     activePanel,
     openExport: () => setExportOpen(true),
     holeRemovalMode,
-    variationEditMode,
+    gradientSelected,
     variationAdvanced,
     setVariationAdvanced,
     variationHud,

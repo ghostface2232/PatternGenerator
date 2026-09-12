@@ -20,7 +20,7 @@ async function setSlider(page, label, value) {
 // The fields panel is its own page on the rail; open it, then switch the block on.
 async function enableFields(page) {
   await goTo(page, "fields");
-  const toggle = page.getByRole("switch", { name: "Field Controllers", exact: true });
+  const toggle = page.getByRole("switch", { name: "Fields", exact: true });
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
 }
@@ -65,7 +65,7 @@ test("a size controller grows the holes it reaches and lifts the open area", asy
   expect(await oar(page)).toBeCloseTo(grown, 1);
 
   // Turning the block off puts the theoretical figure back, exactly.
-  const toggle = page.getByRole("switch", { name: "Field Controllers", exact: true });
+  const toggle = page.getByRole("switch", { name: "Fields", exact: true });
   await toggle.click();
   await expect(stat(page, "stat-oar")).toHaveText("35.4");
   await toggle.click();
@@ -284,7 +284,7 @@ test("the controller cap holds, and clearing puts the pattern back", async ({ pa
     await button.click();
   }
   // Eight is the cap, and the button says so rather than silently doing nothing.
-  await expect(page.getByText("Add (8/8)")).toBeVisible();
+  await expect(page.getByText(/8\/8 controllers/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Add point controller", exact: true })).toBeDisabled();
 
   await page.getByRole("button", { name: "Remove every field controller", exact: true }).click();
@@ -309,11 +309,13 @@ test("the three canvas modes are mutually exclusive", async ({ page }) => {
   await expect(page.getByText(/SIZE FIELD/)).toBeVisible();
   await expect(page.getByText(/HOLE REMOVAL MODE/)).toHaveCount(0);
 
-  await goTo(page, "gradient");
-  const editVariation = page.getByRole("button", { name: "Edit the size gradient on the canvas", exact: true });
-  await editVariation.click();
-  await expect(page.getByText(/EDIT VARIATION/)).toBeVisible();
-  await expect(page.getByText(/SIZE FIELD/)).toHaveCount(0);
+  // The gradient shares the Fields mode: selecting it swaps the handles, and
+  // the badge says which field layer the canvas is editing.
+  await page.getByRole("button", { name: "Add gradient layer", exact: true }).click();
+  await expect(page.getByText(/SIZE GRADIENT/)).toBeVisible();
+  await page.getByRole("button", { name: "Select size point controller 1", exact: true }).click();
+  await expect(page.getByText(/SIZE FIELD/)).toBeVisible();
+  await expect(page.getByText(/SIZE GRADIENT/)).toHaveCount(0);
 });
 
 test("a line drawn on the canvas becomes a line controller", async ({ page }) => {

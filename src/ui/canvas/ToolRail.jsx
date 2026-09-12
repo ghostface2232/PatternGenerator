@@ -1,5 +1,5 @@
-import { Circle, Hexagon, Image as ImageIcon, Minus, PenTool, Plus, RectangleHorizontal, Route, RotateCcw, Spline, Waypoints } from "lucide-react"; // prettier-ignore
-import { MAX_CUTOUTS, MAX_PATHS, MAX_PATH_POINTS, MORPH_SHAPE } from "../../core/constants.js";
+import { Circle, Hexagon, Image as ImageIcon, Minus, PenTool, Plus, RectangleHorizontal, Route, RotateCcw, Spline, Waves, Waypoints } from "lucide-react"; // prettier-ignore
+import { MAX_CUTOUTS, MAX_PATHS, MAX_PATH_POINTS, MAX_VARIATION_LAYERS, MORPH_SHAPE } from "../../core/constants.js";
 import { CHANNEL_INFO, EDITABLE_CHANNELS, MAX_CONTROLLERS, imageChannels } from "../../fields/controllers.js";
 import { effectiveHoleShape } from "../../core/pipeline.js";
 import { layoutPlacementChannels, layoutReadsSpacing } from "../../layouts/index.js";
@@ -9,8 +9,8 @@ import { transition } from "../controls/index.js";
 
 // The floating tool rail on the canvas: what the current MODE offers, beside
 // the sheet, so the hand never has to travel to the inspector for a tool. In
-// Fields mode it is the channel and the kind of controller the next click
-// drops; in Path mode the pen and the vertex edits; in Boundary mode the
+// Fields mode it is the channel, the kind of controller the next click drops
+// and, on the size channel, the gradient; in Path mode the pen and the vertex edits; in Boundary mode the
 // cutouts; in Remove mode the way back. Each button carries only a name (and
 // its shortcut) as a delayed tooltip; the icon has to say the rest.
 const FIELD_TOOLS = [
@@ -70,6 +70,9 @@ export function ToolRail() {
     const allowsImage = imageChannels(layoutPlacementChannels(doc.layout.type));
     const kindDisabled = kind => full || (kind === "image" && !allowsImage.includes(activeChannel));
     const limit = `Max ${MAX_CONTROLLERS} controllers`;
+    const { variation } = doc;
+    const gradientFull = variation.enabled && variation.layers.length >= MAX_VARIATION_LAYERS;
+    const gradientDisabled = activeChannel !== "size" || gradientFull;
     content = (
       <>
         {column(
@@ -105,6 +108,23 @@ export function ToolRail() {
                 <Icon size={14} />
               </button>
             )),
+            <button
+              key="gradient"
+              className="pg-hover pg-tooltip"
+              onClick={() => actions.addVariationLayer()}
+              data-tip={
+                activeChannel !== "size"
+                  ? "Gradient  ·  size only"
+                  : gradientFull
+                    ? `Max ${MAX_VARIATION_LAYERS} gradient layers`
+                    : "Gradient layer"
+              }
+              aria-label="Place gradient layer"
+              disabled={gradientDisabled}
+              style={cell(false, gradientDisabled)}
+            >
+              <Waves size={14} />
+            </button>,
             ...FIELD_PANEL_KINDS.map(({ kind, Icon, tip }) => (
               <button
                 key={kind}

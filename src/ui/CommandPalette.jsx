@@ -30,8 +30,8 @@ export function CommandPalette({ onClose }) {
     const items = [
       { group: "Mode", label: "Select & pan", key: "V", run: run(() => actions.setMode("select")) },
       { group: "Mode", label: "Edit the boundary", key: "B", run: run(() => actions.setMode("boundary")) },
+      { group: "Mode", label: "Edit fields", key: "F", run: run(() => actions.setMode("fields")) },
       { group: "Mode", label: "Edit the size gradient", key: "G", run: run(() => actions.setMode("variation")) },
-      { group: "Mode", label: "Edit field controllers", key: "F", run: run(() => actions.setMode("fields")) },
       { group: "Mode", label: "Edit Path curves", key: "P", run: run(() => actions.setMode("path")) },
       { group: "Mode", label: "Remove holes by clicking", key: "R", run: run(() => actions.setMode("remove")) },
       // The pages with no canvas mode of their own; the ones with one are the

@@ -23,7 +23,6 @@ export const CHANNEL_COLORS = {
 export const MODE_COLORS = {
   select: { dark: "#a1a1aa", light: "#52525b" },
   fields: { dark: "#818cf8", light: "#4f46e5" },
-  variation: { dark: "#60a5fa", light: "#2563eb" },
   path: { dark: "#fb923c", light: "#c2410c" },
   boundary: { dark: "#2dd4bf", light: "#0f766e" },
   remove: { dark: "#c084fc", light: "#7c3aed" },

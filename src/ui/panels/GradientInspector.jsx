@@ -1,0 +1,359 @@
+import { ChevronDown, Sparkles } from "lucide-react";
+import { BLEND_MODES, FIELD_SPACES, SIZE_PROFILES, VARIATION_PRESETS } from "../../fields/variation-engine.js";
+import { gizmoUsesPosition } from "../../fields/gizmo.js";
+import { useEditor } from "../EditorContext.jsx";
+import { ProfileIcon, Select, SliderRow, Toggle } from "../controls/index.js";
+import { actionButtonStyle, chipStyle } from "../controls/index.js";
+import { MONO } from "../theme.js";
+import { groupLabelStyle } from "./Section.jsx";
+
+// The inspector for the size gradient — the selected gradient layer of the
+// Fields page. A gradient is a scalar field over the whole sheet (space ×
+// profile) that scales every hole; it is the broad brush beside the local
+// controllers in the same list, and the two multiply. What is drawn on the
+// canvas handles (origin, direction, reach, stop, curve) is not repeated here;
+// this holds the choices and the count-style knobs, and the range and floor
+// that apply to every gradient layer together.
+export function GradientInspector() {
+  const { doc, theme, ui, geometry: g, stats, history, selectedVariationLayer: layer, actions } = useEditor();
+  const { dark } = theme;
+  const { variation } = doc;
+  const { variationAdvanced, setVariationAdvanced, fieldEditMode, gradientSelected } = ui;
+  const chip = (active, extra = {}) => chipStyle(theme, active, { padding: 0, ...extra });
+  const groupLabel = groupLabelStyle(theme);
+  if (!layer) return null;
+  const editing = fieldEditMode && gradientSelected;
+
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, marginBottom: 12 }}>
+        <Select
+          value=""
+          placeholder="Load a gradient preset…"
+          onChange={actions.applyVariationPreset}
+          dark={dark}
+          ariaLabel="Field preset"
+          options={Object.keys(VARIATION_PRESETS).map(name => ({ value: name, label: name }))}
+        />
+        <button
+          className="pg-hover"
+          onClick={actions.randomizeVariation}
+          aria-label="Randomize"
+          title="Random space, profile and shape for every unlocked gradient layer"
+          style={actionButtonStyle(theme, false, { padding: "0 10px" })}
+        >
+          <Sparkles size={11} /> Randomize
+        </button>
+      </div>
+
+      <div style={groupLabel}>Field Space</div>
+      {/* Named "<space> field space", not just "<space>": Radial and Spiral are
+          also layout modes in the Type dropdown, and an accessible name has to
+          be unique in the document. The chips carry aria-pressed because their
+          only "on" cue is their colour. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4, marginBottom: 13 }}>
+        {FIELD_SPACES.map(space => (
+          <button
+            key={space}
+            onClick={() => actions.updateSelectedLayer({ space }, true)}
+            aria-label={`${space} field space`}
+            aria-pressed={layer.space === space}
+            style={chip(layer.space === space, { padding: "6px 2px" })}
+          >
+            {space}
+          </button>
+        ))}
+      </div>
+
+      <div style={groupLabel}>Size Profile</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 5, marginBottom: 13 }}>
+        {SIZE_PROFILES.map(profile => {
+          const active = layer.profile === profile;
+          return (
+            <button
+              key={profile}
+              onClick={() => actions.updateSelectedLayer({ profile }, true)}
+              aria-label={`${profile} size profile`}
+              aria-pressed={active}
+              style={chip(active, {
+                height: 48,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 1,
+                borderRadius: 5,
+              })}
+            >
+              <ProfileIcon type={profile} active={active} dark={dark} />
+              {profile}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Geometry, position and curve live on the canvas handles. Only count-style knobs stay here. */}
+      {layer.space === "Spiral" && (
+        <SliderRow
+          label="Spiral Turns"
+          value={layer.turns}
+          min={0.25}
+          max={8}
+          step={0.05}
+          onChange={turns => actions.updateSelectedLayer({ turns })}
+          dark={dark}
+        />
+      )}
+      {["Wave", "Noise"].includes(layer.profile) && (
+        <SliderRow
+          label={layer.profile === "Wave" ? "Frequency" : "Noise Scale"}
+          value={layer.frequency}
+          min={0.25}
+          max={10}
+          step={0.05}
+          onChange={frequency => actions.updateSelectedLayer({ frequency })}
+          dark={dark}
+        />
+      )}
+      {layer.profile === "Noise" && (
+        <SliderRow
+          label="Noise Detail"
+          value={layer.detail}
+          min={1}
+          max={6}
+          step={1}
+          onChange={detail => actions.updateSelectedLayer({ detail })}
+          dark={dark}
+        />
+      )}
+      {layer.profile === "Steps" && (
+        <SliderRow
+          label="Step Count"
+          value={layer.steps}
+          min={2}
+          max={16}
+          step={1}
+          onChange={steps => actions.updateSelectedLayer({ steps })}
+          dark={dark}
+        />
+      )}
+
+      <div style={groupLabel}>Range · every gradient layer</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        {/* Whole-percent steps: round on both display and commit so slider drags never surface float artifacts */}
+        <SliderRow
+          label="Min Scale"
+          value={Math.round(variation.minScale * 100)}
+          min={1}
+          max={200}
+          step={1}
+          onChange={value =>
+            history.live(current => ({ ...current, minScale: Math.min(Math.round(value) / 100, current.maxScale) }))
+          }
+          unit="%"
+          dark={dark}
+        />
+        <SliderRow
+          label="Max Scale"
+          value={Math.round(variation.maxScale * 100)}
+          min={5}
+          max={250}
+          step={1}
+          onChange={value =>
+            history.live(current => ({ ...current, maxScale: Math.max(Math.round(value) / 100, current.minScale) }))
+          }
+          unit="%"
+          dark={dark}
+        />
+      </div>
+      <div
+        style={{
+          marginTop: -5,
+          marginBottom: 10,
+          padding: "6px 8px",
+          borderRadius: 4,
+          background: theme.accentBgSoft,
+          fontSize: 9,
+          color: theme.textSecondary,
+          display: "flex",
+          justifyContent: "space-between",
+        }}
+      >
+        <span>Actual extent</span>
+        <span style={{ color: theme.accent }}>
+          {(Math.min(g.effW, g.effH) * variation.minScale).toFixed(2)}–
+          {(Math.max(g.effW, g.effH) * variation.maxScale).toFixed(2)} mm
+        </span>
+      </div>
+
+      <SliderRow
+        label="Remove Below ⌀"
+        value={variation.cullBelow}
+        min={0}
+        max={Math.max(1, +Math.max(g.effW, g.effH).toFixed(1))}
+        step={0.05}
+        onChange={value => history.live(current => ({ ...current, cullBelow: value }))}
+        unit={variation.cullBelow > 0 ? "mm" : "off"}
+        dark={dark}
+      />
+      {stats.culledHoleCount > 0 && (
+        <div
+          style={{
+            marginTop: -5,
+            marginBottom: 10,
+            fontSize: 9,
+            color: theme.textSecondary,
+            display: "flex",
+            justifyContent: "space-between",
+          }}
+        >
+          <span>Holes removed by size floor</span>
+          <span style={{ color: theme.warn }}>{stats.culledHoleCount.toLocaleString()}</span>
+        </div>
+      )}
+
+      <button
+        onClick={() => setVariationAdvanced(v => !v)}
+        aria-expanded={variationAdvanced}
+        style={{
+          width: "100%",
+          height: 28,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          border: "none",
+          borderTop: `1px solid ${theme.sectionBorder}`,
+          background: "transparent",
+          color: theme.textSecondary,
+          fontSize: 9,
+          cursor: "pointer",
+          fontFamily: MONO,
+        }}
+      >
+        <span>ADVANCED MODIFIERS</span>
+        <ChevronDown
+          size={12}
+          style={{ transform: variationAdvanced ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}
+        />
+      </button>
+      {variationAdvanced && (
+        <div style={{ paddingTop: 9 }}>
+          <div style={{ fontSize: 9, color: theme.textSecondary, marginBottom: 11, lineHeight: 1.5 }}>
+            Direction, origin, reach, position &amp; curve live on the canvas handles. These are the extra modifiers.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+            {[
+              ["Mirror", "mirror"],
+              ["Invert", "invert"],
+              ["Lock Randomize", "locked"],
+            ].map(([label, key]) => (
+              <label
+                key={key}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  fontSize: 9,
+                  color: theme.textSecondary,
+                }}
+              >
+                {label}
+                <Toggle
+                  value={layer[key]}
+                  onChange={next => actions.updateSelectedLayer({ [key]: next }, true)}
+                  dark={dark}
+                  label={label}
+                />
+              </label>
+            ))}
+          </div>
+          <SliderRow
+            label="Jitter"
+            value={layer.jitter}
+            min={0}
+            max={0.5}
+            step={0.01}
+            onChange={jitter => actions.updateSelectedLayer({ jitter })}
+            dark={dark}
+          />
+          <SliderRow
+            label="Quantize Sizes"
+            value={variation.quantize}
+            min={0}
+            max={12}
+            step={1}
+            onChange={quantize => history.live(current => ({ ...current, quantize }))}
+            unit={variation.quantize >= 2 ? "levels" : "off"}
+            dark={dark}
+          />
+          <SliderRow
+            label="Layer Opacity"
+            value={layer.opacity * 100}
+            min={0}
+            max={100}
+            step={1}
+            onChange={opacity => actions.updateSelectedLayer({ opacity: opacity / 100 })}
+            unit="%"
+            dark={dark}
+          />
+          {variation.layers.length > 1 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: theme.textSecondary, marginBottom: 5 }}>Blend Mode</div>
+              <Select
+                value={layer.blendMode}
+                onChange={mode => actions.updateSelectedLayer({ blendMode: mode }, true)}
+                dark={dark}
+                ariaLabel="Blend Mode"
+                options={BLEND_MODES.map(mode => ({ value: mode, label: mode }))}
+              />
+            </div>
+          )}
+          {layer.profile === "Noise" && (
+            <SliderRow
+              label="Noise Seed"
+              value={layer.seed}
+              min={0}
+              max={99999}
+              step={1}
+              onChange={seed => actions.updateSelectedLayer({ seed })}
+              dark={dark}
+            />
+          )}
+        </div>
+      )}
+      {editing && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: "7px 9px",
+            borderRadius: 5,
+            border: `1px solid ${dark ? "rgba(96,165,250,0.18)" : "rgba(37,99,235,0.14)"}`,
+            background: theme.accentBgSoft,
+            color: theme.textSecondary,
+            fontSize: 9,
+            lineHeight: 1.6,
+          }}
+        >
+          <div>
+            <span style={{ color: theme.accent }}>●</span> center — drag to move the origin (gradient start).
+          </div>
+          <div>
+            <span style={{ color: theme.accent }}>◯</span> reach — drag the end point to aim direction &amp; spread.
+          </div>
+          <div>
+            <span style={{ color: theme.accent }}>◆</span> stop — slide along the line to set{" "}
+            {gizmoUsesPosition(layer) ? "position" : "phase"}.
+          </div>
+          <div>
+            <span style={{ color: theme.dial }}>⟳</span> curve — turn the dial to shape the falloff.
+          </div>
+          <div style={{ opacity: 0.8, marginTop: 4 }}>
+            Center snaps to the panel centre, edges &amp; corners; spread &amp; position to 0/25/50/75/100%; angles to
+            45°. Hold Shift to lock to a snap; otherwise it gently pulls in near one.
+          </div>
+          <div style={{ opacity: 0.8, marginTop: 2 }}>Drag empty space (or hold Space) to pan.</div>
+        </div>
+      )}
+    </>
+  );
+}

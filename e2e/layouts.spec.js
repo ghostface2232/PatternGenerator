@@ -25,7 +25,7 @@ async function setSlider(page, label, value) {
 
 async function enableFields(page) {
   await goTo(page, "fields");
-  const toggle = page.getByRole("switch", { name: "Field Controllers", exact: true });
+  const toggle = page.getByRole("switch", { name: "Fields", exact: true });
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
 }
@@ -112,9 +112,8 @@ test("a layout mode is still addressable with the variation panel open", async (
   // Spiral and Radial are layout modes AND variation field spaces. An accessible
   // name has to be unique in the document, and the suite uses no `.first()`, so
   // this fails on a collision rather than silently clicking the wrong control.
-  await goTo(page, "gradient");
-  const variation = page.getByRole("switch", { name: "Size Gradient", exact: true });
-  await variation.click();
+  await goTo(page, "fields");
+  await page.getByRole("button", { name: "Add gradient layer", exact: true }).click();
   await expect(page.getByRole("button", { name: "Spiral field space", exact: true })).toBeVisible();
   await choose(page, "Type", "Spiral");
   await choose(page, "Type", "Radial");
@@ -341,7 +340,7 @@ test("the path edit mode takes the canvas from the other three", async ({ page }
   await expect(page.getByText(/EDIT PATH/)).toBeVisible();
 
   await enableFields(page);
-  await page.getByRole("button", { name: "Edit field controllers on the canvas", exact: true }).click();
+  await page.getByRole("button", { name: "Edit fields on the canvas", exact: true }).click();
   await expect(page.getByText(/EDIT PATH/)).toHaveCount(0);
 });
 

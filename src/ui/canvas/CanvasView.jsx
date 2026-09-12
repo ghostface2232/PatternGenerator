@@ -54,7 +54,7 @@ export function CanvasView() {
     imageElements,
     actions,
   } = useEditor();
-  const { dark, showHud, mode, holeRemovalMode, variationEditMode, pan, setPan, zoom, setZoom, setVariationHud } = ui;
+  const { dark, showHud, mode, holeRemovalMode, gradientSelected, pan, setPan, zoom, setZoom, setVariationHud } = ui;
   const { fieldEditMode, activeChannel, fieldTool, selectedControllerId, pathTool, penStart } = ui;
   const { pathEditMode, selectedPath, boundaryEditMode, selectedCutoutId } = ui;
   const pathBlock = doc.layout.path;
@@ -62,6 +62,9 @@ export function CanvasView() {
   const { variation, fields } = doc;
   const { holeColor, bgColor } = doc.appearance;
   const { perfX: marginLeft, perfY: marginTop, perfW, perfH, taperActive } = geometry;
+  // The gradient is edited in the same Fields mode as the controllers: its
+  // gizmo is on the canvas while it is the selected field layer.
+  const variationActive = fieldEditMode && gradientSelected && showHud && !!selectedVariationLayer;
 
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -110,7 +113,7 @@ export function CanvasView() {
       holeShape: geometry.holeShape,
       showHud,
       variation,
-      variationEditMode,
+      gradientEditing: variationActive,
       selectedVariationLayer,
       fields: drawPreview ? { ...fields, controllers: [...fields.controllers, drawPreview] } : fields,
       selectedControllerId,
@@ -143,7 +146,7 @@ export function CanvasView() {
       stats.holeCount,
       showHud,
       variation,
-      variationEditMode,
+      variationActive,
       selectedVariationLayer,
       fields,
       drawPreview,
@@ -240,7 +243,6 @@ export function CanvasView() {
   const fieldActive = fieldEditMode && fields.enabled && showHud;
   const pathActive = pathEditMode && showHud;
   const boundaryActive = boundaryEditMode && showHud;
-  const variationActive = variation.enabled && variationEditMode && showHud && !!selectedVariationLayer;
 
   // Controllers on the channel being edited, nearest handle first. Only the
   // active channel is grabbable — the others are drawn faintly for reference, so
@@ -289,6 +291,13 @@ export function CanvasView() {
         if (closest >= 0 && closestDist <= px) return { kind: "pathBody", index: closest };
         return null;
       }
+      // The gradient's handles first: while it is the selection they are what
+      // the canvas is for, and a controller under one is still a click away.
+      if (variationActive) {
+        const g = computeGizmo(selectedVariationLayer, geom, 12 / view.baseScale);
+        const hit = hitTestGizmo(g, sheet.x, sheet.y, view.baseScale);
+        if (hit) return { kind: "gizmo", handle: hit };
+      }
       if (fieldActive) {
         const list = fields.controllers;
         for (const controller of orderedControllers()) {
@@ -309,11 +318,6 @@ export function CanvasView() {
         }
         if (closest && closestDist <= px) return { kind: "controllerBody", id: closest.id };
         return null;
-      }
-      if (variationActive) {
-        const g = computeGizmo(selectedVariationLayer, geom, 12 / view.baseScale);
-        const hit = hitTestGizmo(g, sheet.x, sheet.y, view.baseScale);
-        if (hit) return { kind: "gizmo", handle: hit };
       }
       return null;
     },
@@ -679,14 +683,15 @@ export function CanvasView() {
   const modeBadge = (() => {
     if (holeRemovalMode)
       return ["remove", `HOLE REMOVAL MODE${stats.removedHoleCount > 0 ? ` (${stats.removedHoleCount} removed)` : ""}`];
-    if (variationActive) return ["variation", "EDIT VARIATION"];
     if (pathActive)
       return ["path", `EDIT PATH${pathBlock.paths.length > 1 ? ` ${selectedPath + 1}/${pathBlock.paths.length}` : ""}`];
     if (boundaryActive) return ["boundary", "EDIT BOUNDARY"];
     if (fieldActive)
       return fieldTool
         ? ["fields", `${fieldTool === "point" ? "CLICK" : "DRAG"} TO PLACE ${fieldTool.toUpperCase()}`]
-        : ["fields", `${activeChannel.toUpperCase()} FIELD`];
+        : variationActive
+          ? ["fields", "SIZE GRADIENT"]
+          : ["fields", `${activeChannel.toUpperCase()} FIELD`];
     return null;
   })();
 
@@ -743,7 +748,7 @@ export function CanvasView() {
           )}
         </div>
       )}
-      {showHud && mode !== "select" && mode !== "variation" && <ToolRail />}
+      {showHud && mode !== "select" && <ToolRail />}
       {showHud && ui.variationHud && <VariationHud />}
       <StatusBar />
     </div>
