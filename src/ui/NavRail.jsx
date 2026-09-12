@@ -58,8 +58,9 @@ export function NavRail() {
         background: theme.railBg,
         borderRadius: 14,
         boxShadow: theme.floatShadow,
-        overflowY: "auto",
-        scrollbarWidth: "none",
+        // No overflow rule: `overflow-y: auto` forces `overflow-x` to auto as
+        // well, which clipped the tooltips drawn beside the rail. Nine entries
+        // fit any viewport the app supports.
       }}
     >
       {PANELS.filter(entry => !entry.pathOnly || isPath).map(entry => {
