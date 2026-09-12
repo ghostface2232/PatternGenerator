@@ -210,6 +210,12 @@ export default function App() {
   // click, and clicking between controllers would evict real edits from a
   // hundred-step history.
   const [selectedId, setSelectedId] = useState(null);
+  // Whether the Fields page's switch, when it was last turned off, took the
+  // gradient down with it — so turning it back on brings the gradient back
+  // too. The switch is a mute: what it silenced, it restores. Held outside the
+  // document (a fresh document's gradient is off because it was never added,
+  // not because it was muted) and forgotten when another document loads.
+  const mutedGradient = useRef(false);
   // Which Path curve the panel shows and the canvas highlights. UI state for the
   // same reason a controller selection is: it changes on every click.
   const [selectedPathIndex, setSelectedPath] = useState(0);
@@ -704,12 +710,22 @@ export default function App() {
         ? d
         : { ...d, fields: { ...d.fields, controllers } };
     };
-    // The page's one switch: off silences every field layer, the gradient
-    // included, in one undo step; on brings the controllers back and leaves the
-    // gradient as it was, since a gradient is something one adds.
+    // The page's one switch is a mute: off silences every field layer, the
+    // gradient included, in one undo step; on brings back exactly what it
+    // silenced, in one step too — the gradient as well when the switch was
+    // what took it down, and the controllers alone when the gradient was
+    // never added (or was removed by hand).
     const setFieldsEnabled = enabled => {
-      if (enabled) api.set("fields.enabled", true);
-      else {
+      if (enabled) {
+        const restoreGradient = mutedGradient.current;
+        mutedGradient.current = false;
+        api.update(d => {
+          const fieldsOn = d.fields.enabled ? d.fields : { ...d.fields, enabled: true };
+          const variationOn = restoreGradient && !d.variation.enabled ? { ...d.variation, enabled: true } : d.variation;
+          return fieldsOn === d.fields && variationOn === d.variation ? d : { ...d, fields: fieldsOn, variation: variationOn }; // prettier-ignore
+        });
+      } else {
+        mutedGradient.current = api.ref.current.variation.enabled;
         api.update(d =>
           d.fields.enabled || d.variation.enabled
             ? { ...d, fields: { ...d.fields, enabled: false }, variation: { ...d.variation, enabled: false } }
@@ -1290,6 +1306,7 @@ export default function App() {
     next => {
       flushPending(); // the outgoing document may hold un-debounced edits
       api.replace(next);
+      mutedGradient.current = false;
       setHoleRemovalMode(false);
       setFieldEditMode(false);
       setPathEditMode(false);

@@ -71,6 +71,25 @@ test("a size controller grows the holes it reaches and lifts the open area", asy
   await toggle.click();
   expect(await oar(page)).toBeCloseTo(grown, 1);
 
+  // The switch is a mute: with a gradient in the list as well, off silences
+  // both and on brings both back — the gradient row included.
+  await page.getByRole("button", { name: "Add gradient layer", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Select gradient layer 1", exact: true })).toBeVisible();
+  const both = await oar(page);
+  await toggle.click();
+  await expect(stat(page, "stat-oar")).toHaveText("35.4");
+  await expect(page.getByRole("button", { name: "Select gradient layer 1", exact: true })).toHaveCount(0);
+  await toggle.click();
+  await expect(page.getByRole("button", { name: "Select gradient layer 1", exact: true })).toBeVisible();
+  expect(await oar(page)).toBeCloseTo(both, 1);
+  // One undo step each way.
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect(stat(page, "stat-oar")).toHaveText("35.4");
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  expect(await oar(page)).toBeCloseTo(both, 1);
+  await page.getByRole("button", { name: "Remove gradient layer 1", exact: true }).click();
+  await page.getByRole("button", { name: "Select size point controller 1", exact: true }).click();
+
   // The reach is what decides how much of the sheet it touches.
   await setSlider(page, "Reach", 10);
   const narrow = await oar(page);
