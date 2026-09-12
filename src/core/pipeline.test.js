@@ -1161,3 +1161,71 @@ test("a preset hole works in every layout mode, the radial and cross-hatch ones 
     if (type !== "Voronoi" && type !== "Flow Lines") assert.equal(stats.hasOverlap, false, type);
   }
 });
+
+// ─── The whole-hole rule ──────────────────────────────────────────────
+// Once a boundary is set, a hole that crosses it is dropped whole. Each hole
+// is checked as it is drawn, at the vertices of its own outline.
+const outlineInside = (hole, inside) => {
+  for (let a = 0; a < Math.PI * 2; a += 0.1) {
+    if (!inside(hole.x + (Math.cos(a) * hole.w) / 2, hole.y + (Math.sin(a) * hole.h) / 2)) return false;
+  }
+  return true;
+};
+
+test("a set boundary drops every hole that crosses it, and the plain sheet keeps its edges", () => {
+  const plain = computePattern(createDocument());
+  assert.equal(plain.stats.clippedHoleCount, 0);
+  assert.equal(plain.activeHoles.length, 739);
+
+  const ellipse = computePattern(doc({ "boundary.shape": "Ellipse" }));
+  assert.ok(ellipse.stats.clippedHoleCount > 0);
+  assert.ok(ellipse.activeHoles.every(h => outlineInside(h, (x, y) => ((x - 100) / 100) ** 2 + ((y - 100) / 100) ** 2 <= 1 + 1e-9))); // prettier-ignore
+  assert.equal(ellipse.holes.length, ellipse.activeHoles.length + ellipse.stats.clippedHoleCount);
+  // The count in the statistics is the count of holes that are drawn.
+  assert.equal(ellipse.stats.activeHoleCount, ellipse.activeHoles.length);
+  assert.equal(ellipse.stats.removedHoleCount, 0);
+
+  const cutout = {
+    id: "cut-1",
+    shape: "Circle",
+    x: 100,
+    y: 100,
+    w: 40,
+    h: 40,
+    rotation: 0,
+    cornerRadius: 0,
+    points: [],
+  };
+  const cut = computePattern(doc({ "boundary.cutouts": [cutout] }));
+  assert.ok(cut.activeHoles.every(h => Math.hypot(h.x - 100, h.y - 100) >= 20 + h.w / 2 - 1e-9), "no hole touches the cutout"); // prettier-ignore
+  // The sheet's own edges are not a set boundary: the holes overhanging them
+  // are exactly the ones the plain sheet has.
+  const overhang = holes => holes.filter(h => h.x < h.w / 2 || h.y < h.h / 2 || h.x > 200 - h.w / 2 || h.y > 200 - h.h / 2).length; // prettier-ignore
+  assert.ok(overhang(plain.activeHoles) > 0);
+  assert.equal(overhang(cut.activeHoles), overhang(plain.activeHoles));
+
+  // A margin is a set boundary, so nothing crosses the margin line.
+  const margin = computePattern(doc({ "boundary.margins.top": 10, "boundary.margins.bottom": 10, "boundary.margins.left": 10, "boundary.margins.right": 10 })); // prettier-ignore
+  assert.ok(margin.stats.clippedHoleCount > 0);
+  assert.ok(margin.activeHoles.every(h => h.x - h.w / 2 >= 10 - 1e-9 && h.x + h.w / 2 <= 190 + 1e-9 && h.y - h.h / 2 >= 10 - 1e-9 && h.y + h.h / 2 <= 190 + 1e-9)); // prettier-ignore
+});
+
+test("the whole-hole rule reads the decorated hole and leaves the pre-clipped modes alone", () => {
+  // A size gradient grows holes across the edge that fit at their nominal
+  // size: more are dropped, and none of the survivors crosses.
+  const flat = computePattern(doc({ "boundary.shape": "Ellipse" }));
+  const grown = computePattern(doc({ "boundary.shape": "Ellipse", "variation.enabled": true, "variation.minScale": 1, "variation.maxScale": 2 })); // prettier-ignore
+  assert.ok(grown.stats.clippedHoleCount > flat.stats.clippedHoleCount);
+  assert.ok(grown.activeHoles.every(h => outlineInside(h, (x, y) => ((x - 100) / 100) ** 2 + ((y - 100) / 100) ** 2 <= 1 + 1e-9))); // prettier-ignore
+  // Voronoi cells and Flow Lines slots are cut to the boundary as polygons and
+  // never cross it, so none is dropped.
+  for (const type of ["Voronoi", "Flow Lines"]) {
+    const { stats } = computePattern(doc({ "layout.type": type, "boundary.shape": "Ellipse" }));
+    assert.equal(stats.clippedHoleCount, 0, type);
+  }
+  // The flag keeps the generated list whole, so a removal index still names
+  // the same hole with and without the boundary.
+  const removed = computePattern(doc({ "boundary.shape": "Ellipse", removedHoles: [200] }));
+  assert.equal(removed.holes.length, flat.holes.length);
+  assert.equal(removed.stats.removedHoleCount, flat.holes[200].clipped ? 0 : 1);
+});

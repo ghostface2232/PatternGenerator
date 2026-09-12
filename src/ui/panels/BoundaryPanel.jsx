@@ -13,7 +13,7 @@ const CUTOUT_ICON = { Circle, Rectangle: RectangleHorizontal, Polygon: Hexagon }
 // SVG file), the margins and corner radius where they apply, the cutouts, and
 // whether the sheet is cut to the outline.
 export function BoundaryPanel() {
-  const { doc, api, theme, ui, geometry: g, actions, selectedCutout } = useEditor();
+  const { doc, api, theme, ui, geometry: g, stats, actions, selectedCutout } = useEditor();
   const { dark } = theme;
   const { sheet, boundary } = doc;
   const { margins } = boundary;
@@ -359,6 +359,12 @@ export function BoundaryPanel() {
         </>
       )}
 
+      {stats.clippedHoleCount > 0 && (
+        <div style={{ ...noteStyle(theme), display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+          <span>Dropped for crossing the boundary</span>
+          <span style={{ color: theme.textMuted }}>{stats.clippedHoleCount.toLocaleString()} holes</span>
+        </div>
+      )}
       <label style={{ ...rowLabelStyle(theme), marginTop: 4, marginBottom: 0 }}>
         <span>Trim sheet to boundary</span>
         <Toggle

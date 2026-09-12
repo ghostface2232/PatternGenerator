@@ -162,7 +162,7 @@ export function drawScene(canvas, scene) {
   if (perfMode) {
     ctx.fillStyle = holeColor;
     holes.forEach((h, i) => {
-      if (removedSet.has(i) || h.culled) return;
+      if (removedSet.has(i) || h.culled || h.clipped) return;
       // A hole that carries its own outline is not centred in its bounding box,
       // so the cheap stand-in is a square about its own origin — a Voronoi
       // cell's site is inside its cell, and its narrower dimension fits there.
@@ -174,7 +174,7 @@ export function drawScene(canvas, scene) {
     // `overlaps` indexes the active (non-removed, non-culled) list; map back to `holes`.
     const activeIndices = [];
     holes.forEach((h, i) => {
-      if (!removedSet.has(i) && !h.culled) activeIndices.push(i);
+      if (!removedSet.has(i) && !h.culled && !h.clipped) activeIndices.push(i);
     });
     const activeOverlapSet = new Set();
     overlaps.forEach(activeIdx => {
@@ -187,12 +187,21 @@ export function drawScene(canvas, scene) {
       // highlight. That is the hole's own extent, except for a slot, whose
       // extent is the panel and whose width is what a mark should match.
       const r = h.stroke ? Math.max(0.15, strokeMaxWidth(h.stroke) / 2) : Math.max(h.w, h.h) / 2;
-      if (h.culled && !isRemoved) {
-        // Culled by the size floor: gone from the real pattern. Show a faint ghost only while editing.
-        if (variation.enabled && variationEditMode && showHud) {
+      if ((h.culled || h.clipped) && !isRemoved) {
+        // Gone from the real pattern: culled by the size floor, or dropped
+        // whole for crossing the boundary. A faint ghost says where it was,
+        // only while the thing that took it away is being edited.
+        const ghost = h.culled ? variation.enabled && variationEditMode && showHud : boundaryEditMode && showHud;
+        if (ghost) {
           ctx.beginPath();
           ctx.arc(h.x, h.y, Math.max(0.15, r), 0, Math.PI * 2);
-          ctx.strokeStyle = dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.12)";
+          ctx.strokeStyle = h.culled
+            ? dark
+              ? "rgba(255,255,255,0.12)"
+              : "rgba(0,0,0,0.12)"
+            : dark
+              ? "rgba(45,212,191,0.28)"
+              : "rgba(15,118,110,0.25)";
           ctx.lineWidth = 0.2;
           ctx.setLineDash([0.6, 0.6]);
           ctx.stroke();

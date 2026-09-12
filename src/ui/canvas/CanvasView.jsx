@@ -596,7 +596,7 @@ export function CanvasView() {
           nearestIdx = -1,
           nearestDist = Infinity;
         holes.forEach((h, i) => {
-          if (h.culled) return; // already gone from the pattern
+          if (h.culled || h.clipped) return; // already gone from the pattern
           // Landing inside the hole picks it, whatever shape it is. For a Flow
           // Lines slot that is the ONLY meaningful test — its origin is the
           // middle of a line that may run the width of the panel, so the

@@ -5,15 +5,17 @@
 //   buildParams(doc, geometry)       the flat params object for generateHoles / exports
 //   compileDocumentField(doc, ctx)   the document's field controllers, ready to sample
 //   decorateHoles(base, doc, g, f)   applies size variation, the field channels,
-//                                    taper exit sizes and cull flags
-//   filterActive(holes, removed)     drops removed / culled holes
+//                                    taper exit sizes, cull flags and the
+//                                    boundary's whole-hole rule
+//   filterActive(holes, removed)     drops removed / culled / clipped holes
 //   computeStats(...)                OAR (theoretical or counted), ligament, overlaps
 import { CUSTOM_SHAPE, CUSTOM_SIZE_SHAPES, DOC_LIMITS, MORPH_SHAPE, PERF_MODE_HOLE_LIMIT } from "./constants.js";
 import { clamp, DEG } from "./math.js";
 import { basePolyVerts, insetConvexPoly, isConvexPoly, isInsidePoly, maxCornerRadius, polyBBox, polyCentroid, triInradius } from "../geometry/polygon.js"; // prettier-ignore
 import { ringsBBox } from "../geometry/rings.js";
 import { erodeRings } from "../geometry/offset.js";
-import { calcHoleArea, getShape } from "../geometry/shapes.js";
+import { calcHoleArea, getShape, holeSVGElement } from "../geometry/shapes.js";
+import { parseSVGOutline } from "../geometry/svg-path.js";
 import { curvatureLimit, strokeBBox, strokeMaxWidth, strokeMinWidth } from "../geometry/stroke.js";
 import { superNFromMix } from "../geometry/superellipse.js";
 import { isPresetShape, presetRings } from "../geometry/shape-presets.js";
@@ -631,11 +633,35 @@ function decorateOutline(base, { scale, scaleAt, effW, effH, taperActive, taperI
   return { outline: null, entry: null, exit: null, w, h, exitW, exitH, minSize: Math.min(w, h), closed: exitW <= 0 || exitH <= 0 }; // prettier-ignore
 }
 
-// Apply size variation, the field channels, taper exit sizes and the size-floor
-// cull to raw centres. `field` is the output of compileDocumentField.
+// The outline of one decorated hole as rings in sheet millimetres, flattened
+// as finely as the boundary itself (BOUNDARY_TOLERANCE): the hole exactly as
+// it will be drawn — turned, rounded, morphed — through the same SVG the
+// exporters write, so the whole-hole rule below measures what the file gets.
+const HOLE_OUTLINE_TOLERANCE = 0.02;
+function decoratedOutline(hole, shape, w, h, angle, radius, outline) {
+  const svg = holeSVGElement(hole.x, hole.y, shape, w, h, "", "", angle, radius, outline);
+  return parseSVGOutline(svg, HOLE_OUTLINE_TOLERANCE).shapes.flatMap(s => s.rings);
+}
+
+// Apply size variation, the field channels, taper exit sizes, the size-floor
+// cull and the boundary's whole-hole rule to raw centres. `field` is the
+// output of compileDocumentField.
+//
+// The whole-hole rule: once a boundary is set — margins, a corner radius, an
+// ellipse, a polygon, a cutout, the circle fill — a hole that crosses it is
+// dropped entirely (`clipped`), never left as the sliver the clip path would
+// keep. It is decided on the DECORATED hole, since a size field can grow one
+// across the line, and it is a flag rather than a removal so the generated
+// list keeps its indices and `removedHoles` stays meaningful. The plain sheet
+// keeps its loose edges, and so does the sheet edge of a rectangle with a
+// zero margin (see crossesBoundary in geometry/boundary.js). The two modes
+// that cut their holes to the boundary as polygons — Voronoi's cells and
+// Flow Lines' slots — never cross it, so they are not asked.
 export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
   const { variation, hole } = doc;
-  const { effW, effH, perfX, perfY, perfW, perfH, taperActive, taperInset, holeShape } = g;
+  const { effW, effH, perfX, perfY, perfW, perfH, taperActive, taperInset, holeShape, region } = g;
+  const shapeDef = getShape(holeShape);
+  const wholeHoles = region.clips;
   const holeRadius = hole.cornerRadius;
   const morphs = holeShape === MORPH_SHAPE;
   const baseMix = hole.shapeMix ?? 0.5;
@@ -668,11 +694,25 @@ export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
     const culled = variation.enabled && variation.cullBelow > 0 && size.minSize < variation.cullBelow;
     const scaledRadius = Math.min(holeRadius * scale, w / 2, h / 2);
     const exitHoleRadius = Math.max(0, Math.min(scaledRadius - taperInset / 2, exitW / 2, exitH / 2));
+    let clipped = false;
+    if (wholeHoles && !culled && !size.outline) {
+      // The rotated w × h box first: a box wholly inside the region is a hole
+      // wholly inside it, and that is nearly every hole. Only the ones near an
+      // edge pay for their outline.
+      const turned = shapeDef.rotates ? angle || 0 : 0;
+      const bw = Math.abs(Math.cos(turned)) * w + Math.abs(Math.sin(turned)) * h;
+      const bh = Math.abs(Math.sin(turned)) * w + Math.abs(Math.cos(turned)) * h;
+      if (region.classifyBox(base.x - bw / 2, base.y - bh / 2, base.x + bw / 2, base.y + bh / 2) !== "inside") {
+        const outline = decoratedOutline({ x: base.x, y: base.y }, holeShape, w, h, angle, scaledRadius, unitRings ?? superN); // prettier-ignore
+        clipped = region.crossesBoundary(outline);
+      }
+    }
     return {
       ...base,
       id: base.id || `hole-${index}`,
       ...(unitRings ? { rings: unitRings } : null),
       culled,
+      clipped,
       fieldValue: variation.enabled ? evaluateVariationField(nx, ny, variation, index + 1) : 1,
       scale,
       angle,
@@ -694,7 +734,7 @@ export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
 }
 
 export function filterActive(holes, removedSet) {
-  return holes.filter((hole, i) => !removedSet.has(i) && !hole.culled);
+  return holes.filter((hole, i) => !removedSet.has(i) && !hole.culled && !hole.clipped);
 }
 
 export function computeStats({ doc, g, holes, activeHoles, removedSet, overlaps, field = NO_FIELD }) {
@@ -707,6 +747,9 @@ export function computeStats({ doc, g, holes, activeHoles, removedSet, overlaps,
   const activeHoleCount = activeHoles.length;
   const holeCount = holes.length;
   const culledHoleCount = holes.reduce((n, h, i) => n + (h.culled && !removedSet.has(i) ? 1 : 0), 0);
+  // Dropped whole for crossing the boundary. Counted after the size floor, as
+  // the flags are set: a hole under the floor is not asked about the edge.
+  const clippedHoleCount = holes.reduce((n, h, i) => n + (h.clipped && !removedSet.has(i) ? 1 : 0), 0);
   // The material: the sheet, or — trimmed to the boundary — the region itself.
   const grossArea = boundary.trim ? region.area : sheet.w * sheet.h;
   const perforatedArea = region.area;
@@ -727,7 +770,7 @@ export function computeStats({ doc, g, holes, activeHoles, removedSet, overlaps,
   // Only indices that address a hole in this list count. A document can arrive
   // with removals recorded against a different pattern (a hand-edited file, a
   // link from another version), and those must not read as removed holes.
-  const removedHoleCount = holeCount - activeHoleCount - culledHoleCount;
+  const removedHoleCount = holeCount - activeHoleCount - culledHoleCount - clippedHoleCount;
   const hasRemovedHoles = removedHoleCount > 0;
   // A controller that this document's shape can actually show makes the unit
   // cell a fiction — size and shape vary the hole area across the sheet, and
@@ -809,6 +852,7 @@ export function computeStats({ doc, g, holes, activeHoles, removedSet, overlaps,
     activeHoleCount,
     holeCount,
     culledHoleCount,
+    clippedHoleCount,
     removedHoleCount,
     hasRemovedHoles,
     grossArea,

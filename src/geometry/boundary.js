@@ -24,8 +24,8 @@ import { DOC_LIMITS } from "../core/constants.js";
 import { SpatialHash } from "./spatial-hash.js";
 import { isInsideRoundedRect, roundedRectArea } from "./rounded-rect.js";
 import { getShape, holeExitOutline, holeOutline, holeVertices, isPointInsideHole } from "./shapes.js";
-import { distPointSeg } from "./polygon.js";
-import { arcPoints, arcSegmentsFor, circleRing, normalizeRings, ringsArea, ringsBBox, ringsSVGPath, ringsTrace } from "./rings.js"; // prettier-ignore
+import { distPointSeg, segmentsIntersect } from "./polygon.js";
+import { arcPoints, arcSegmentsFor, circleRing, normalizeRings, ringsArea, ringsBBox, ringsContains, ringsSVGPath, ringsTrace } from "./rings.js"; // prettier-ignore
 import { differencePolygons, intersectPolygons } from "./offset.js";
 
 // How closely the region's polygon form follows a curved outline, in mm. Finer
@@ -335,6 +335,113 @@ export function compileBoundary(sheet, boundary, circleMode = false) {
     });
   };
 
+  const classifyBox = (left, top, right, bottom) => {
+    if (empty) return "outside";
+    const corners = [[left, top], [right, top], [left, bottom], [right, bottom]]; // prettier-ignore
+    const insideCount = corners.filter(([x, y]) => contains(x, y)).length;
+    if (simple && kind !== "polygon" && !circleMode) {
+      // Convex outline, no cutouts: the corners decide.
+      if (insideCount === 4) return "inside";
+    }
+    const { list, longest, hash } = edgeIndex();
+    const hx = (left + right) / 2,
+      hy = (top + bottom) / 2;
+    const reach = Math.hypot(right - left, bottom - top) / 2 + longest / 2;
+    const crossed = hash.forEachNear(hx, hy, reach, index => {
+      const s = list[index];
+      return (
+        Math.max(s.ax, s.bx) >= left && Math.min(s.ax, s.bx) <= right && Math.max(s.ay, s.by) >= top && Math.min(s.ay, s.by) <= bottom // prettier-ignore
+      );
+    });
+    if (crossed) return "mixed";
+    return insideCount === 4 ? "inside" : insideCount === 0 ? "outside" : "mixed";
+  };
+
+  // Does an outline (rings in sheet mm — a hole, as it will be drawn) cross a
+  // boundary that was SET: the margin lines, a corner arc, an ellipse, a
+  // polygon, a cutout, the circle fill? True when any of it lies outside the
+  // region or any of the region's edges runs through it, so a hole that so
+  // much as touches the outline is answered yes and dropped whole rather than
+  // left as the sliver the clip would leave. A cutout small enough to sit
+  // wholly inside a hole is caught by its vertices being inside the hole.
+  //
+  // The sheet edge is the one line that is NOT a set boundary. On the sharp or
+  // rounded rectangle, a side of the frame that lies ON the sheet edge (a zero
+  // margin) is left loose, as the grid family has always left it: a hole may
+  // overhang the sheet there and the sheet clips it, exactly as it did before
+  // any boundary was drawn — so adding one cutout in the middle of a plain
+  // sheet does not also strip the sheet's four edges. An ellipse and a polygon
+  // are outlines in their own right, bounded all the way round.
+  const looseSide =
+    kind === "rect" && !circleMode
+      ? {
+          left: frame.xMin <= 0,
+          right: frame.xMax >= sheetW,
+          top: frame.yMin <= 0,
+          bottom: frame.yMax >= sheetH,
+        }
+      : null;
+  const anyLoose = !!looseSide && (looseSide.left || looseSide.right || looseSide.top || looseSide.bottom);
+  // A vertex hanging over a loose side is read at the sheet edge instead: from
+  // there the rounded corners and the cutouts still get their say.
+  const pullIn = (x, y) => {
+    if (!anyLoose) return [x, y];
+    return [
+      looseSide.left && x < frame.xMin ? frame.xMin : looseSide.right && x > frame.xMax ? frame.xMax : x,
+      looseSide.top && y < frame.yMin ? frame.yMin : looseSide.bottom && y > frame.yMax ? frame.yMax : y,
+    ];
+  };
+  // A region edge that runs along a loose side is the sheet edge itself and
+  // does not count. `1e-6` mm: these vertices come out of roundedRectRing at
+  // the frame's own numbers.
+  const onLooseSide = s =>
+    anyLoose &&
+    ((looseSide.left && Math.abs(s.ax - frame.xMin) < 1e-6 && Math.abs(s.bx - frame.xMin) < 1e-6) ||
+      (looseSide.right && Math.abs(s.ax - frame.xMax) < 1e-6 && Math.abs(s.bx - frame.xMax) < 1e-6) ||
+      (looseSide.top && Math.abs(s.ay - frame.yMin) < 1e-6 && Math.abs(s.by - frame.yMin) < 1e-6) ||
+      (looseSide.bottom && Math.abs(s.ay - frame.yMax) < 1e-6 && Math.abs(s.by - frame.yMax) < 1e-6));
+  const crossesBoundary = outline => {
+    if (empty) return true;
+    const rings = outline.filter(ring => ring.length >= 3);
+    if (!rings.length) return false;
+    const box = ringsBBox(rings);
+    // The cheap answer first: a bounding box wholly inside is a hole wholly
+    // inside, and that is most holes.
+    if (classifyBox(box.left, box.top, box.right, box.bottom) === "inside") return false;
+    for (const ring of rings) {
+      for (const [x, y] of ring) {
+        const [px, py] = pullIn(x, y);
+        if (!contains(px, py)) return true;
+      }
+    }
+    // Every vertex inside. The outline still crosses if a region edge cuts
+    // through it — a concave corner, a cutout inside it.
+    const { list, longest, hash } = edgeIndex();
+    const hx = (box.left + box.right) / 2,
+      hy = (box.top + box.bottom) / 2;
+    const reach = Math.hypot(box.right - box.left, box.bottom - box.top) / 2 + longest / 2;
+    return hash.forEachNear(hx, hy, reach, index => {
+      const s = list[index];
+      if (onLooseSide(s)) return false;
+      if (
+        Math.max(s.ax, s.bx) < box.left ||
+        Math.min(s.ax, s.bx) > box.right ||
+        Math.max(s.ay, s.by) < box.top ||
+        Math.min(s.ay, s.by) > box.bottom
+      )
+        return false;
+      const a = [s.ax, s.ay],
+        b = [s.bx, s.by];
+      if (ringsContains(rings, s.ax, s.ay) || ringsContains(rings, s.bx, s.by)) return true;
+      for (const ring of rings) {
+        for (let i = 0; i < ring.length; i++) {
+          if (segmentsIntersect(a, b, ring[i], ring[(i + 1) % ring.length])) return true;
+        }
+      }
+      return false;
+    });
+  };
+
   return {
     kind,
     frame,
@@ -379,27 +486,8 @@ export function compileBoundary(sheet, boundary, circleMode = false) {
     // "inside" when the box is certainly wholly inside the region, "outside"
     // when certainly wholly outside, else "mixed". The certain cases are what
     // lets a hole or a Voronoi cell skip the exact work.
-    classifyBox(left, top, right, bottom) {
-      if (empty) return "outside";
-      const corners = [[left, top], [right, top], [left, bottom], [right, bottom]]; // prettier-ignore
-      const insideCount = corners.filter(([x, y]) => contains(x, y)).length;
-      if (simple && kind !== "polygon" && !circleMode) {
-        // Convex outline, no cutouts: the corners decide.
-        if (insideCount === 4) return "inside";
-      }
-      const { list, longest, hash } = edgeIndex();
-      const hx = (left + right) / 2,
-        hy = (top + bottom) / 2;
-      const reach = Math.hypot(right - left, bottom - top) / 2 + longest / 2;
-      const crossed = hash.forEachNear(hx, hy, reach, index => {
-        const s = list[index];
-        return (
-          Math.max(s.ax, s.bx) >= left && Math.min(s.ax, s.bx) <= right && Math.max(s.ay, s.by) >= top && Math.min(s.ay, s.by) <= bottom // prettier-ignore
-        );
-      });
-      if (crossed) return "mixed";
-      return insideCount === 4 ? "inside" : insideCount === 0 ? "outside" : "mixed";
-    },
+    classifyBox,
+    crossesBoundary,
     get area() {
       return regionArea();
     },

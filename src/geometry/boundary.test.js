@@ -171,3 +171,46 @@ test("a hole's visible area is what lies inside the region", () => {
   const edge = estimateVisibleHoleArea(hole(0, 50), "Circle", compileBoundary(sheet, block()));
   near(edge, Math.PI * 2, 0.5);
 });
+
+// ─── The whole-hole rule ──────────────────────────────────────────────
+// A hole outline as a ring: a disc of radius r about (x, y).
+const disc = (x, y, r, n = 32) => [Array.from({ length: n }, (_, i) => [x + Math.cos((i / n) * Math.PI * 2) * r, y + Math.sin((i / n) * Math.PI * 2) * r])]; // prettier-ignore
+
+test("an outline crosses a set boundary when any of it lies outside or an edge runs through it", () => {
+  // The ellipse is bounded all the way round: touching it from inside counts.
+  const ellipse = compileBoundary(sheet, block({ shape: "Ellipse" }));
+  assert.equal(ellipse.crossesBoundary(disc(100, 50, 10)), false);
+  assert.equal(ellipse.crossesBoundary(disc(190, 50, 4)), false);
+  assert.equal(ellipse.crossesBoundary(disc(196, 50, 5)), true);
+  assert.equal(ellipse.crossesBoundary(disc(20, 10, 3)), true);
+  // A cutout is a boundary wherever it is — including one small enough to sit
+  // wholly inside the hole, which no vertex test would notice.
+  const cut = compileBoundary(sheet, block({ cutouts: [createCutout("Circle", 100, 50, 2)] }));
+  assert.equal(cut.crossesBoundary(disc(100, 50, 10)), true);
+  assert.equal(cut.crossesBoundary(disc(100, 55.5, 5)), true);
+  assert.equal(cut.crossesBoundary(disc(100, 70, 5)), false);
+  assert.equal(cut.crossesBoundary(disc(120, 50, 8)), false);
+});
+
+test("the sheet edge of a rectangle with no margin stays loose; a margin line and a corner arc do not", () => {
+  // A cutout in the middle makes the region clip, and a hole overhanging the
+  // sheet edge is still allowed: the sheet clips it as it always did.
+  const loose = compileBoundary(sheet, block({ cutouts: [createCutout("Circle", 100, 50, 10)] }));
+  assert.equal(loose.clips, true);
+  assert.equal(loose.crossesBoundary(disc(0, 50, 3)), false);
+  assert.equal(loose.crossesBoundary(disc(200, 100, 3)), false);
+  // A margin on one side bounds that side only.
+  const margin = compileBoundary(sheet, block({ margins: { top: 0, bottom: 0, left: 10, right: 0 } }));
+  assert.equal(margin.crossesBoundary(disc(12, 50, 3)), true);
+  assert.equal(margin.crossesBoundary(disc(14, 50, 3)), false);
+  assert.equal(margin.crossesBoundary(disc(200, 50, 3)), false);
+  // A corner radius bounds the arcs while the straight sides stay loose.
+  const rounded = compileBoundary(sheet, block({ cornerRadius: 20 }));
+  assert.equal(rounded.crossesBoundary(disc(100, 0, 3)), false);
+  assert.equal(rounded.crossesBoundary(disc(4, 4, 3)), true);
+  assert.equal(rounded.crossesBoundary(disc(20, 20, 3)), false);
+  // A polygon is an outline in its own right, bounded where it meets the sheet too.
+  const square = compileBoundary(sheet, block({ shape: "Polygon", rings: [[[0, 0], [100, 0], [100, 100], [0, 100]]] })); // prettier-ignore
+  assert.equal(square.crossesBoundary(disc(0, 50, 3)), true);
+  assert.equal(square.crossesBoundary(disc(50, 50, 3)), false);
+});
