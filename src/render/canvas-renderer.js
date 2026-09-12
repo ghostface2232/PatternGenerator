@@ -152,6 +152,8 @@ export function drawScene(canvas, scene) {
   const showFieldOverlay = fieldEditMode && showHud && (fields?.enabled || variation.enabled);
 
   const showTaperRings = taperActive && !perfMode;
+  // Holes the boundary dropped, ghosted once the clip is lifted.
+  const clippedGhosts = [];
 
   // Clip holes to the actual perforation boundary so preview, OAR and exports agree.
   ctx.save();
@@ -182,26 +184,27 @@ export function drawScene(canvas, scene) {
     });
 
     holes.forEach((h, i) => {
-      const isRemoved = removedSet.has(i);
+      // A dropped hole reads as dropped whatever else it is: a removal on a
+      // hole the boundary has since taken cannot be clicked back, so it is not
+      // marked as if it could.
+      const isRemoved = removedSet.has(i) && !h.clipped;
       // How big to draw the marks placed AT a hole — the removed cross, the
       // highlight. That is the hole's own extent, except for a slot, whose
       // extent is the panel and whose width is what a mark should match.
       const r = h.stroke ? Math.max(0.15, strokeMaxWidth(h.stroke) / 2) : Math.max(h.w, h.h) / 2;
-      if ((h.culled || h.clipped) && !isRemoved) {
-        // Gone from the real pattern: culled by the size floor, or dropped
-        // whole for crossing the boundary. A faint ghost says where it was,
-        // only while the thing that took it away is being edited.
-        const ghost = h.culled ? variation.enabled && gradientEditing && showHud : boundaryEditMode && showHud;
-        if (ghost) {
+      if (h.clipped) {
+        // Dropped whole for crossing the boundary: ghosted after the clip is
+        // lifted (below), since a ghost cut to the region would be the very
+        // sliver the rule removed.
+        if (boundaryEditMode && showHud) clippedGhosts.push([h.x, h.y, Math.max(0.15, r)]);
+        return;
+      }
+      if (h.culled && !isRemoved) {
+        // Culled by the size floor: gone from the real pattern. Show a faint ghost only while editing.
+        if (variation.enabled && gradientEditing && showHud) {
           ctx.beginPath();
           ctx.arc(h.x, h.y, Math.max(0.15, r), 0, Math.PI * 2);
-          ctx.strokeStyle = h.culled
-            ? dark
-              ? "rgba(255,255,255,0.12)"
-              : "rgba(0,0,0,0.12)"
-            : dark
-              ? "rgba(45,212,191,0.28)"
-              : "rgba(15,118,110,0.25)";
+          ctx.strokeStyle = dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.12)";
           ctx.lineWidth = 0.2;
           ctx.setLineDash([0.6, 0.6]);
           ctx.stroke();
@@ -278,6 +281,19 @@ export function drawScene(canvas, scene) {
   }
 
   ctx.restore(); // end hole clipping
+
+  if (clippedGhosts.length) {
+    ctx.strokeStyle = dark ? "rgba(45,212,191,0.3)" : "rgba(15,118,110,0.28)";
+    ctx.lineWidth = 0.2;
+    ctx.setLineDash([0.6, 0.6]);
+    ctx.beginPath();
+    for (const [x, y, radius] of clippedGhosts) {
+      ctx.moveTo(x + radius, y);
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
   ctx.strokeStyle = dark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.15)";
   ctx.lineWidth = 0.5;

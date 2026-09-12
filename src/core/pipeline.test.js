@@ -15,6 +15,12 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { generateHoles } from "../layouts/index.js";
 import { generateSVGString } from "../export/svg.js";
+import { holeOutline, holeSVGElement } from "../geometry/shapes.js";
+import { parseSVGOutline } from "../geometry/svg-path.js";
+
+// A drawn hole's outline as rings, through the same SVG the exporters write.
+const holeOutlineRings = (h, shape) =>
+  parseSVGOutline(holeSVGElement(h.x, h.y, shape, h.w, h.h, "", "", h.angle, h.holeRadius, holeOutline(h)), 0.02).shapes.flatMap(s => s.rings); // prettier-ignore
 
 // These numbers mirror e2e/smoke.spec.js so a geometry regression is caught
 // without a browser.
@@ -1228,4 +1234,31 @@ test("the whole-hole rule reads the decorated hole and leaves the pre-clipped mo
   const removed = computePattern(doc({ "boundary.shape": "Ellipse", removedHoles: [200] }));
   assert.equal(removed.holes.length, flat.holes.length);
   assert.equal(removed.stats.removedHoleCount, flat.holes[200].clipped ? 0 : 1);
+});
+
+test("the whole-hole rule holds for every preset outline, which is not centred on its origin", () => {
+  // A preset is fitted about its construction origin, so the w × h box about
+  // the origin does not bound it; the rule has to read the outline it draws.
+  // On the Straight grid (pitch 14, rows through y = 100) a row sits at y = 72
+  // and a 10 mm Teardrop's tip reaches to about y = 65.4, above the w × h box's
+  // top at 67. A cutout whose bottom edge runs at y = 66.2 crosses the tip and
+  // not the box — the case the outline's own box has to catch.
+  const cutout = { id: "cut-1", shape: "Rectangle", x: 100, y: 51.2, w: 80, h: 30, rotation: 0, cornerRadius: 0, points: [] }; // prettier-ignore
+  const under = computePattern(doc({ "hole.shape": "Teardrop", "hole.w": 10, "hole.h": 10, "layout.type": "Straight", "layout.edgeGapX": 4, "layout.edgeGapY": 4, "boundary.cutouts": [cutout] })); // prettier-ignore
+  const row = under.holes.filter(h => Math.abs(h.y - 72) < 1e-6 && h.x > 65 && h.x < 135);
+  assert.ok(row.length >= 4, `${row.length} holes in the row under the cutout`);
+  assert.ok(
+    row.every(h => h.clipped),
+    "the tips under the cutout's edge are dropped"
+  );
+  for (const shape of PRESET_HOLE_SHAPES) {
+    const { activeHoles, region, geometry } = computePattern(
+      doc({ "hole.shape": shape, "hole.w": 10, "hole.h": 10, "layout.type": "Straight", "layout.edgeGapX": 4, "layout.edgeGapY": 4, "boundary.shape": "Ellipse", "boundary.cutouts": [cutout] }) // prettier-ignore
+    );
+    assert.ok(activeHoles.length > 50, `${shape}: ${activeHoles.length}`);
+    for (const h of activeHoles) {
+      const rings = holeOutlineRings(h, geometry.holeShape);
+      assert.equal(region.crossesBoundary(rings), false, `${shape}: a hole at ${h.x},${h.y} crosses the boundary`);
+    }
+  }
 });

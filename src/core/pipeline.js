@@ -668,6 +668,11 @@ export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
   const baseSuperN = morphs ? superNFromMix(baseMix) : undefined;
   // A preset or custom outline: the same rings on every hole, by reference.
   const unitRings = getShape(holeShape).unit ? holeUnitRings(hole) : null;
+  // A preset's outline is fitted about its construction origin, not about the
+  // centre of its box (see shape-presets.js), so the w × h box about the hole's
+  // origin does not bound it: a Teardrop reached 1.6 mm past that box. The
+  // unit box, scaled and turned per hole, does.
+  const unitBox = unitRings ? ringsBBox(unitRings) : null;
   const { size: hasSize, angle: hasAngle, shape: hasShape } = activeFieldChannels(doc, field);
   return baseHoles.map((base, index) => {
     const nx = perfW > 0 ? clamp((base.x - perfX) / perfW, 0, 1) : 0.5;
@@ -700,9 +705,27 @@ export function decorateHoles(baseHoles, doc, g, field = NO_FIELD) {
       // wholly inside it, and that is nearly every hole. Only the ones near an
       // edge pay for their outline.
       const turned = shapeDef.rotates ? angle || 0 : 0;
-      const bw = Math.abs(Math.cos(turned)) * w + Math.abs(Math.sin(turned)) * h;
-      const bh = Math.abs(Math.sin(turned)) * w + Math.abs(Math.cos(turned)) * h;
-      if (region.classifyBox(base.x - bw / 2, base.y - bh / 2, base.x + bw / 2, base.y + bh / 2) !== "inside") {
+      const c = Math.cos(turned),
+        s = Math.sin(turned);
+      // The box of the outline as it is drawn: the unit box for a unit shape,
+      // the centred w × h box for every other, turned as the hole is turned.
+      const ux = unitBox ? [unitBox.left * w, unitBox.right * w] : [-w / 2, w / 2];
+      const uy = unitBox ? [unitBox.top * h, unitBox.bottom * h] : [-h / 2, h / 2];
+      let left = Infinity,
+        right = -Infinity,
+        top = Infinity,
+        bottom = -Infinity;
+      for (const lx of ux) {
+        for (const ly of uy) {
+          const rx = base.x + lx * c - ly * s,
+            ry = base.y + lx * s + ly * c;
+          if (rx < left) left = rx;
+          if (rx > right) right = rx;
+          if (ry < top) top = ry;
+          if (ry > bottom) bottom = ry;
+        }
+      }
+      if (region.classifyBox(left, top, right, bottom) !== "inside") {
         const outline = decoratedOutline({ x: base.x, y: base.y }, holeShape, w, h, angle, scaledRadius, unitRings ?? superN); // prettier-ignore
         clipped = region.crossesBoundary(outline);
       }
