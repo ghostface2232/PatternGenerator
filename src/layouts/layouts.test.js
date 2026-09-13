@@ -563,6 +563,30 @@ test("an inverted controller leaves the lattice alone at itself and opens it bey
   }
 });
 
+test("a spreading controller inside the bounds pads the lattice by nothing", () => {
+  // Its push is away from its geometry everywhere, so a nominal point outside
+  // the bounds only moves further out and never lands inside them. An inverted
+  // one in particular has no largest push, and padding by its landing bound
+  // put Cross-hatch's up-front hole count over the cap on a sheet that fits.
+  const bounds = { xMin: 0, xMax: 200, yMin: 0, yMax: 200 };
+  const field = c => compileSpacing(withSpacing({}, c).fields);
+  assert.equal(field({ target: 4, radius: 100, invert: true }).expand(bounds), 0);
+  assert.equal(field({ target: 2, radius: 50 }).expand(bounds), 0);
+  // A crowding one draws points in from beyond the edge, and keeps its padding.
+  assert.ok(field({ target: 0.5, radius: 50 }).expand(bounds) > 0);
+  assert.ok(field({ target: 0.5, radius: 50, invert: true }).expand(bounds) > 0);
+  // Geometry OUTSIDE the bounds can push a point into them, and keeps it too.
+  assert.ok(field({ target: 2, radius: 50, geometry: { points: [{ x: -30, y: 100 }] } }).expand(bounds) > 0);
+  // The case that refused: a 1000 mm sheet of 0.5 mm holes at 0.3 mm gaps
+  // under an inverted point opening the edges fourfold. Empty was the cap
+  // speaking, not the geometry.
+  const big = withSpacing(
+    { "layout.type": "Cross-hatch", "sheet.w": 1000, "sheet.h": 1000, "hole.diameter": 0.5, "layout.edgeGapX": 0.3, "layout.edgeGapY": 0.3 }, // prettier-ignore
+    { target: 4, radius: 100, invert: true, geometry: { points: [{ x: 500, y: 500 }] } }
+  );
+  assert.ok(place(big).length > 100_000, `the big sheet came back with ${place(big).length} holes`);
+});
+
 test("a grid row and a cross-hatch line read the whole of themselves", () => {
   // Reading one point per row or line makes the mode blind everywhere else: the
   // grid's centre column, and — at the default 45°/−45° — cross-hatch's two

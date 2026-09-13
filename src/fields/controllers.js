@@ -515,6 +515,19 @@ export function compileWarp(compiled, channel, base = channelBase(channel)) {
       const m = base + (entry.target - base) * entry.strength;
       const gain = Math.abs(m - base);
       if (!(gain > 0) || !(m > 0)) continue;
+      // A spreading controller (m > 1) pushes every point AWAY from its
+      // geometry, upright or inverted. With that geometry inside the bounds,
+      // a nominal point outside them lies beyond where its ray already left
+      // the rectangle, and pushing it further along the ray keeps it outside
+      // — so it needs no padding at all. Padding it anyway is not merely
+      // wasteful: an inverted spreading controller's push has no ceiling, so
+      // its landing bound is the whole far corner, and Cross-hatch, which
+      // counts its holes over the padded region before laying any down,
+      // refused a 1000 mm sheet of 0.5 mm holes that fits with room to spare.
+      // Geometry outside the bounds can push a point into them, and keeps
+      // the bound.
+      const inside = entry.points.every(p => p.x >= xMin && p.x <= xMax && p.y >= yMin && p.y <= yMax);
+      if (m > base && inside) continue;
       // An inverted push keeps growing with distance, so only the landing
       // term can bound it.
       const farthest = entry.invert ? Infinity : entry.radius * falloffPush(entry.falloff, 1);
