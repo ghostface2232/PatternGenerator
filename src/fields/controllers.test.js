@@ -34,6 +34,7 @@ const ctrl = (patch = {}) => ({
   radius: 10,
   falloff: "smooth",
   oneSided: 0,
+  invert: false,
   strength: 1,
   syncWith: null,
   image: null,
@@ -58,6 +59,16 @@ test("every falloff runs from 1 at the geometry to 0 at the rim", () => {
     previous = w;
   }
   near(falloffWeight("smooth", 0.5), 0.5);
+  // Inverted, every curve is the complement: 0 at the geometry, 1 at the rim
+  // and everywhere beyond it.
+  for (const kind of ["smooth", "linear", "hard"]) {
+    near(falloffWeight(kind, 0, true), 0);
+    near(falloffWeight(kind, 1, true), 1);
+    near(falloffWeight(kind, 2, true), 1);
+    for (let i = 0; i <= 20; i++) near(falloffWeight(kind, i / 20, true), 1 - falloffWeight(kind, i / 20));
+  }
+  near(falloffWeight("hard", 0.999, true), 0);
+  near(falloffWeight("linear", 0.25, true), 0.25);
 });
 
 test("distance to a point, a segment and a polyline", () => {
@@ -218,6 +229,86 @@ test("a lone controller reaches its target at the geometry and the base at the r
   near(evaluateChannel(controllers, "angle", 0, 0), 0);
   // Strength scales the weight, not the target.
   near(evaluateChannel([ctrl({ strength: 0.5 })], "size", 0, 0), 1.5);
+});
+
+test("an inverted controller reads the base at its geometry and the target from the rim outward", () => {
+  const controllers = [ctrl({ target: 2, radius: 10, invert: true })];
+  near(evaluateChannel(controllers, "size", 0, 0), 1); // at the geometry: nothing
+  near(evaluateChannel(controllers, "size", 10, 0), 2); // the rim: everything
+  near(evaluateChannel(controllers, "size", 40, 0), 2); // and everywhere beyond it
+  near(evaluateChannel(controllers, "size", 5, 0), 1.5); // smoothstep is 0.5 at half reach
+  // Strength scales the weight the same way, and the other channels are untouched.
+  near(evaluateChannel([ctrl({ target: 2, radius: 10, invert: true, strength: 0.5 })], "size", 40, 0), 1.5);
+  near(evaluateChannel(controllers, "angle", 40, 0), 0);
+  // It is live: the target is off the neutral value, so the statistics count.
+  assert.equal(compiledDrivesChannel(compileControllers(controllers), "size"), true);
+  // An image has no reach to turn over, so the flag is not carried for it.
+  const map = createImageMap(1, 1, Float32Array.from([1]));
+  const image = ctrl({ kind: "image", target: 3, invert: true, image: { assetId: "img", mode: "mask", placement: { x: 0, y: 0, w: 10, h: 10, rotation: 0 } } }); // prettier-ignore
+  const [compiledImage] = compileControllers([image], { imageMaps: { img: map } });
+  assert.equal(compiledImage.invert, false);
+  near(evaluateChannel([image], "size", 5, 5, { imageMaps: { img: map } }), 3);
+});
+
+test("an inverted path reads its nearest leg, and its side gate does not tear", () => {
+  const bend = [
+    { x: 0, y: 0 },
+    { x: 40, y: 0 },
+    { x: 0, y: 20 },
+  ];
+  // Without a side gate the inverted weight is the inverted falloff of the
+  // nearest distance — NOT the strongest segment, which inverted would be the
+  // farthest one and read full weight right beside the other leg.
+  for (const [x, y] of [
+    [20, 2],
+    [20, -2],
+    [45, 0],
+    [10, 10],
+    [-30, 5],
+  ]) {
+    near(polylineWeight(bend, x, y, 30, "linear", 0, true), 1 - falloffWeight("linear", polylineDistance(bend, x, y) / 30)); // prettier-ignore
+  }
+  near(polylineWeight(bend, 20, 0.5, 30, "linear", 0, true), 0.5 / 30);
+  near(polylineWeight(bend, 20, 1e-6, 30, "linear", 0, true), 1e-6 / 30, 1e-12);
+
+  // Gated, it is that weight on the side the controller faces, and next to
+  // nothing on the other: off the flank of the first leg, beyond the reach,
+  // full weight below it and — the far leg leaking a couple of percent through
+  // the proximity blend, as a soft blend must — near zero above it. (Far from
+  // the whole path the legs are comparably distant and the blend genuinely
+  // averages their sides, which is what "which side of a bend" means there.)
+  const at = (x, y) => polylineWeight(bend, x, y, 5, "linear", 1, true);
+  near(at(10, 8), 1);
+  assert.ok(at(5, -8) < 0.05, `expected next to nothing on the far side, got ${at(5, -8)}`);
+  // A ring in open space straddling the two legs' bisector, sampled ever more
+  // finely: the largest step must shrink with the sampling, as a slope does and
+  // a jump does not.
+  const ringJump = (cx, cy, r, steps) => {
+    let jump = 0,
+      previous = at(cx + r, cy);
+    for (let i = 1; i <= steps; i++) {
+      const t = (i / steps) * Math.PI * 2;
+      const value = at(cx + Math.cos(t) * r, cy + Math.sin(t) * r);
+      jump = Math.max(jump, Math.abs(value - previous));
+      previous = value;
+    }
+    return jump;
+  };
+  for (const [cx, cy, r] of [
+    [52, 0, 6],
+    [46, -2, 4],
+  ]) {
+    const coarse = ringJump(cx, cy, r, 720);
+    const fine = ringJump(cx, cy, r, 2880);
+    assert.ok(fine * 3 < coarse, `a jump, not a slope, around (${cx}, ${cy}) at radius ${r}: ${coarse} → ${fine}`);
+  }
+  // Reversing the vertex order negates the side everywhere, as it does upright.
+  const reversed = [...bend].reverse();
+  for (let x = -20; x <= 60; x += 5) {
+    for (let y = -20; y <= 40; y += 5) {
+      near(polylineWeight(bend, x, y, 30, "linear", 1, true), polylineWeight(reversed, x, y, 30, "linear", -1, true)); // prettier-ignore
+    }
+  }
 });
 
 test("the base value is whatever the caller passes, which is how shape morphs", () => {

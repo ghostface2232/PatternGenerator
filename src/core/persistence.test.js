@@ -259,6 +259,7 @@ const ctrl = (patch = {}) => ({
   radius: 35,
   falloff: "smooth",
   oneSided: 0,
+  invert: false,
   strength: 1,
   syncWith: null,
   image: null,
@@ -278,6 +279,7 @@ test("controllers survive a file round trip unchanged", () => {
         kind: "curve",
         target: -35,
         oneSided: -1,
+        invert: true,
         falloff: "hard",
         syncWith: "c1",
         geometry: {
@@ -306,7 +308,7 @@ test("a v1 document upgrades to the current schema with every later block inert"
   delete v1.layout.scatter;
   delete v1.layout.path;
   const upgraded = migrateDocument(v1);
-  assert.equal(upgraded.schemaVersion, 7);
+  assert.equal(upgraded.schemaVersion, 8);
   // Phase 4's boundary fields default to the rectangle the document already
   // described, with nothing taken out of it.
   assert.equal(upgraded.boundary.shape, "Rectangle");
@@ -335,7 +337,7 @@ test("validation drops the controllers it cannot repair and repairs the rest", (
         ctrl({ kind: "line", geometry: { points: [{ x: 1, y: 1 }] } }), // a line needs two
         ctrl({ geometry: { points: [{ x: 1, y: "nope" }] } }), // a coordinate that is not one
         ctrl({ geometry: null }),
-        ctrl({ id: "keep", target: 99, radius: -5, strength: 4, falloff: "wobble", oneSided: 7, syncWith: "gone" }),
+        ctrl({ id: "keep", target: 99, radius: -5, strength: 4, falloff: "wobble", oneSided: 7, invert: "yes", syncWith: "gone" }), // prettier-ignore
       ],
     },
   });
@@ -349,6 +351,7 @@ test("validation drops the controllers it cannot repair and repairs the rest", (
   assert.equal(kept.strength, 1);
   assert.equal(kept.falloff, "smooth");
   assert.equal(kept.oneSided, 0);
+  assert.equal(kept.invert, false); // "yes" is not a boolean
   assert.equal(kept.syncWith, null, "a reference to a controller that did not survive must be dropped");
   assert.equal(doc.fields.enabled, false); // "yes" is not a boolean
   assert.equal("selectedId" in doc.fields, false); // selection is UI state, not document state
@@ -386,7 +389,7 @@ test("a v6 image controller keeps reading its picture as a mask", () => {
   const image = ctrl({ id: "img", kind: "image", image: { assetId: "a1", invert: false, gamma: 1, min: 0, max: 1 } });
   const v6 = { ...fresh, schemaVersion: 6, fields: { enabled: true, controllers: [image, ctrl()] } };
   const upgraded = migrateDocument(v6);
-  assert.equal(upgraded.schemaVersion, 7);
+  assert.equal(upgraded.schemaVersion, 8);
   assert.equal(upgraded.fields.controllers[0].image.mode, "mask");
   assert.equal(upgraded.fields.controllers[0].image.low, 1);
   assert.equal(upgraded.fields.controllers[1].image, null);
@@ -395,6 +398,26 @@ test("a v6 image controller keeps reading its picture as a mask", () => {
   const now = validateDocument({ fields: { controllers: [{ ...image, image: { ...image.image, low: -4 } }] } });
   assert.equal(now.fields.controllers[0].image.mode, "halftone");
   assert.equal(now.fields.controllers[0].image.low, 0.05);
+});
+
+test("a v7 controller stays strongest at its geometry", () => {
+  // The invert flag arrived with v8. A v7 controller has no such key, and the
+  // upgrade has to read it as the upright controller it always was — the same
+  // holes, not a sheet that opens toward its edges.
+  const fresh = createDocument();
+  const { invert: _dropped, ...v7Controller } = ctrl({
+    target: 1.6,
+    radius: 60,
+    geometry: { points: [{ x: 100, y: 100 }] },
+  });
+  const v7 = { ...fresh, schemaVersion: 7, fields: { enabled: true, controllers: [v7Controller] } };
+  const upgraded = migrateDocument(v7);
+  assert.equal(upgraded.schemaVersion, 8);
+  assert.equal(upgraded.fields.controllers[0].invert, false);
+  const holes = computePattern(upgraded).holes;
+  const at = (x, y) => holes.reduce((best, h) => (Math.hypot(h.x - x, h.y - y) < Math.hypot(best.x - x, best.y - y) ? h : best)); // prettier-ignore
+  assert.ok(at(100, 100).w > 7.9, `the centre hole should still be the grown one, got ${at(100, 100).w}`);
+  assert.ok(Math.abs(at(5, 5).w - 5) < 1e-9, `the corner hole should still be nominal, got ${at(5, 5).w}`);
 });
 
 test("only assets an image controller still points at are kept", () => {

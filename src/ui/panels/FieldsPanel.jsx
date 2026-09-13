@@ -137,6 +137,12 @@ export function FieldsPanel() {
   const chip = (active, extra = {}) => chipStyle(theme, active, extra);
   const groupLabel = groupLabelStyle(theme);
   const iconBtn = (extra = {}) => iconButtonStyle(theme, extra);
+  // A field layer's row: the selectable chip, its on/off switch and its remove
+  // button, centred on one line. The switch is the small one, with a little
+  // air either side, so the chip and the button read as the row's two ends and
+  // the switch as the quiet thing between them.
+  const listRow = { display: "flex", alignItems: "center", gap: 4 };
+  const switchCell = { display: "flex", alignItems: "center", padding: "0 3px", flexShrink: 0 };
   const rowChip = (active, extra = {}) =>
     chip(active, {
       flex: 1,
@@ -334,7 +340,7 @@ export function FieldsPanel() {
             {gradientLayers.map((layer, index) => {
               const active = gradientSelected && layer.id === selectedVariationLayer?.id;
               return (
-                <div key={layer.id} style={{ display: "flex", gap: 4 }}>
+                <div key={layer.id} style={listRow}>
                   <button
                     className="pg-hover"
                     onClick={() => actions.selectVariationLayer(layer.id)}
@@ -352,12 +358,15 @@ export function FieldsPanel() {
                       {Math.round(variation.minScale * 100)}–{Math.round(variation.maxScale * 100)}%
                     </span>
                   </button>
-                  <Toggle
-                    value={layer.enabled}
-                    onChange={next => actions.setVariationLayerEnabled(layer.id, next)}
-                    dark={dark}
-                    label={`Gradient layer ${index + 1} enabled`}
-                  />
+                  <span style={switchCell}>
+                    <Toggle
+                      value={layer.enabled}
+                      onChange={next => actions.setVariationLayerEnabled(layer.id, next)}
+                      dark={dark}
+                      label={`Gradient layer ${index + 1} enabled`}
+                      size="small"
+                    />
+                  </span>
                   <button
                     className="pg-hover"
                     onClick={() => actions.removeVariationLayer(layer.id)}
@@ -378,7 +387,7 @@ export function FieldsPanel() {
               const Icon = KIND_ICON[controller.kind] || Circle;
               const active = controller.id === selectedControllerId;
               return (
-                <div key={controller.id} style={{ display: "flex", gap: 4 }}>
+                <div key={controller.id} style={listRow}>
                   <button
                     className="pg-hover"
                     onClick={() => actions.selectController(controller.id)}
@@ -389,6 +398,7 @@ export function FieldsPanel() {
                     <Icon size={11} style={{ flexShrink: 0 }} />
                     <span style={{ flex: 1, textAlign: "left" }}>
                       {controller.kind}
+                      {controller.invert ? " · inverted" : ""}
                       {controller.syncWith ? " · follows" : ""}
                     </span>
                     <span style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -397,12 +407,15 @@ export function FieldsPanel() {
                         : `${controller.target.toFixed(info.decimals)}${info.unit}`}
                     </span>
                   </button>
-                  <Toggle
-                    value={controller.enabled}
-                    onChange={next => actions.updateController(controller.id, { enabled: next })}
-                    dark={dark}
-                    label={`${info.label} ${controller.kind} controller ${index + 1} enabled`}
-                  />
+                  <span style={switchCell}>
+                    <Toggle
+                      value={controller.enabled}
+                      onChange={next => actions.updateController(controller.id, { enabled: next })}
+                      dark={dark}
+                      label={`${info.label} ${controller.kind} controller ${index + 1} enabled`}
+                      size="small"
+                    />
+                  </span>
                   <button
                     className="pg-hover"
                     onClick={() => actions.removeController(controller.id)}
@@ -599,6 +612,27 @@ export function FieldsPanel() {
                     style={chip(selected.falloff === falloff)}
                   >
                     {falloff}
+                  </button>
+                ))}
+              </div>
+              {/* Which way the falloff runs: full at the geometry and fading to
+                  the rim, or the other way round — nothing at the geometry,
+                  full from the rim outward. */}
+              <div style={groupLabel}>Strongest</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginBottom: 12 }}>
+                {[
+                  [false, "at geometry", "Full effect at the geometry, fading to nothing at the reach"],
+                  [true, "beyond reach", "Nothing at the geometry, full effect from the reach outward"],
+                ].map(([invert, label, why]) => (
+                  <button
+                    key={label}
+                    onClick={() => update({ invert })}
+                    aria-label={`Strongest ${label}`}
+                    title={why}
+                    {...chipProps((selected.invert ?? false) === invert)}
+                    style={chip((selected.invert ?? false) === invert)}
+                  >
+                    {label}
                   </button>
                 ))}
               </div>

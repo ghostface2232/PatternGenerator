@@ -97,6 +97,26 @@ test("a size controller grows the holes it reaches and lifts the open area", asy
   expect(narrow).toBeGreaterThan(neutral);
 });
 
+test("an inverted controller is strongest beyond its reach", async ({ page }) => {
+  await enableFields(page);
+  await addController(page, "point");
+  const upright = await oar(page);
+  // The default reach is a disc over a fifth of the sheet, so turning the
+  // controller over grows the other four fifths instead: a larger open area,
+  // and still every hole.
+  const beyond = page.getByRole("button", { name: "Strongest beyond reach", exact: true });
+  await beyond.click();
+  await expect(beyond).toHaveAttribute("aria-pressed", "true");
+  const inverted = await oar(page);
+  expect(inverted).toBeGreaterThan(upright + 1);
+  await expect(stat(page, "stat-holes")).toHaveText("739");
+  // The row says so, and it is one undo step.
+  await expect(page.getByRole("button", { name: "Select size point controller 1", exact: true })).toContainText("inverted"); // prettier-ignore
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  expect(await oar(page)).toBeCloseTo(upright, 1);
+  await expect(page.getByRole("button", { name: "Strongest at geometry", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
+});
+
 test("a controller is one undo step, and its drag is another", async ({ page }) => {
   await enableFields(page);
   await addController(page, "point");
