@@ -408,6 +408,7 @@ export function CanvasView() {
         radius: Math.max(1, Math.round(Math.min(geom.perfW, geom.perfH) * 0.25)),
         falloff: "smooth",
         oneSided: 0,
+        invert: false,
         strength: 1,
         syncWith: null,
         image: null,

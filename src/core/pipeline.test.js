@@ -650,6 +650,7 @@ const controller = (patch = {}) => ({
   radius: 60,
   falloff: "smooth",
   oneSided: 0,
+  invert: false,
   strength: 1,
   syncWith: null,
   image: null,
@@ -683,6 +684,19 @@ test("a size controller grows the holes it reaches and lifts the open area", () 
   // The unit-cell shortcut is off, and the counted area went up.
   assert.equal(stats.useCountedOAR, true);
   assert.ok(stats.displayOAR > base.stats.displayOAR, `${stats.displayOAR} should exceed ${base.stats.displayOAR}`);
+});
+
+test("an inverted size controller grows the holes beyond its reach and leaves the middle alone", () => {
+  const { holes, stats } = computePattern(withField([controller({ target: 1.6, radius: 60, invert: true })]));
+  const at = (x, y) => holes.reduce((best, h) => (Math.hypot(h.x - x, h.y - y) < Math.hypot(best.x - x, best.y - y) ? h : best)); // prettier-ignore
+  const middle = at(100, 100);
+  const corner = at(5, 5);
+  assert.ok(Math.abs(middle.w - 5) < 1e-9, `the centre hole should keep its size, got ${middle.w}`);
+  assert.ok(
+    corner.w > 7.9 && corner.w < 8.01,
+    `a corner hole beyond the reach should be ~1.6× of 5 mm, got ${corner.w}`
+  );
+  assert.equal(stats.useCountedOAR, true);
 });
 
 test("an angle controller turns the holes it reaches, and only shapes that can turn", () => {
@@ -778,6 +792,7 @@ test("every spacing edit that moves a hole changes the signature", () => {
     [spacing({ radius: 71 })],
     [spacing({ strength: 0.5 })],
     [spacing({ falloff: "linear" })],
+    [spacing({ invert: true })],
     [spacing({ geometry: { points: [{ x: 101, y: 100 }] } })],
     [spacing({ kind: "line", geometry: { points: [{ x: 40, y: 40 }, { x: 160, y: 160 }] } })], // prettier-ignore
     [spacing({ kind: "line", geometry: { points: [{ x: 40, y: 40 }, { x: 160, y: 160 }] }, oneSided: 1 })], // prettier-ignore

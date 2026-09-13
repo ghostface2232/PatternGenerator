@@ -106,6 +106,10 @@ const MIGRATIONS = {
       },
     };
   },
+  // 7 → 8: a geometry controller can be inverted — strongest beyond its reach
+  // rather than at its geometry. A v7 controller carries no `invert` and
+  // validateDocument defaults it to false, which is exactly what it did.
+  7: doc => ({ ...doc, schemaVersion: 8 }),
 };
 
 // ─── Validation ───────────────────────────────────────────────────────
@@ -238,6 +242,9 @@ function validateController(raw, index, takenIds) {
     radius: num(c.radius, 40, "controller.radius"),
     falloff: pick(c.falloff, FALLOFFS, "smooth"),
     oneSided: pick(int(c.oneSided, 0), ONE_SIDED_VALUES, 0),
+    // Strongest beyond the reach rather than at the geometry. Off by default,
+    // which is what every controller did before the flag existed.
+    invert: bool(c.invert, false),
     strength: num(c.strength, 1, "controller.strength"),
     // Checked against the finished list below: a reference to a controller that
     // did not survive validation would leave the geometry resolution walking to

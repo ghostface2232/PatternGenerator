@@ -95,12 +95,20 @@ export const channelBase = channel => CHANNEL_INFO[channel]?.base ?? 0;
 // ─── Falloff ──────────────────────────────────────────────────────────
 // t = d / radius, clamped to 0..1. Every curve returns 1 at the geometry and 0
 // at the rim, so `strength` scales a weight that is already normalised.
-export function falloffWeight(kind, t) {
+//
+// `invert` turns the curve over: 0 at the geometry, 1 at the rim and everywhere
+// beyond it. That is the other thing a controller can mean — "the further from
+// here, the more" — a sheet that is nominal at its middle and opens toward its
+// edges, or a line that leaves a quiet band along itself. Nothing else about
+// the controller changes: the same reach, falloff and strength describe how the
+// weight climbs instead of how it fades.
+export function falloffWeight(kind, t, invert = false) {
   const u = clamp(t, 0, 1);
-  if (kind === "hard") return u < 1 ? 1 : 0;
-  if (kind === "linear") return 1 - u;
-  const s = u * u * (3 - 2 * u); // smoothstep
-  return 1 - s;
+  let w;
+  if (kind === "hard") w = u < 1 ? 1 : 0;
+  else if (kind === "linear") w = 1 - u;
+  else w = 1 - u * u * (3 - 2 * u); // smoothstep
+  return invert ? 1 - w : w;
 }
 
 // ─── Distance to a controller's geometry ──────────────────────────────
@@ -147,6 +155,13 @@ export function flattenCubic(points, segments = 24) {
 // in the angle field 12 mm away from any geometry — a straight seam of abruptly
 // rotated holes across the sheet. It also made the mask depend on the direction
 // the polyline happened to be drawn in, which nothing about "one-sided" should.
+// How sharply "the nearest segment" is preferred where two are nearly
+// equidistant: the segments' contributions are averaged with weights
+// (dMin / dᵢ)^SOFT_ARGMIN, so the nearest dominates except across a bisector,
+// where the two blend instead of switching. Read by the inverted side gate
+// below and by the warp.
+const SOFT_ARGMIN = 4;
+
 export function segmentProbe(ax, ay, bx, by, x, y) {
   const dx = bx - ax,
     dy = by - ay;
@@ -166,9 +181,40 @@ export function segmentProbe(ax, ay, bx, by, x, y) {
 // contribution over its segments, each gated by which side of that segment the
 // point is on. For `oneSided === 0` the gate is 1 throughout and this is exactly
 // falloff(nearest distance), since falloff never rises.
-export function polylineWeight(points, x, y, radius, falloff, oneSided) {
+//
+// Inverted, the weight RISES with distance, so "the strongest segment" would be
+// the farthest one and a point beside one leg of a polyline would read full
+// weight off another leg across the sheet. The inverted weight is therefore the
+// inverted falloff of the NEAREST distance — the one number the whole path
+// agrees on — and the side gate is the segments' gates averaged by proximity
+// (`SOFT_ARGMIN`, the same blend the warp uses), which is continuous across the
+// bisector inside a bend, where taking the nearest segment's gate alone would
+// tear the way the bare sign used to.
+export function polylineWeight(points, x, y, radius, falloff, oneSided, invert = false) {
   if (points.length === 1) {
-    return falloffWeight(falloff, Math.hypot(x - points[0].x, y - points[0].y) / radius);
+    return falloffWeight(falloff, Math.hypot(x - points[0].x, y - points[0].y) / radius, invert);
+  }
+  if (invert) {
+    let dMin = Infinity;
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i],
+        b = points[i + 1];
+      const d = distPointSeg(x, y, a.x, a.y, b.x, b.y);
+      if (d < dMin) dMin = d;
+    }
+    const weight = falloffWeight(falloff, dMin / radius, true);
+    if (!oneSided || weight <= 0) return weight;
+    let gate = 0,
+      share = 0;
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i],
+        b = points[i + 1];
+      const probe = segmentProbe(a.x, a.y, b.x, b.y, x, y);
+      const omega = ((dMin + 1e-9) / (probe.distance + 1e-9)) ** SOFT_ARGMIN;
+      gate += omega * clamp(oneSided * probe.side, 0, 1);
+      share += omega;
+    }
+    return share > 0 ? (weight * gate) / share : 0;
   }
   let best = 0;
   for (let i = 0; i < points.length - 1; i++) {
@@ -234,6 +280,8 @@ export function compileControllers(controllers, ctx = {}) {
       strength,
       falloff: controller.falloff || "smooth",
       oneSided: source.kind === "point" || source.kind === "image" ? 0 : Math.sign(controller.oneSided || 0),
+      // An image has no reach to turn over; its own `image.invert` flips the tone.
+      invert: source.kind !== "image" && controller.invert === true,
     };
     if (source.kind === "image") {
       // See imageChannels: a picture arrives asynchronously and does not travel
@@ -312,7 +360,7 @@ export function evaluateCompiled(compiled, channel, x, y, base = channelBase(cha
         target = entry.target;
       }
     } else {
-      weight = polylineWeight(entry.points, x, y, entry.radius, entry.falloff, entry.oneSided) * entry.strength;
+      weight = polylineWeight(entry.points, x, y, entry.radius, entry.falloff, entry.oneSided, entry.invert) * entry.strength; // prettier-ignore
       target = entry.target;
     }
     if (weight <= 0) continue;
@@ -384,7 +432,13 @@ export function evaluateChannel(controllers, channel, x, y, ctx = {}) {
 // conservative. Both matter: a hard 0.2× controller with a 2000 mm reach on a
 // 200 mm sheet would otherwise lay down a 3400 mm lattice, and a 4× one would
 // still need a 400 mm one.
-const SOFT_ARGMIN = 4;
+//
+// An INVERTED controller asks for the nominal pitch at its geometry and
+// pitch·m from the rim outward, so its push is the complement: u(d) =
+// gain·(d − R·F(min(d/R, 1))), zero at the geometry and growing without bound
+// beyond the reach, where the lattice out there is scaled about the controller
+// by m rather than carried along. The derivative is again m(d). Only the
+// landing term bounds `expand` for it, since the largest push has no ceiling.
 
 // F(t)/t: the mean of `falloffWeight` over 0…t, so that the push at distance
 // d = t·R is (target − 1)·strength·d·falloffPush(t). Every curve is 1 at t = 0.
@@ -395,6 +449,16 @@ export function falloffPush(kind, t) {
   return 1 - u * u + (u * u * u) / 2; // ∫(1 − smoothstep) = t − t³ + t⁴/2
 }
 
+// The push per unit of distance, u(d)/d, for a controller at reach R and a
+// sample at distance d — inside the reach along the curve, beyond it the
+// constant u(R) spread over the distance; and the complement of both for an
+// inverted controller.
+export function pushPerUnit(kind, distance, radius, invert) {
+  const t = distance / radius;
+  const upright = t < 1 ? falloffPush(kind, t) : (radius * falloffPush(kind, 1)) / distance;
+  return invert ? 1 - upright : upright;
+}
+
 export function compileWarp(compiled, channel, base = channelBase(channel)) {
   const entries = compiled.filter(entry => entry.channel === channel && !entry.image && entry.points?.length);
   const displace = (x, y) => {
@@ -402,7 +466,7 @@ export function compileWarp(compiled, channel, base = channelBase(channel)) {
       uy = 0,
       total = 0;
     for (const entry of entries) {
-      const { points, radius, falloff, oneSided } = entry;
+      const { points, radius, falloff, oneSided, invert } = entry;
       const gain = (entry.target - base) * entry.strength;
       const segments = points.length === 1 ? 1 : points.length - 1;
       // Nearest approach first, so each segment's share can be weighed against it.
@@ -422,12 +486,12 @@ export function compileWarp(compiled, channel, base = channelBase(channel)) {
           b = points[Math.min(i + 1, points.length - 1)];
         const { distance, ox, oy, side } = segmentProbe(a.x, a.y, b.x, b.y, x, y);
         const gate = oneSided ? clamp(oneSided * side, 0, 1) : 1;
-        const t = distance / radius;
-        const w = falloffWeight(falloff, t) * gate;
+        const w = falloffWeight(falloff, distance / radius, invert) * gate;
         if (w > weight) weight = w;
         // The push per unit of offset: inside the reach it follows the curve,
-        // beyond it the constant u(R) spread over the distance.
-        const push = gain * gate * (t < 1 ? falloffPush(falloff, t) : (radius * falloffPush(falloff, 1)) / distance);
+        // beyond it the constant u(R) spread over the distance — or, inverted,
+        // the complement of that.
+        const push = gain * gate * pushPerUnit(falloff, distance, radius, invert);
         const omega = ((dMin + 1e-9) / (distance + 1e-9)) ** SOFT_ARGMIN;
         sx += omega * push * ox;
         sy += omega * push * oy;
@@ -451,7 +515,9 @@ export function compileWarp(compiled, channel, base = channelBase(channel)) {
       const m = base + (entry.target - base) * entry.strength;
       const gain = Math.abs(m - base);
       if (!(gain > 0) || !(m > 0)) continue;
-      const farthest = entry.radius * falloffPush(entry.falloff, 1);
+      // An inverted push keeps growing with distance, so only the landing
+      // term can bound it.
+      const farthest = entry.invert ? Infinity : entry.radius * falloffPush(entry.falloff, 1);
       let landing = Infinity;
       for (const p of entry.points) {
         let corner = 0;
@@ -539,6 +605,7 @@ export function createController({ channel, kind, area, existing = [], target })
     radius: Math.max(1, Math.round(Math.min(area.w, area.h) * 0.25)),
     falloff: "smooth",
     oneSided: 0,
+    invert: false,
     strength: 1,
     syncWith: null,
     image: null,

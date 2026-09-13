@@ -389,6 +389,7 @@ export function FieldsPanel() {
                     <Icon size={11} style={{ flexShrink: 0 }} />
                     <span style={{ flex: 1, textAlign: "left" }}>
                       {controller.kind}
+                      {controller.invert ? " · inverted" : ""}
                       {controller.syncWith ? " · follows" : ""}
                     </span>
                     <span style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -599,6 +600,27 @@ export function FieldsPanel() {
                     style={chip(selected.falloff === falloff)}
                   >
                     {falloff}
+                  </button>
+                ))}
+              </div>
+              {/* Which way the falloff runs: full at the geometry and fading to
+                  the rim, or the other way round — nothing at the geometry,
+                  full from the rim outward. */}
+              <div style={groupLabel}>Strongest</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginBottom: 12 }}>
+                {[
+                  [false, "at geometry", "Full effect at the geometry, fading to nothing at the reach"],
+                  [true, "beyond reach", "Nothing at the geometry, full effect from the reach outward"],
+                ].map(([invert, label, why]) => (
+                  <button
+                    key={label}
+                    onClick={() => update({ invert })}
+                    aria-label={`Strongest ${label}`}
+                    title={why}
+                    {...chipProps((selected.invert ?? false) === invert)}
+                    style={chip((selected.invert ?? false) === invert)}
+                  >
+                    {label}
                   </button>
                 ))}
               </div>

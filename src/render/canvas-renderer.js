@@ -535,6 +535,10 @@ function drawControllers(
 // it widens keeps a small reach legible and a huge one out of the way; the
 // controller's own path stays fully opaque either way.
 const bandAlpha = radius => 0.1 * Math.max(0.22, Math.min(1, 40 / Math.max(1, radius || 1)));
+// An inverted controller's reach is the quiet part, so its band is drawn
+// fainter: the tint marks where the field is NOT, and the dashed rim is what
+// to read.
+const reachAlpha = controller => bandAlpha(controller.radius) * (controller.invert ? 0.35 : 1);
 
 // The Path layout's curves and their draggable vertices.
 //
@@ -695,7 +699,7 @@ function drawController(ctx, controller, { source = controller, selected, active
       ctx.save();
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-      ctx.globalAlpha *= bandAlpha(controller.radius);
+      ctx.globalAlpha *= reachAlpha(controller);
       ctx.strokeStyle = color;
       ctx.lineWidth = Math.max(0.2, (controller.radius || 1) * 2);
       ctx.beginPath();
@@ -712,7 +716,7 @@ function drawController(ctx, controller, { source = controller, selected, active
       ctx.stroke();
     } else {
       ctx.save();
-      ctx.globalAlpha *= bandAlpha(controller.radius);
+      ctx.globalAlpha *= reachAlpha(controller);
       ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(path[0].x, path[0].y, Math.max(0.1, controller.radius || 1), 0, Math.PI * 2);

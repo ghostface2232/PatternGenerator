@@ -48,6 +48,7 @@ const spacingController = (patch = {}) => ({
   radius: 70,
   falloff: "smooth",
   oneSided: 0,
+  invert: false,
   strength: 1,
   syncWith: null,
   image: null,
@@ -521,6 +522,45 @@ test("the warp is the field: a uniform controller scales the lattice, and a segm
   assert.ok(across > 14, `across the line the rows are ${across} apart`);
   const rows = holes.filter(h => Math.abs(h.y - 100) < 20 && h.x > 60 && h.x < 140);
   for (const h of rows) assert.ok(Math.abs(((h.x - 100) / 8) % 1) < 1e-6, `hole at ${h.x} left its column`);
+});
+
+test("an inverted controller leaves the lattice alone at itself and opens it beyond its reach", () => {
+  // The complement of the warp above: nominal pitch inside the reach, pitch·m
+  // from the rim outward. Under a hard inverted controller the push is zero up
+  // to the rim and (m − 1)·(d − R) beyond it, so a nominal point at distance
+  // d > R lands at R + m·(d − R) along its ray — the outer lattice scaled by m
+  // about the controller, with the ring at R staying put.
+  const R = 30;
+  for (const type of ["Straight", "Staggered 60°", "Cross-hatch"]) {
+    const flat = place(doc({ "layout.type": type }));
+    const opened = place(withSpacing({ "layout.type": type }, { target: 2, radius: R, falloff: "hard", invert: true }));
+    const key = h => `${h.x.toFixed(4)},${h.y.toFixed(4)}`;
+    const got = new Set(opened.map(key));
+    let inside = 0,
+      outside = 0;
+    for (const h of flat) {
+      const d = Math.hypot(h.x - 100, h.y - 100);
+      if (d < R - 1e-6) {
+        assert.ok(got.has(key(h)), `${type}: nominal ${key(h)} inside the reach moved`);
+        inside++;
+      } else if (d > R + 1e-6 && d < 45) {
+        const s = (R + 2 * (d - R)) / d;
+        const landed = { x: 100 + (h.x - 100) * s, y: 100 + (h.y - 100) * s };
+        assert.ok(got.has(key(landed)), `${type}: nominal ${key(h)} did not land at ${key(landed)}`);
+        outside++;
+      }
+    }
+    assert.ok(inside > 20 && outside > 20, `${type}: too few holes checked (${inside} in, ${outside} out)`);
+  }
+  // The free-form modes read the same field: dense at the middle, sparse at the
+  // edges, which is the opposite of what the upright controller gives them.
+  const band = (holes, lo, hi) => holes.filter(h => Math.hypot(h.x - 100, h.y - 100) >= lo && Math.hypot(h.x - 100, h.y - 100) < hi).length; // prettier-ignore
+  for (const type of ["Scatter", "Fibonacci", "Voronoi"]) {
+    const holes = computePattern(withSpacing({ "layout.type": type }, { target: 2.5, radius: 40, invert: true })).activeHoles; // prettier-ignore
+    const flat = computePattern(doc({ "layout.type": type })).activeHoles;
+    const ratio = list => band(list, 0, 30) / Math.max(1, band(list, 70, 100));
+    assert.ok(ratio(holes) > ratio(flat) * 1.5, `${type}: middle-to-edge density ${ratio(flat).toFixed(2)} → ${ratio(holes).toFixed(2)}`); // prettier-ignore
+  }
 });
 
 test("a grid row and a cross-hatch line read the whole of themselves", () => {
