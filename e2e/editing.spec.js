@@ -64,19 +64,27 @@ test("the rail and the letter keys switch canvas modes, and Escape leaves them",
   await page.keyboard.press("3");
   await expect(page.getByText("ANGLE FIELD", { exact: true })).toBeVisible();
 
-  // Escape leaves the mode; the page stays where the work was, and the
-  // rail's Select entry says no mode is live.
+  // Escape leaves the mode; the page stays where the work was.
   await page.keyboard.press("Escape");
   await expect(page.getByText("ANGLE FIELD", { exact: true })).toHaveCount(0);
-  await expect(rail.getByRole("button", { name: "Fields panel", exact: true })).toHaveAttribute("aria-pressed", "true"); // prettier-ignore
-  const select = rail.getByRole("button", { name: "Select and pan", exact: true });
-  await expect(select).toHaveAttribute("aria-pressed", "true");
-  // And it is the mouse's way out of a mode.
-  await page.keyboard.press("f");
-  await expect(select).toHaveAttribute("aria-pressed", "false");
-  await select.click();
+  const fieldsEntry = rail.getByRole("button", { name: "Fields panel", exact: true });
+  await expect(fieldsEntry).toHaveAttribute("aria-pressed", "true");
+
+  // The mouse has two ways back out, and the rail carries no Select entry of
+  // its own: the rail's second click on the page already open picks the mode
+  // up and puts it down again…
+  await fieldsEntry.click();
+  await expect(page.getByText("ANGLE FIELD", { exact: true })).toBeVisible();
+  await fieldsEntry.click();
   await expect(page.getByText("ANGLE FIELD", { exact: true })).toHaveCount(0);
-  await expect(select).toHaveAttribute("aria-pressed", "true");
+  // …and so does the page's own button, which says which state it is in.
+  const editFields = page.getByRole("button", { name: "Edit fields on the canvas", exact: true });
+  await editFields.click();
+  await expect(editFields).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("ANGLE FIELD", { exact: true })).toBeVisible();
+  await editFields.click();
+  await expect(editFields).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByText("ANGLE FIELD", { exact: true })).toHaveCount(0);
 
   // B on a plain rectangle draws a polygon to edit rather than doing nothing.
   await page.keyboard.press("b");
